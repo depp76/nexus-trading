@@ -12,6 +12,9 @@ from __future__ import annotations
 
 import logging
 import os
+
+import numpy as np
+from matplotlib.dates import date2num, num2date
 from datetime import date, datetime
 
 from PyQt6.QtCore import Qt, QDate
@@ -33,7 +36,7 @@ from strategy.trend_following.research import SUMMARY_COLUMNS
 from strategy.trend_following.event_study import HORIZONS
 from threads.strategy_threads import TrendFollowingResearchThread, CANCELLED_MESSAGE
 from ui.common import create_font, ThreadOwnerMixin, FONT_HEADING, FONT_SMALL, FONT_BODY
-from ui.theme import TEXT_MUTED, LINE, DANGER
+from ui.theme import TEXT, TEXT_MUTED, LINE, DANGER
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +61,9 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         super().__init__(parent)
         self._result: ResearchResult | None = None
         self._research_thread = None
+        # Hover readout state: (label, color, x as matplotlib date numbers, y) per plotted series.
+        self._chart_series: list[tuple[str, str, np.ndarray, np.ndarray]] = []
+        self._crosshair = None
         self._build_ui()
 
     # ------------------------------------------------------------------ UI
@@ -200,7 +206,21 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.ax = self.fig.add_subplot(111)
         self.canvas = FigureCanvas(self.fig)
         self.canvas.setMinimumHeight(180)
-        splitter.addWidget(self.canvas)
+        self.canvas.mpl_connect("motion_notify_event", self._on_chart_motion)
+        self.canvas.mpl_connect("axes_leave_event", self._on_chart_leave)
+        self.canvas.mpl_connect("figure_leave_event", self._on_chart_leave)
+        # Values under the mouse (latest bar when the mouse is off the chart).
+        self.readout_lbl = QLabel("")
+        self.readout_lbl.setFont(create_font(FONT_SMALL))
+        self.readout_lbl.setTextFormat(Qt.TextFormat.RichText)
+        self.readout_lbl.setWordWrap(True)
+        chart_box = QWidget()
+        chart_layout = QVBoxLayout(chart_box)
+        chart_layout.setContentsMargins(0, 0, 0, 0)
+        chart_layout.setSpacing(2)
+        chart_layout.addWidget(self.readout_lbl)
+        chart_layout.addWidget(self.canvas, 1)
+        splitter.addWidget(chart_box)
 
         self.event_table = QTableWidget()
         self.event_table.setFont(create_font(FONT_SMALL))
@@ -322,15 +342,19 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
     def _draw_chart(self, result: ResearchResult):
         ax = self.ax
         ax.clear()
+        self._chart_series = []
+        self._crosshair = None
         base_mult = 1.0 if result.runs_at(1.0) else (result.request.cost_multipliers[0] if result.runs else 1.0)
         for r in result.runs_at(base_mult):
             if len(r.nav) == 0:
                 continue
             if r.kind == "benchmark":
                 color, style = _BENCHMARK_STYLE.get(r.id, ("#9397ab", ":"))
-                ax.plot(r.dates, r.nav * 100.0, linestyle=style, linewidth=1.2, color=color, label=r.id)
+                line, = ax.plot(r.dates, r.nav * 100.0, linestyle=style, linewidth=1.2, color=color, label=r.id)
             else:
-                ax.plot(r.dates, r.nav * 100.0, linewidth=1.5, label=r.id)
+                line, = ax.plot(r.dates, r.nav * 100.0, linewidth=1.5, label=r.id)
+            self._chart_series.append((r.id, line.get_color(), np.asarray(date2num(r.dates), dtype=float),
+                                       np.asarray(r.nav, dtype=float) * 100.0))
         ax.set_title(f"NAV rebased to 100 ({base_mult:g}x costs)", fontsize=FONT_SMALL)
         ax.grid(True, color=LINE, linewidth=0.6)
         ax.tick_params(labelsize=FONT_SMALL - 1)
@@ -338,7 +362,53 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             ax.spines[spine].set_visible(False)
         if ax.lines:
             ax.legend(fontsize=FONT_SMALL - 1, ncol=min(6, len(ax.lines)), frameon=False)
+            self._crosshair = ax.axvline(self._chart_series[0][2][-1], color=TEXT_MUTED, linewidth=0.8,
+                                         linestyle="--", label="_nolegend_", visible=False)
+        self._update_readout(None)
         self.canvas.draw_idle()
+
+    # ----------------------------------------------------------- chart hover
+    def _on_chart_motion(self, event):
+        if event.inaxes is not self.ax or event.xdata is None or not self._chart_series:
+            return
+        x = self._update_readout(float(event.xdata))
+        if self._crosshair is not None and x is not None:
+            self._crosshair.set_xdata([x, x])
+            self._crosshair.set_visible(True)
+            self.canvas.draw_idle()
+
+    def _on_chart_leave(self, _event):
+        if self._crosshair is not None and self._crosshair.get_visible():
+            self._crosshair.set_visible(False)
+            self.canvas.draw_idle()
+        self._update_readout(None)
+
+    def _update_readout(self, xdata: float | None) -> float | None:
+        """Show every series' NAV at the trading day nearest `xdata` (the last
+        day when None) and return that day's x, or None when nothing is plotted."""
+        if not self._chart_series:
+            self.readout_lbl.setText("")
+            return None
+        # Snap to the nearest date of the longest series, then read each series at
+        # its own last date on or before it (benchmarks may start later or end earlier).
+        ref_x = max(self._chart_series, key=lambda s: len(s[2]))[2]
+        if xdata is None:
+            x = float(ref_x[-1])
+        else:
+            i = int(np.clip(np.searchsorted(ref_x, xdata), 1, len(ref_x) - 1)) if len(ref_x) > 1 else 0
+            if len(ref_x) > 1 and abs(ref_x[i - 1] - xdata) <= abs(ref_x[i] - xdata):
+                i -= 1
+            x = float(ref_x[i])
+        parts = [f'<span style="color:{TEXT_MUTED};">{num2date(x):%Y-%m-%d}</span>']
+        for label, color, xs, ys in self._chart_series:
+            j = int(np.searchsorted(xs, x, side="right")) - 1
+            if j < 0 or not np.isfinite(ys[j]):
+                continue
+            parts.append(f'<span style="color:{color};">&#9644;</span>&nbsp;'
+                         f'<span style="color:{TEXT_MUTED};">{label}</span>&nbsp;'
+                         f'<b style="color:{TEXT};">{ys[j]:.1f}</b>')
+        self.readout_lbl.setText("&nbsp;&nbsp;&nbsp;".join(parts))
+        return x
 
     def _fill_events(self, result: ResearchResult):
         rows = result.event_study or []

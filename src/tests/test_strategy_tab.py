@@ -130,6 +130,33 @@ class TestTrendFollowingTab(unittest.TestCase):
         tab.resize(1400, 900)
         tab.render(QPixmap(1400, 900))
 
+    def test_chart_hover_shows_values_at_the_mouse(self):
+        from types import SimpleNamespace
+        from matplotlib.dates import date2num
+        ds = synthetic_dataset()
+        result = run_research(ds, ResearchRequest(start=date(2021, 1, 4), variant_ids=("A0",),
+                                                  cost_multipliers=(1.0,), run_event_study=False))
+        tab = TrendFollowingTab()
+        tab._on_research_finished(result, "")
+        a0 = next(r for r in result.runs_at(1.0) if r.id == "A0")
+        latest = tab.readout_lbl.text()
+        self.assertIn(f"{a0.dates[-1]:%Y-%m-%d}", latest)
+        self.assertFalse(tab._crosshair.get_visible())
+        legend_labels = [t.get_text() for t in tab.ax.get_legend().get_texts()]
+        self.assertNotIn("_nolegend_", legend_labels)
+
+        k = len(a0.dates) // 2
+        tab._on_chart_motion(SimpleNamespace(inaxes=tab.ax, xdata=float(date2num(a0.dates[k])) + 0.2))
+        text = tab.readout_lbl.text()
+        self.assertIn(f"{a0.dates[k]:%Y-%m-%d}", text)
+        self.assertIn(f"{a0.nav[k] * 100:.1f}", text)
+        self.assertTrue(tab._crosshair.get_visible())
+        self.assertAlmostEqual(tab._crosshair.get_xdata()[0], float(date2num(a0.dates[k])))
+
+        tab._on_chart_leave(None)
+        self.assertFalse(tab._crosshair.get_visible())
+        self.assertEqual(tab.readout_lbl.text(), latest)
+
     def test_save_writes_markdown(self):
         import os
         import tempfile
