@@ -47,3 +47,5 @@ cache/
 # Obsidian rewrites on every click). The old vault folder is untracked leftover on disk.
 obsidian/.obsidian/workspace.json
 Portfolio Management/
+# Saved Trend Following backtest reports (runtime output).
+reports/
