@@ -149,6 +149,8 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self._chart_canvas = FigureCanvas(self._chart_fig)
         self._chart_canvas.setFixedHeight(200)
         root.addWidget(self._chart_canvas)
+        self._chart_canvas.setToolTip("Double-click for the detailed weekly graph")
+        self._chart_canvas.mpl_connect("button_press_event", self._on_chart_clicked)
 
         # ---Controls bar ---
         ctrl = QHBoxLayout()
@@ -541,6 +543,11 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         if date_str not in cache or date_str == today_str:
             cache[date_str] = (get_usd_krw_rate_for_date(date_str), get_index_close_for_date("KS11", date_str))
         return cache[date_str]
+
+    def _on_chart_clicked(self, event):
+        """Double-click on the inline chart opens the detailed weekly graph."""
+        if getattr(event, "dblclick", False) and event.button == 1:
+            self._show_graph()
 
     def _show_graph(self):
         if len(self._records) == 0:
