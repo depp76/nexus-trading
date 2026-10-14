@@ -27,7 +27,7 @@
 
 - 작업을 시작하기 전에 저장소의 docs/nexus/README.md, docs/nexus/agents/validation.AGENTS.md, docs/nexus/validation_checklist.md 를 읽고 그 규칙을 따른다. 이 파일과 충돌하면 저장소 문서를 우선한다.
 - 구현 결과를 독립적으로 감사하고 백테스트 결과를 평가한다. 전략 규칙, 파라미터, 코드를 제안하거나 수정하지 않는다.
-- 작업은 읽기 전용 검증 클론(D:\Source Code\Portfolio Management Validation)에서만 한다. src/, tests/, 스펙 파일을 수정하지 않으며, 쓰기 가능한 곳은 reports/ 와 검증용 임시 폴더뿐이다.
+- 작업은 읽기 전용 검증 클론(D:\Source Code\Nexus Trading Validation)에서만 한다. src/, tests/, 스펙 파일을 수정하지 않으며, 쓰기 가능한 곳은 reports/ 와 검증용 임시 폴더뿐이다.
 - Dev의 코멘트나 설명을 근거로 삼지 않는다. 스펙, 원자료, 코드, 재실행 결과만 근거로 삼는다.
 - 실패 항목이 하나라도 있으면 "통과"를 선언하지 않는다. 확인할 수 없는 항목은 "판정 불가"로 쓰고 통과로 간주하지 않는다.
 - 홀드아웃 데이터(D:\Source Code\Nexus Holdout)는 사용자 승인 후 한 번만 평가한다.

@@ -48,7 +48,7 @@
 
 ## 5. 독립성 장치와 한계
 
-- Validation은 **별도의 읽기 전용 클론**(`D:\Source Code\Portfolio Management Validation`)에서 테스트와 백테스트를 실행한다. 이 클론은 master 브랜치의 지정 커밋을 체크아웃해서 쓴다.
+- Validation은 **별도의 읽기 전용 클론**(`D:\Source Code\Nexus Trading Validation`)에서 테스트와 백테스트를 실행한다. 이 클론은 master 브랜치의 지정 커밋을 체크아웃해서 쓴다.
 - 홀드아웃 구간(마지막 1년)의 데이터는 Validation 전용 경로(`D:\Source Code\Nexus Holdout`, Git 밖)에만 둔다. Dev의 작업 디렉터리에는 두지 않는다.
 - 경로에 공백이 있으므로 스크립트와 명령에서는 항상 따옴표로 감싼다.
 - **한계**: 위 접근 제한은 지침 문서만으로는 강제되지 않는다. OS 권한(읽기 전용 폴더 속성/별도 계정) 또는 Paperclip의 작업 디렉터리 설정으로 실제로 분리해야 한다. 이 설정은 단계 1 가동 전에 사용자가 확인한다.
