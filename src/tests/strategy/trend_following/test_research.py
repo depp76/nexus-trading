@@ -19,7 +19,7 @@ class TestEventStudy(unittest.TestCase):
         self.assertGreater(by["all breakouts"]["n"], 100)
         self.assertEqual(by["V: volume >= 1.5x avg"]["n"] + by["V: volume < 1.5x avg"]["n"], by["all breakouts"]["n"])
         self.assertIn("F: FI net buy (20d)", by)
-        self.assertIn("FI net-sell breakout (5d: FI < 0; retail proxy = -FI)", by)
+        self.assertIn("R: retail-only breakout (5d: FI <= 0 & retail > 0)", by)
         for k in ("mean_5", "hit_20", "excess_60", "median_60"):
             self.assertIn(k, by["all breakouts"])
         self.assertGreater(by["all breakouts"]["mean_20"], 0)   # synthetic breakouts trend on

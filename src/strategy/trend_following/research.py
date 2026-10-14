@@ -106,9 +106,10 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
     else:
         if feats.flow_coverage < 0.5:
             warnings.append(f"Investor-flow coverage is only {feats.flow_coverage:.0%} of date x ticker cells.")
-        warnings.append("Retail flow is a proxy: the Naver frgn source has only foreigner and institution, so "
-                        "retail = -(FI) and 'other corporations' (buybacks, block deals) are folded into it; the "
-                        "event study's FI net-sell group is that proxy, not an independent retail signal.")
+        warnings.append("Investor-flow limits (9-10): the institution column is one total, so pension/trust/"
+                        "private-fund sub-investors cannot be separated; foreigner + institution + retail does "
+                        "not sum to zero (other corporations, the state), so retail is an independent series. "
+                        "Snapshots built before NEX-23 carry no flows.")
     warnings.append(ds.info.get("universe", ""))
 
     runs: list[RunSummary] = []

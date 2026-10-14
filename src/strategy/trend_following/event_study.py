@@ -16,6 +16,7 @@ from strategy.trend_following.config import StrategyParams
 from strategy.trend_following.signals import Features, rolling
 
 HORIZONS = (5, 20, 60)
+RETAIL_GROUP = "R: retail-only breakout (5d: FI <= 0 & retail > 0)"
 
 
 def _stats(rows: np.ndarray, excess: np.ndarray, horizons) -> dict:
@@ -74,14 +75,18 @@ def run_event_study(ds, feats: Features, params: StrategyParams, horizons=HORIZO
         known = np.isfinite(fs)
         groups.append(("F: FI net buy (20d)", known & (fs > 0)))
         groups.append(("F: FI net sell (20d)", known & (fs <= 0)))
-        # Spec 6-1's "retail-only breakout" group. The Naver frgn source has no
-        # retail column: dataset.py derives retail = -(foreigner + institution),
-        # so "FI <= 0 and retail > 0" collapses to "FI < 0" (review_agy.md 3.1,
-        # 2026-09-29). Labelled as what it measures; a true retail split needs
-        # a four-party source (KRX) that also separates "other corporations".
+        # Spec 6-1 "retail-only breakout": foreigner+institution 5d net <= 0 and
+        # individual 5d net > 0, using the measured flow_retail (NEX-23 onward;
+        # NEX-27). Same convention as the signals: flows through the event day t
+        # (known after the close), fill at t+1 open. A day with a missing value on
+        # either side is excluded, never zero-filled.
         fi5 = rolling(ds.flow_fi, params.flow_short_window, "sum")[ts, js]
         known5 = np.isfinite(fi5)
-        groups.append(("FI net-sell breakout (5d: FI < 0; retail proxy = -FI)", known5 & (fi5 < 0)))
+        retail_group = np.zeros(ts.size, dtype=bool)
+        if ds.flow_retail is not None:
+            rt5 = rolling(ds.flow_retail, params.flow_short_window, "sum")[ts, js]
+            retail_group = known5 & np.isfinite(rt5) & (fi5 <= 0) & (rt5 > 0)
+        groups.append((RETAIL_GROUP, retail_group))
         groups.append(("FI-backed breakout (5d: FI > 0)", known5 & (fi5 > 0)))
 
     rows = []
