@@ -30,7 +30,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
 from paths import REPORTS_DIR
 from strategy.trend_following import (
-    SPEC_VERSION, StrategyParams, VARIANTS, COST_MULTIPLIERS, ResearchRequest, ResearchResult,
+    SPEC_VERSION, DEV_END, StrategyParams, VARIANTS, COST_MULTIPLIERS, ResearchRequest, ResearchResult,
 )
 from strategy.trend_following.research import SUMMARY_COLUMNS
 from strategy.trend_following.event_study import HORIZONS
@@ -87,11 +87,11 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         form.setVerticalSpacing(6)
 
         self.start_edit = QDateEdit(QDate(2021, 1, 1))
-        self.end_edit = QDateEdit(QDate.currentDate())
+        self.end_edit = QDateEdit(QDate(DEV_END.year, DEV_END.month, DEV_END.day))
         for de in (self.start_edit, self.end_edit):
             de.setCalendarPopup(True)
             de.setDisplayFormat("yyyy-MM-dd")
-            de.setMaximumDate(QDate.currentDate())
+            de.setMaximumDate(QDate(DEV_END.year, DEV_END.month, DEV_END.day))
             de.setFont(create_font(FONT_BODY))
 
         self.universe_spin = QSpinBox()
