@@ -1,5 +1,5 @@
 """strategy.trend_following — Trend Following strategy (spec: trend_following.md
-in this folder, currently v04).
+in this folder, currently v05).
 
 Facade: UI and thread code import from here; the modules underneath are
   config      parameters, the 6-2 variant matrix, cost scenarios
@@ -17,6 +17,7 @@ Facade: UI and thread code import from here; the modules underneath are
 """
 from strategy.trend_following.config import (
     SPEC_VERSION, SPEC_FILE, StrategyParams, Variant, VARIANTS, COST_MULTIPLIERS, PERIODS,
+    HOLDOUT_PERIOD, FORWARD_PERIOD, IC_VERDICT_HORIZON,
     BM_TR_TICKER, BM_PRICE_FALLBACK_TICKER, DEV_START, DEV_END,
 )
 from strategy.trend_following.costs import CostModel, TradeCost, DEFAULT_TAX_TABLE, tick_size, snap_to_tick
@@ -39,6 +40,7 @@ from strategy.trend_following.scoring import (
 
 __all__ = [
     "SPEC_VERSION", "SPEC_FILE", "StrategyParams", "Variant", "VARIANTS", "COST_MULTIPLIERS", "PERIODS",
+    "HOLDOUT_PERIOD", "FORWARD_PERIOD", "IC_VERDICT_HORIZON",
     "BM_TR_TICKER", "BM_PRICE_FALLBACK_TICKER",
     "CostModel", "TradeCost", "DEFAULT_TAX_TABLE", "tick_size", "snap_to_tick",
     "Features", "compute_features", "regime_state", "weekly_check_days",

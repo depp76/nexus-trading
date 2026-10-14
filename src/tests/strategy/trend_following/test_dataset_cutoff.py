@@ -7,7 +7,8 @@ from unittest.mock import patch
 import numpy as np
 import polars as pl
 
-from strategy.trend_following.config import DEV_END, PERIODS
+from strategy.trend_following.config import (
+    DEV_END, PERIODS, HOLDOUT_PERIOD, FORWARD_PERIOD, IC_VERDICT_HORIZON)
 from strategy.trend_following.dataset import HoldoutGuardError, load_dataset
 from strategy.trend_following.research import ResearchRequest, run_research
 from tests.strategy.trend_following.helpers import business_days, flow_frame, make_frame, path
@@ -80,8 +81,18 @@ class TestDatasetCutoff(unittest.TestCase):
         with self.assertRaises(HoldoutGuardError):
             run_research(ds, req)
 
-    def test_periods_table_is_untouched(self):
-        self.assertEqual(PERIODS[-1], ("2025-26", 2025, 2026))      # spec 6-4 wording belongs to NEX-13
+    def test_periods_are_the_two_development_periods(self):
+        self.assertEqual(PERIODS, (("2021-22", 2021, 2022), ("2023-24", 2023, 2024)))
+        self.assertEqual(HOLDOUT_PERIOD, ("2025", 2025, 2025))
+        self.assertEqual(FORWARD_PERIOD, ("2026", 2026, 2026))
+        self.assertEqual(IC_VERDICT_HORIZON, 20)
+        # No development period reaches past the guard, and holdout/forward lie after it.
+        self.assertTrue(all(last <= DEV_END.year for _, _, last in PERIODS))
+        self.assertGreater(HOLDOUT_PERIOD[1], DEV_END.year)
+        self.assertGreater(FORWARD_PERIOD[1], HOLDOUT_PERIOD[2])
+
+    def test_research_request_default_end_is_within_dev_window(self):
+        self.assertLessEqual(ResearchRequest(start=date(2021, 1, 4)).end or DEV_END, DEV_END)
 
 
 if __name__ == "__main__":

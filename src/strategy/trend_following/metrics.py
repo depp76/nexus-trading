@@ -5,8 +5,8 @@ returns, volatility, Sharpe over BM4, MDD, Calmar, turnover, win rate,
 average holding period, total costs, average cash weight.
 
 Relative to a benchmark: excess return, information ratio, beta/alpha from a
-daily regression, monthly up/down capture, and the 2021-22 / 2023-24 /
-2025-26 sub-period scorecard. Everything works on the chained ``nav`` series a
+daily regression, monthly up/down capture, and the 2021-22 / 2023-24
+development sub-period scorecard (the 2025 holdout is not reported here). Everything works on the chained ``nav`` series a
 BacktestResult carries, so the annual-reset runs and the benchmarks compare on
 the same footing.
 """

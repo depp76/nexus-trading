@@ -1,5 +1,5 @@
 """strategy/trend_following/config.py — Parameters of the Trend Following
-strategy (trend_following.md v04, sections 2-4, 2-5 and 6-2).
+strategy (trend_following.md v05, sections 2-4, 2-5 and 6-2).
 
 Everything a backtest can vary lives here as a frozen dataclass so a run can
 be reproduced from its parameter snapshot. Defaults are the spec's proposed
@@ -11,12 +11,14 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from datetime import date
 
-SPEC_VERSION = "v04"
+SPEC_VERSION = "v05"
 SPEC_FILE = "trend_following.md"
 
 # Development window guard (NEX-11 decision, docs/nexus/README.md 5-1): data and
 # evaluation dates after DEV_END are the 2025 holdout and are blocked unless a
-# caller passes the explicit `allow_holdout` flag. PERIODS below is untouched.
+# caller passes the explicit `allow_holdout` flag. PERIODS holds the two
+# development sub-periods only; the holdout and forward years are separate
+# constants (spec 6-4, 6-5).
 DEV_START = date(2021, 1, 1)
 DEV_END = date(2024, 12, 31)
 
@@ -116,8 +118,15 @@ VARIANTS: dict[str, Variant] = {
 # 4-1 mandatory sensitivity scenarios: no cost / base / conservative.
 COST_MULTIPLIERS: tuple[float, ...] = (0.0, 1.0, 2.0)
 
-# 6-4 sub-period scorecard: (label, first year, last year).
-PERIODS: tuple[tuple[str, int, int], ...] = (("2021-22", 2021, 2022), ("2023-24", 2023, 2024), ("2025-26", 2025, 2026))
+# 6-4 / 6-1-2 development sub-periods: (label, first year, last year). Two periods
+# only; 2025 is the holdout and 2026 forward observation (v05).
+PERIODS: tuple[tuple[str, int, int], ...] = (("2021-22", 2021, 2022), ("2023-24", 2023, 2024))
+# 6-5: evaluated once, by Validation, after spec and parameters are frozen.
+HOLDOUT_PERIOD: tuple[str, int, int] = ("2025", 2025, 2025)
+# Observation only; never used for a verdict.
+FORWARD_PERIOD: tuple[str, int, int] = ("2026", 2026, 2026)
+# 6-1-2: the Rank IC horizon (sessions) whose per-period sign decides the verdict, fixed before any result.
+IC_VERDICT_HORIZON = 20
 
 # 6-3 benchmark data. KODEX 200TR (278530) reinvests dividends, so its price is
 # a total-return series with the fund's expense ratio already embedded (no
