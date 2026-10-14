@@ -13,6 +13,7 @@ Facade: UI and thread code import from here; the modules underneath are
   event_study 6-1 breakout event study
   factor_ic   6-1-2 factor Rank IC, quintiles and the verdict table
   research    the matrix runner and the markdown report
+  robustness  E1 weekdays, E2 pre-registered neighbours, E4, E5 and the checklist-form report (not imported here)
   snapshot    save / load a Dataset with a SHA-256 manifest (cache/snapshots/)
   run         headless entry point: python -m strategy.trend_following.run (not imported here)
 """

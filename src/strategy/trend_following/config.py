@@ -146,6 +146,22 @@ FORWARD_PERIOD: tuple[str, int, int] = ("2026", 2026, 2026)
 # 6-1-2: the Rank IC horizon (sessions) whose per-period sign decides the verdict, fixed before any result.
 IC_VERDICT_HORIZON = 20
 
+# 6-4 / 6-5 / checklist E2: the pre-registered neighbour set (NEX-51 plan rev. 1, approved 2026-10-14).
+# One field at a time, everything else at StrategyParams() defaults; the runner reads only this constant
+# and refuses any (field, value) pair that is not in it. Rows: (id, field, value, variants it applies to).
+# C1-C3 have no neighbour runs (2-5 (6) defaults and regime_ma = 60 stay fixed); no grid combinations.
+E2_NEIGHBORS: tuple[tuple[str, str, object, tuple[str, ...]], ...] = (
+    ("N1", "breakout_window", 15, ("A0", "A1", "A2", "A3", "A4", "A5")),
+    ("N2", "breakout_window", 25, ("A0", "A1", "A2", "A3", "A4", "A5")),
+    ("N3", "trend_ma_long", 120, ("A0", "A1", "A2", "A3", "A4", "A5", "B")),
+    ("N4", "regime_ma", 20, ("A1", "A2", "A3", "A4", "A5", "B")),
+    ("N5", "regime_ma", 120, ("A1", "A2", "A3", "A4", "A5", "B")),
+)
+# Checklist E2: a neighbour whose full-window Sharpe differs from the base run by more than this fails.
+E2_SHARPE_JUMP = 0.5
+# Checklist E4: the share of trades (by net P&L, largest first) whose contribution is reported.
+E4_TOP_SHARE = 0.05
+
 # 6-3 benchmark data. KODEX 200TR (278530) reinvests dividends, so its price is
 # a total-return series with the fund's expense ratio already embedded (no
 # separate daily fee deduction, 4-1 (4)); KODEX 200 (069500) is the price-only

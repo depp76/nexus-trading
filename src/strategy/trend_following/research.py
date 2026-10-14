@@ -57,6 +57,8 @@ class RunSummary:
     nav: np.ndarray
     dates: list[date]
     notes: list[str] = field(default_factory=list)
+    rf_period: np.ndarray | None = None     # per-session risk-free return (period Sharpe in robustness.py)
+    trades: list = field(default_factory=list)   # strategy runs only (checklist E4)
 
 
 @dataclass
@@ -132,10 +134,10 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
                     score_books[vid] = compute_scores(ds.stocks, v.apply(p))
                 res: BacktestResult = run_backtest(ds, feats, p, v, cm, scores=score_books.get(vid))
                 runs.append(RunSummary(vid, v.label, "strategy", mult, summarize_run(res, bm1, bm3),
-                                       res.nav, res.dates, res.notes))
+                                       res.nav, res.dates, res.notes, res.rf_period, res.trades))
             for bid, res in bms.items():
                 runs.append(RunSummary(bid, BENCHMARK_LABELS.get(bid, bid), "benchmark", mult,
-                                       summarize_run(res, bm1, bm3), res.nav, res.dates, res.notes))
+                                       summarize_run(res, bm1, bm3), res.nav, res.dates, res.notes, res.rf_period))
 
     events: list[dict] = []
     if req.run_event_study:

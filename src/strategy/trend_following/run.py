@@ -3,6 +3,7 @@
   python -m strategy.trend_following.run --build-snapshot dev_2021_2024   # network, saves the dataset
   python -m strategy.trend_following.run --snapshot <folder or name>       # reruns the matrix offline
   python -m strategy.trend_following.run --snapshot <name> --factor-ic     # 6-1-2 factor IC report instead
+  python -m strategy.trend_following.run --snapshot <name> --robustness    # E1/E2/E4/E5 checklist-form report
 
 The run reads a snapshot (cache/snapshots/<name>), calls ``run_research`` and
 writes the markdown report to ``cache/dev_reports/`` (override with --out). The
@@ -24,6 +25,7 @@ from strategy.trend_following.config import DEV_END, DEV_START, SPEC_VERSION, VA
 from strategy.trend_following.dataset import load_dataset
 from strategy.trend_following.factor_ic import run_factor_ic
 from strategy.trend_following.research import ResearchRequest, run_research
+from strategy.trend_following.robustness import RobustnessRequest, run_robustness
 from strategy.trend_following.snapshot import (
     SNAPSHOT_ROOT, default_snapshot_dir, load_snapshot, read_manifest, save_snapshot,
 )
@@ -112,6 +114,27 @@ def run_from_snapshot(snapshot, out_dir=None, variants: tuple[str, ...] | None =
     return path
 
 
+def run_robustness_from_snapshot(snapshot, out_dir=None, variants: tuple[str, ...] | None = None,
+                                 flow_contamination: int = 0, prior_trials: int = 0, progress=None,
+                                 commit: str | None = None) -> Path:
+    """E1/E2/E4/E5 checklist-form report (robustness.py) on a snapshot; returns the saved report path.
+    `flow_contamination=1` adds the validation-only A2 comparison (default off)."""
+    folder = resolve_snapshot(str(snapshot))
+    manifest = read_manifest(folder)
+    ds = load_snapshot(folder)                       # verifies the content hash
+    req = RobustnessRequest(
+        research=ResearchRequest(start=ds.eval_dates[0], variant_ids=tuple(variants or VARIANTS),
+                                 include_flows=ds.flow_fi is not None, run_event_study=False),
+        flow_contamination=flow_contamination, prior_trials=prior_trials)
+    result = run_robustness(ds, req, progress=progress)
+    md = result.to_markdown(report_header(manifest, commit if commit is not None else git_commit()))
+    out = Path(out_dir) if out_dir else DEFAULT_REPORT_DIR
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"robustness_{SPEC_VERSION}_{manifest['sha256'][:12]}_{datetime.now():%Y%m%d_%H%M%S}.md"
+    path.write_text(md, encoding="utf-8")
+    return path
+
+
 def run_factor_ic_from_snapshot(snapshot, out_dir=None, commit: str | None = None) -> Path:
     """6-1-2 factor IC / quintile analysis on a snapshot; returns the saved report path."""
     folder = resolve_snapshot(str(snapshot))
@@ -150,6 +173,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-event-study", action="store_true")
     ap.add_argument("--factor-ic", action="store_true",
                     help="--snapshot: write the 6-1-2 factor IC / quintile report instead of the backtest matrix")
+    ap.add_argument("--robustness", action="store_true",
+                    help="--snapshot: write the checklist-form E1/E2/E4/E5 robustness report instead of the matrix")
+    ap.add_argument("--a2-contaminate", action="store_true",
+                    help="--robustness: add the validation-only A2 comparison with investor flows one session early")
+    ap.add_argument("--prior-trials", type=int, default=0,
+                    help="--robustness: strategy backtests counted in earlier reports (E5 running total)")
     ap.add_argument("--universe-size", type=int, default=200)
     ap.add_argument("--no-flows", action="store_true", help="--build-snapshot: skip investor flows")
     ap.add_argument("--tickers-from", metavar="SNAPSHOT",
@@ -168,7 +197,12 @@ def main(argv: list[str] | None = None) -> int:
         say(f"report saved: {run_factor_ic_from_snapshot(args.snapshot, args.out)}")
         return 0
     variants = tuple(v.strip() for v in args.variants.split(",")) if args.variants else None
-    path = run_from_snapshot(args.snapshot, args.out, variants, not args.no_event_study, progress=say)
+    if args.robustness:
+        path = run_robustness_from_snapshot(args.snapshot, args.out, variants, int(args.a2_contaminate),
+                                            args.prior_trials, progress=say)
+        say(f"report saved: {path}")
+        return 0
+    path =run_from_snapshot(args.snapshot, args.out, variants, not args.no_event_study, progress=say)
     say(f"report saved: {path}")
     return 0
 
