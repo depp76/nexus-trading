@@ -262,9 +262,10 @@ def build_dataset(calendar: list[date], index_close: np.ndarray, stock_frames: d
             # Amount proxy: net quantity x the same page's close (spec 2-3 normalises
             # by trading value, so both sides are in KRW).
             flow_fi[:, j] = (cols["Foreigner"] + cols["Institution"]) * px
-            # With the Naver frgn source "Retail" is -(Foreigner + Institution)
-            # (no retail column there), so flow_retail == -flow_fi and carries
-            # no independent information; a four-party source would change that.
+            # Since NEX-23 (Naver mobile trend API) "Retail" is the API's own
+            # individual net purchase, not -(Foreigner + Institution): other
+            # corporations/the state make the three not sum to zero. Snapshots
+            # built before that (<= dev_2021_2024_nex21) had flow_retail == -flow_fi.
             flow_retail[:, j] = cols["Retail"] * px
 
     if rf_frame is not None and not rf_frame.is_empty() and "Rate" in rf_frame.columns:

@@ -1,0 +1,57 @@
+[
+ {
+  "itemCode": "005930",
+  "bizdate": "20230102",
+  "foreignerPureBuyQuant": "-609,433",
+  "foreignerHoldRatio": "49.67%",
+  "organPureBuyQuant": "-478,123",
+  "individualPureBuyQuant": "+1,062,403",
+  "closePrice": "55,500",
+  "compareToPreviousClosePrice": "200",
+  "accumulatedTradingVolume": "10,031,448"
+ },
+ {
+  "itemCode": "005930",
+  "bizdate": "20221229",
+  "foreignerPureBuyQuant": "-1,510,321",
+  "foreignerHoldRatio": "49.67%",
+  "organPureBuyQuant": "-1,877,101",
+  "individualPureBuyQuant": "+3,368,914",
+  "closePrice": "55,300",
+  "compareToPreviousClosePrice": "-1,300",
+  "accumulatedTradingVolume": "11,295,935"
+ },
+ {
+  "itemCode": "005930",
+  "bizdate": "20221228",
+  "foreignerPureBuyQuant": "-2,925,482",
+  "foreignerHoldRatio": "49.69%",
+  "organPureBuyQuant": "-2,344,111",
+  "individualPureBuyQuant": "+5,152,760",
+  "closePrice": "56,600",
+  "compareToPreviousClosePrice": "-1,500",
+  "accumulatedTradingVolume": "14,665,410"
+ },
+ {
+  "itemCode": "005930",
+  "bizdate": "20221227",
+  "foreignerPureBuyQuant": "-1,535,949",
+  "foreignerHoldRatio": "49.75%",
+  "organPureBuyQuant": "+4,605,420",
+  "individualPureBuyQuant": "-2,726,295",
+  "closePrice": "58,100",
+  "compareToPreviousClosePrice": "200",
+  "accumulatedTradingVolume": "10,667,027"
+ },
+ {
+  "itemCode": "005930",
+  "bizdate": "20221226",
+  "foreignerPureBuyQuant": "-1,078,195",
+  "foreignerHoldRatio": "49.78%",
+  "organPureBuyQuant": "+2,512,328",
+  "individualPureBuyQuant": "-1,249,408",
+  "closePrice": "57,900",
+  "compareToPreviousClosePrice": "-200",
+  "accumulatedTradingVolume": "6,756,411"
+ }
+]

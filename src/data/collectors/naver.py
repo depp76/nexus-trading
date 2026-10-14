@@ -6,7 +6,6 @@ import time
 import ast
 from datetime import datetime, date as _date
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from bs4 import BeautifulSoup
 import pandas as pd
 import polars as pl
 import logging
