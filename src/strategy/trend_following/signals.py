@@ -43,6 +43,15 @@ def shift(a: np.ndarray, n: int) -> np.ndarray:
     return out
 
 
+def lead(a: np.ndarray, n: int) -> np.ndarray:
+    """Look ahead by n rows along axis 0 (row t holds the value of t+n), NaN-filled at the tail."""
+    arr = np.asarray(a, dtype=float)
+    out = np.full_like(arr, np.nan)
+    if 0 < n < arr.shape[0]:
+        out[:-n] = arr[n:]
+    return out
+
+
 def true_range(high: np.ndarray, low: np.ndarray, close: np.ndarray) -> np.ndarray:
     prev_close = shift(close, 1)
     hl = high - low
@@ -130,7 +139,7 @@ class Features:
     flow_coverage: float        # fraction of (date, ticker) cells with a flow value
 
 
-def compute_features(ds, params: StrategyParams) -> Features:
+def compute_features(ds, params: StrategyParams, flow_lead: int = 0) -> Features:
     """All layer signals for `ds` (a dataset.Dataset) under `params`."""
     b = ds.stocks
     close, high, low, vol = b.close, b.high, b.low, b.volume
@@ -167,9 +176,11 @@ def compute_features(ds, params: StrategyParams) -> Features:
     fi = getattr(ds, "flow_fi", None)
     has_flows = fi is not None and bool(np.isfinite(fi).any())
     if has_flows:
-        # NEX-28 (checklist A2): a day's investor flow is only confirmed after the close, so the
-        # decision at the close of t may use flows through t-1 at the latest.
-        fi = flow_available(fi)
+        fi = np.asarray(fi, dtype=float)
+        if flow_lead > 0:
+            # Validation-only contamination (checklist A2, NEX-28): row t holds the flow of
+            # t+flow_lead (look-ahead). Never set in a real run; default 0 = spec 5 convention.
+            fi = lead(fi, flow_lead)
         flow_long = rolling(fi, p.flow_long_window, "sum")
         flow_short = rolling(fi, p.flow_short_window, "sum")
         flow_exit_sum = rolling(fi, p.flow_exit_window, "sum")
@@ -177,7 +188,7 @@ def compute_features(ds, params: StrategyParams) -> Features:
             flow_strength = np.where(adv > 0, flow_long / adv, np.nan)
         flow_ok = (flow_long > 0) & (flow_short > 0)
         flow_exit = (flow_exit_sum < 0) & (close < ma_s)
-        flow_coverage = float(np.isfinite(ds.flow_fi).mean()) if fi.size else 0.0
+        flow_coverage = float(np.isfinite(fi).mean()) if fi.size else 0.0
     else:
         flow_strength = np.full(close.shape, np.nan)
         flow_ok = np.zeros(close.shape, dtype=bool)
@@ -192,11 +203,6 @@ def compute_features(ds, params: StrategyParams) -> Features:
         flow_strength=flow_strength, rs=rs, high52_prox=high52_prox, ma_short=ma_s,
         regime_on=regime_on, check_day=check_day, has_flows=has_flows, flow_coverage=flow_coverage,
     )
-
-
-def flow_available(a: np.ndarray) -> np.ndarray:
-    """Flow series as known at the close of each session: shifted by one session (NEX-28, checklist A2)."""
-    return shift(a, 1)
 
 
 def rank_desc_score(*columns: np.ndarray) -> np.ndarray:
