@@ -15,7 +15,7 @@ from strategy.trend_following.config import (
     SPEC_VERSION, COST_MULTIPLIERS, PERIODS, VARIANTS, StrategyParams,
 )
 from strategy.trend_following.costs import CostModel
-from strategy.trend_following.dataset import ResearchCancelled
+from strategy.trend_following.dataset import ResearchCancelled, check_dev_window
 from strategy.trend_following.event_study import run_event_study, HORIZONS
 from strategy.trend_following.metrics import summarize_run
 from strategy.trend_following.signals import compute_features
@@ -39,6 +39,11 @@ class ResearchRequest:
     include_flows: bool = False
     run_backtests: bool = True
     run_event_study: bool = True
+    allow_holdout: bool = False     # explicit switch for dates after config.DEV_END (default: blocked)
+
+    def __post_init__(self):
+        check_dev_window(self.start, self.allow_holdout, "start date")
+        check_dev_window(self.end, self.allow_holdout, "end date")
 
 
 @dataclass
@@ -66,8 +71,8 @@ class ResearchResult:
     def runs_at(self, mult: float, kind: str | None = None) -> list[RunSummary]:
         return [r for r in self.runs if abs(r.cost_mult - mult) < 1e-9 and (kind is None or r.kind == kind)]
 
-    def to_markdown(self) -> str:
-        return render_markdown(self)
+    def to_markdown(self, header: list[str] | None = None) -> str:
+        return render_markdown(self, header)
 
 
 def _say(progress, msg):
@@ -85,6 +90,8 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
     event study; True raises ResearchCancelled."""
     p = req.params
     warnings: list[str] = []
+    if ds.dates:
+        check_dev_window(ds.dates[-1], req.allow_holdout, "dataset last date")
     _say(progress, "Computing signals...")
     feats = compute_features(ds, p)
 
@@ -183,12 +190,16 @@ def _table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join(lines)
 
 
-def render_markdown(result: ResearchResult) -> str:
+def render_markdown(result: ResearchResult, header: list[str] | None = None) -> str:
+    """`header` lines (provenance block from run.py) go right under the title."""
     req = result.request
     p = req.params
     out: list[str] = []
     out.append(f"# Trend Following backtest report — spec {result.spec_version}")
     out.append("")
+    if header:
+        out += list(header)
+        out.append("")
     out.append(f"- Generated: {result.created_at:%Y-%m-%d %H:%M}")
     out.append(f"- Window: {result.dataset_info.get('eval_start', '')} → {result.dataset_info.get('eval_end', '')}")
     out.append(f"- Universe: {result.dataset_info.get('n_tickers', 0)} KOSPI names "

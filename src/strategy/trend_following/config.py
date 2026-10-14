@@ -9,9 +9,16 @@ them, so nothing here is tuned.
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
+from datetime import date
 
 SPEC_VERSION = "v04"
 SPEC_FILE = "trend_following.md"
+
+# Development window guard (NEX-11 decision, docs/nexus/README.md 5-1): data and
+# evaluation dates after DEV_END are the 2025 holdout and are blocked unless a
+# caller passes the explicit `allow_holdout` flag. PERIODS below is untouched.
+DEV_START = date(2021, 1, 1)
+DEV_END = date(2024, 12, 31)
 
 
 @dataclass(frozen=True)

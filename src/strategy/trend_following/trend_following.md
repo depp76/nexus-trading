@@ -515,3 +515,23 @@ Trading Universe 탭의 **Trend Score** 버튼이 표의 KOSPI/KOSDAQ 행(지수
 - **테스트**: `tests/strategy/trend_following/test_scoring.py`(지표 정의, 유동성 종목 한정 퍼센타일, 게이트·사유, 점수 합성과 게이트 내 순위,
   눌림 종목의 타이밍 점수 우위, 약세 반등 종목이 최저 총점, 옵션 2종, 주간 평균·Top/Bottom 정렬·상한·상호 배타·최소 세션·L1 국면),
   `tests/test_universe_tab.py`(버튼 → KR 행만 스레드로, 성공 시 상위 → 하위 → 나머지 순 고정·태그·전체 갱신 후 유지·재클릭 해제, 실패 시 순서 불변, 열 정렬 해제).
+
+
+### 9-5. 개발 구간 가드·데이터 스냅샷·헤드리스 실행기 (NEX-12, 2026-10-14)
+
+개발 구간(2021-01-01 ~ 2024-12-31)만 쓰도록 코드로 강제하고, Validation이 같은 데이터로 재실행할 수 있게 한다.
+성과 개선 작업이 아니며 전략 규칙·파라미터는 바뀌지 않았다. 1~8장(특히 `PERIODS`의 2025-26 구간과 6-1-2·6-4 문구)은 NEX-13에서 다룬다.
+
+| 모듈 | 내용 |
+|---|---|
+| `config.py` | `DEV_START`(2021-01-01), `DEV_END`(2024-12-31, NEX-11 확정). `PERIODS`는 그대로 |
+| `dataset.py` | `HoldoutGuardError`, `check_dev_window`. `load_dataset`은 `end` 기본값이 오늘이 아니라 `DEV_END`이고, 더 늦은 `start`/`end`는 `allow_holdout=True` 없이는 예외. 받은 모든 프레임(KOSPI·종목·수급·BM·CD91)을 받자마자 `end`에서 잘라 이후 행이 `Dataset`에 들어오지 않는다(`data/` 수집기는 오늘까지 받아오므로 메모리에는 올라오지만 즉시 폐기). `build_dataset(cutoff=)` |
+| `research.py` | `ResearchRequest.allow_holdout`(기본 False)과 `__post_init__` 가드. `run_research`는 마지막 날짜가 `DEV_END` 이후인 `Dataset`을 거부. `render_markdown(header=)` |
+| `snapshot.py` | `save_snapshot` / `load_snapshot` / `dataset_sha256`. `cache/snapshots/<이름>/`에 parquet(`stocks_*`, `bm_*`, `flow_*`, `series`)와 `manifest.json`(종목, 기간, 소스별 행 수, 유니버스 산정 방식, SHA-256, 파일별 해시). 해시는 parquet이 아니라 배열 내용(정규화한 float64 바이트 + 헤더)으로 계산하고, 로드 시 재계산해 다르면 `SnapshotIntegrityError` |
+| `run.py` | `python -m strategy.trend_following.run --build-snapshot <이름>`(네트워크, 개발 구간 로드 후 저장), `--snapshot <폴더|이름> [--out] [--variants A0,A1] [--no-event-study]`(오프라인 재실행, 기본 출력 `cache/dev_reports/`). 리포트 머리말에 대상 커밋(작업트리가 다르면 `+dirty`), 스펙 버전, 데이터 기간, 스냅샷 해시, 유니버스 생존편향 경고(체크리스트 B1), "홀드아웃 OS 격리 없음(사용자 수용, 2026-10-14)"를 자동 기재. CLI에는 홀드아웃 해제 옵션이 없다 |
+
+- **차이/주의**: Strategy 탭의 종료일 기본값(오늘)은 이 가드와 충돌한다. UI 수정은 이 범위 밖이므로 CIO 승인 대기 중이다(NEX-12 코멘트).
+- **환경**: 이 PC에서는 polars가 CPU 플래그 검사에서 실패해 `POLARS_SKIP_CPU_CHECK=1`을 설정해야 pytest·실행기가 돈다.
+- **테스트**: `test_dataset_cutoff.py`(2025 행이 든 합성 데이터가 `DEV_END` 이하로 잘림, 플래그 없는 2025 종료일·시작일 예외, 플래그로 해제, `run_research` 거부, `PERIODS` 불변), `test_snapshot_roundtrip.py`(배열 단위 동일, 해시 일치, 한 셀 변경 시 불일치, 변조 거부, 플래그 없는 홀드아웃 데이터 저장 거부), `test_headless_run.py`(합성 스냅샷 → 리포트 파일, 머리말에 커밋·버전·기간·해시·경고).
+- **수급 데이터 공백(미해결)**: 2026-10-14 개발 구간 스냅샷 생성 때 `data.flows.get_investor_flows`가 종목 전부에서 빈 프레임을 돌려줬다(Naver frgn 페이지는 응답하지만 `외국인` 행이 파싱되지 않음. 페이지 구조 변경 또는 인코딩 문제로 추정, 조사는 `data/` 범위라 하지 않음). 그래서 첫 실데이터 스냅샷 `dev_2021_2024_noflows`는 수급 없이 만들어졌고 A3~A5와 이벤트 스터디의 수급 그룹은 건너뛴다. 수집기 수리 후 `--build-snapshot`(수급 포함)으로 다시 만든다.
+- **실데이터 스냅샷**: `dev_2021_2024_noflows` — 평가 2021-01-04 ~ 2024-12-30(마지막 거래일), 워밍업 시작 2019-10-10, 종목 193개(요청 200 중 이력 60행 이상), BM 278530(총수익), 무위험 상수 3%(ECOS 키·`cd91.csv` 없음). SHA-256 `d41575a5d6b6…`.
