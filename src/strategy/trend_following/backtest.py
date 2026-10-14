@@ -33,18 +33,21 @@ from strategy.trend_following.dataset import PriceBook
 from strategy.trend_following.signals import Features, rank_desc_score
 
 TRIM_REASON = "year_end_trim"
+WEIGHT_TRIM_REASON = "weight_trim"     # 2-4 weekly excess-weight sell (C5 standing cap)
 
 
 class Order:
-    __slots__ = ("ticker", "side", "qty", "reason", "stop_offset", "tries")
+    __slots__ = ("ticker", "side", "qty", "reason", "stop_offset", "tries", "weight_cap")
 
-    def __init__(self, ticker: str, side: str, qty: int | None, reason: str, stop_offset: float | None = None):
+    def __init__(self, ticker: str, side: str, qty: int | None, reason: str, stop_offset: float | None = None,
+                 weight_cap: float | None = None):
         self.ticker = ticker
         self.side = side          # "buy" | "sell"
         self.qty = qty            # sells: None = the whole position
         self.reason = reason
         self.stop_offset = stop_offset
         self.tries = 0
+        self.weight_cap = weight_cap   # buys: max position weight of pre-fill equity at the fill price
 
     def __repr__(self):
         return f"Order({self.side} {self.ticker} x{self.qty} {self.reason})"
@@ -191,6 +194,15 @@ class Engine:
             q -= 1
         return q
 
+    def weight_cap_qty(self, ticker: str, price: float, cap: float) -> int:
+        """Shares that may still be bought so the position stays <= cap x pre-fill equity at `price`."""
+        if price <= 0:
+            return 0
+        pos = self.positions.get(ticker)
+        held = pos.qty if pos is not None else 0
+        equity = self.cash + self.positions_value()
+        return max(0, int(math.floor(cap * equity / price)) - held)
+
     # -- execution ---------------------------------------------------------
     def _execute_buy(self, t: int, ticker: str, qty: int, price: float, reason: str, stop_offset) -> None:
         b = self.book
@@ -283,6 +295,8 @@ class Engine:
             market = b.market_of(o.ticker)
             price = self.cm.fill_price(d, market, px, "buy")
             qty = min(int(o.qty or 0), self.affordable_qty(t, market, price, col))
+            if o.weight_cap is not None:
+                qty = min(qty, self.weight_cap_qty(o.ticker, price, o.weight_cap))
             if qty <= 0:
                 continue
             self._execute_buy(t, o.ticker, qty, price, o.reason, o.stop_offset)
@@ -407,6 +421,25 @@ class TrendFollowingPolicy(Policy):
         cap_qty = math.floor(equity * self.p.max_weight / close)
         return max(0, int(min(risk_qty, cap_qty)))
 
+    def _weight_trims(self, t: int, eng: Engine, exiting: set) -> list[Order]:
+        """Sell the excess of every held name whose close weight exceeds max_weight."""
+        b, cap = eng.book, self.p.max_weight
+        equity = eng.equity_now
+        out: list[Order] = []
+        if equity <= 0:
+            return out
+        for tk, pos in eng.positions.items():
+            if tk in exiting:
+                continue
+            c = b.close[t, pos.col]
+            if not (np.isfinite(c) and c > 0):
+                continue
+            excess = pos.qty - int(math.floor(cap * equity / c))
+            if excess > 0:
+                out.append(Order(tk, "sell", min(excess, pos.qty), WEIGHT_TRIM_REASON))
+                exiting.add(tk)
+        return out
+
     def _equal_size(self, equity: float, close: float) -> int:
         if not (np.isfinite(close) and close > 0 and equity > 0):
             return 0
@@ -436,6 +469,10 @@ class TrendFollowingPolicy(Policy):
             if reason:
                 orders.append(Order(tk, "sell", None, reason))
                 exiting.add(tk)
+
+        # 2-4 weekly adjustment: only ever trim a name above the cap, never add (C5 standing cap)
+        if f.check_day[t]:
+            orders.extend(self._weight_trims(t, eng, exiting))
 
         pending_buys = {o.ticker for o in eng.pending if o.side == "buy"}
         staying = len([tk for tk in eng.positions if tk not in exiting])
@@ -469,7 +506,8 @@ class TrendFollowingPolicy(Policy):
         for j in cands:
             qty = self._size(t, j, equity, b.close[t, j])
             if qty > 0:
-                orders.append(Order(b.tickers[j], "buy", qty, "entry", stop_offset=p.stop_atr_multiple * f.atr[t, j]))
+                orders.append(Order(b.tickers[j], "buy", qty, "entry", stop_offset=p.stop_atr_multiple * f.atr[t, j],
+                                    weight_cap=p.max_weight))
         return orders
 
     def _high52_rebalance(self, t: int, eng: Engine, exiting: set, pending_buys: set) -> list[Order]:
@@ -495,7 +533,8 @@ class TrendFollowingPolicy(Policy):
                 continue
             qty = self._equal_size(equity, b.close[t, j])
             if qty > 0:
-                orders.append(Order(tk, "buy", qty, "entry", stop_offset=p.stop_atr_multiple * f.atr[t, j]))
+                orders.append(Order(tk, "buy", qty, "entry", stop_offset=p.stop_atr_multiple * f.atr[t, j],
+                                    weight_cap=p.max_weight))
         return orders
 
 

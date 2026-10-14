@@ -5,7 +5,7 @@ from datetime import date
 
 import numpy as np
 
-from strategy.trend_following.backtest import run_backtest, TRIM_REASON
+from strategy.trend_following.backtest import run_backtest, TRIM_REASON, WEIGHT_TRIM_REASON
 from strategy.trend_following.config import StrategyParams, VARIANTS
 from strategy.trend_following.costs import CostModel
 from strategy.trend_following.signals import compute_features
@@ -61,7 +61,7 @@ class TestEngineFills(unittest.TestCase):
     def test_flat_is_never_traded_and_spike_exits_by_channel(self):
         tickers = {t.ticker for t in self.res.trades} | {p["ticker"] for p in self.res.open_positions}
         self.assertNotIn("FLAT", tickers)
-        spike = [t for t in self.res.trades if t.ticker == "SPIKE" and t.reason != TRIM_REASON]
+        spike = [t for t in self.res.trades if t.ticker == "SPIKE" and t.reason not in (TRIM_REASON, WEIGHT_TRIM_REASON)]
         self.assertTrue(spike)
         self.assertEqual(spike[0].reason, "channel")
         self.assertGreater(spike[0].pnl, 0)
@@ -145,10 +145,10 @@ class TestVariantSwitches(unittest.TestCase):
         ds = synthetic_dataset(with_flows=True)
         a4, _ = _run(ds, "A4")
         a5, _ = _run(ds, "A5")
-        d5 = [t for t in a5.trades if t.ticker == "DRIFT" and t.reason != TRIM_REASON]
+        d5 = [t for t in a5.trades if t.ticker == "DRIFT" and t.reason not in (TRIM_REASON, WEIGHT_TRIM_REASON)]
         self.assertTrue(d5)
         self.assertEqual(d5[0].reason, "flow")
-        d4 = [t for t in a4.trades if t.ticker == "DRIFT" and t.reason != TRIM_REASON]
+        d4 = [t for t in a4.trades if t.ticker == "DRIFT" and t.reason not in (TRIM_REASON, WEIGHT_TRIM_REASON)]
         if d4:
             self.assertGreater(d4[0].exit_date, d5[0].exit_date)
 
