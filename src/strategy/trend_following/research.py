@@ -186,6 +186,7 @@ SUMMARY_COLUMNS = [
     ("vs BM1", lambda r: _pct(r.metrics.get("bm1_excess_cagr"))),
     ("IR", lambda r: _num(r.metrics.get("bm1_ir"))),
     ("Beta", lambda r: _num(r.metrics.get("bm1_beta"))),
+    ("Alpha", lambda r: _pct(r.metrics.get("bm1_alpha"))),      # checklist D3: annualised, vs BM1
     ("Up cap", lambda r: _pct(r.metrics.get("bm1_up_capture"), 0)),
     ("Down cap", lambda r: _pct(r.metrics.get("bm1_down_capture"), 0)),
 ] + [(label, (lambda r, k=label: _pct(r.metrics["periods"].get(k)))) for label, _, _ in PERIODS]

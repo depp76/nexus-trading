@@ -28,7 +28,7 @@ from strategy.trend_following.config import (
 )
 from strategy.trend_following.dataset import check_dev_window
 from strategy.trend_following.metrics import (
-    NAV_BASE, cagr, max_drawdown, nav_returns, sharpe, summarize_run,
+    NAV_BASE, beta_alpha, cagr, max_drawdown, nav_returns, sharpe, summarize_run,
 )
 from strategy.trend_following.research import (
     SUMMARY_COLUMNS, ResearchRequest, ResearchResult, _num, _pct, _table, run_research,
@@ -402,7 +402,7 @@ def _checklist_rows(res: RobustnessResult) -> list[list[str]]:
         ["B1-B3", "유니버스·생존편향", "머리말·경고 참고 — " + outside],
         ["C1-C2, C4-C5", "세율·호가단위·연초 리셋·상한", outside],
         ["C3", "비용 0 / 1× / 2×", "비용 배수 " + " / ".join(f"{m:g}×" for m in cm) + " 실행 — 성과표 참고"],
-        ["D1-D3", "BM1~BM4 비교, TR, 지표", "성과표(BM 포함, 동일 엔진) 참고"],
+        ["D1-D3", "BM1~BM4 비교, TR, 지표", "성과표(BM 포함, 동일 엔진; 알파는 'Alpha' 열과 개발 구간별 알파 표) 참고"],
         ["D4", "개발 구간별 결과, 종료일 ≤ 2024-12-31", d4],
         ["D5", "홀드아웃 1회", "홀드아웃 데이터 미사용(가드 유지)"],
         ["E1", "점검 요일 5개", "요일 5개 실행, 최악 요일 CAGR/MDD — E1 절" if res.weekday_runs else "실행 안 함"],
@@ -549,6 +549,39 @@ def _period_table(res: RobustnessResult) -> list[str]:
     return ["", "### 개발 구간별 (비용 1×; 전략과 BM1~BM4)", "", _table(heads, rows)]
 
 
+def _period_alpha_table(res: RobustnessResult) -> list[str]:
+    """Checklist D3: annualised alpha / beta vs BM1 inside each development period, per cost multiplier.
+    Same regression as the 6-4 scorecard (`beta_alpha`), applied to the period's daily returns."""
+    labels = [lab for lab, _, _ in PERIODS]
+    heads = ["ID", "Cost"]
+    for lab in labels:
+        heads += [f"{lab} Alpha", f"{lab} Beta"]
+    rows = []
+    for mult in res.request.research.cost_multipliers:
+        runs = res.research.runs_at(mult)
+        bm1 = next((x for x in runs if x.id == "BM1"), None)
+        if bm1 is None:
+            continue
+        for x in runs:
+            if x.kind != "strategy":
+                continue
+            row = [x.id, f"{mult:g}x"]
+            for lab, y0, y1 in PERIODS:
+                years = np.array([d.year for d in x.dates])
+                idx = np.flatnonzero((years >= y0) & (years <= y1))
+                if idx.size < 4 or len(bm1.nav) != len(x.nav):
+                    row += ["-", "-"]
+                    continue
+                rf = np.zeros(len(x.nav)) if x.rf_period is None else np.asarray(x.rf_period, dtype=float)
+                beta, alpha = beta_alpha(nav_returns(np.asarray(x.nav, dtype=float)[idx]),
+                                         nav_returns(np.asarray(bm1.nav, dtype=float)[idx]), rf[idx])
+                row += [_pct(alpha), _num(beta)]
+            rows.append(row)
+    if not rows:
+        return []
+    return ["", "### 개발 구간별 BM1 대비 알파·베타 (체크리스트 D3; 연율화 일별 초과수익 회귀)", "", _table(heads, rows)]
+
+
 def render_robustness_markdown(res: RobustnessResult, header: list[str] | None = None) -> str:
     from strategy.trend_following.config import SPEC_VERSION
     req = res.request
@@ -601,5 +634,6 @@ def render_robustness_markdown(res: RobustnessResult, header: list[str] | None =
         out += ["", f"### {mult:g}x costs" + (" (base case)" if abs(mult - 1.0) < 1e-9 else ""), "",
                 _table([h for h, _ in SUMMARY_COLUMNS], [[fn(x) for _, fn in SUMMARY_COLUMNS] for x in rows])]
     out += _period_table(res)
+    out += _period_alpha_table(res)
     out += ["", "## 보완 요청 목록", "", "(Validation이 항목 번호·재현 방법·기대 결과로 기입한다.)", ""]
     return "\n".join(out)

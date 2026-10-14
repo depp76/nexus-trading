@@ -348,6 +348,13 @@ class TestReport(unittest.TestCase):
         pos = [md.index(s) for s in order]
         self.assertEqual(pos, sorted(pos))
 
+    def test_d3_alpha_is_reported_per_cost_multiplier_and_per_period(self):
+        md = self.md
+        self.assertEqual(md.count("| Beta | Alpha | Up cap |"), 3)      # whole window at 0x / 1x / 2x
+        sec = md.split("### 개발 구간별 BM1 대비 알파·베타")[1].split("## 보완 요청 목록")[0]
+        for s in ("2021-22 Alpha", "2023-24 Alpha", "0x", "1x", "2x"):
+            self.assertIn(s, sec)
+
     def test_without_a_provenance_header_the_report_names_spec_and_window(self):
         md = self.res.to_markdown()
         self.assertIn("- 스펙 버전: v06", md)
