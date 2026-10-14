@@ -32,6 +32,18 @@ class TestHeadlessRun(unittest.TestCase):
         self.assertRegex(head, r"대상 커밋: `[0-9a-f]{40}(\+dirty)?`")
         self.assertIn("| A0 |", md)
 
+    def test_header_separates_code_spec_from_snapshot_spec(self):
+        ds = synthetic_dataset()
+        with tempfile.TemporaryDirectory() as tmp:
+            man = save_snapshot(ds, Path(tmp) / "s")
+        man = dict(man, spec_version="v05")
+        head = "\n".join(run_mod.report_header(man, "abc"))
+        self.assertIn(f"- 스펙 버전: {SPEC_VERSION} (대상 코드 기준", head)
+        self.assertIn("- 스냅샷 생성 스펙 버전: v05", head)
+        self.assertIn("전략 규칙 버전이 아니다", head)
+        same = "\n".join(run_mod.report_header(dict(man, spec_version=SPEC_VERSION), "abc"))
+        self.assertIn("대상 코드와 동일", same)
+
     def test_commit_can_be_injected(self):
         ds = synthetic_dataset()
         with tempfile.TemporaryDirectory() as tmp:

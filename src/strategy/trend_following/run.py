@@ -73,11 +73,18 @@ def universe_impact_lines(manifest: dict) -> list[str]:
 def report_header(manifest: dict, commit: str) -> list[str]:
     per = manifest["period"]
     rows = manifest["rows"]
+    snap_ver = manifest.get("spec_version") or "미기록"
+    if snap_ver == SPEC_VERSION:
+        snap_note = "스냅샷을 만든 시점의 스펙 버전, 대상 코드와 동일"
+    else:
+        snap_note = ("스냅샷을 만든 시점의 스펙 버전이며 데이터 출처 표시일 뿐 "
+                     f"전략 규칙 버전이 아니다. 규칙은 대상 코드 {SPEC_VERSION}로 실행됨")
     return [
         "> **개발 구간 백테스트 리포트** — 홀드아웃(2025-01-01 이후) 데이터는 포함되지 않았다.",
         "",
         f"- 대상 커밋: `{commit}`",
-        f"- 스펙 버전: {manifest.get('spec_version', SPEC_VERSION)}",
+        f"- 스펙 버전: {SPEC_VERSION} (대상 코드 기준 — 이 리포트를 생성한 코드가 구현한 스펙)",
+        f"- 스냅샷 생성 스펙 버전: {snap_ver} ({snap_note})",
         f"- 데이터 기간: 평가 {per['eval_start']} ~ {per['last_date']} "
         f"(워밍업 시작 {per['calendar_start']}, 종료일 가드 {per['dev_end_guard']})",
         f"- 스냅샷 SHA-256: `{manifest['sha256']}` (종목 {rows['stock_tickers']}개, 일수 {rows['calendar_days']}, "
