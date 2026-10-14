@@ -13,7 +13,7 @@ from __future__ import annotations
 import numpy as np
 
 from strategy.trend_following.config import StrategyParams
-from strategy.trend_following.signals import Features, rolling
+from strategy.trend_following.signals import Features, flow_available, rolling
 
 HORIZONS = (5, 20, 60)
 RETAIL_GROUP = "R: retail-only breakout (5d: FI <= 0 & retail > 0)"
@@ -77,14 +77,14 @@ def run_event_study(ds, feats: Features, params: StrategyParams, horizons=HORIZO
         groups.append(("F: FI net sell (20d)", known & (fs <= 0)))
         # Spec 6-1 "retail-only breakout": foreigner+institution 5d net <= 0 and
         # individual 5d net > 0, using the measured flow_retail (NEX-23 onward;
-        # NEX-27). Same convention as the signals: flows through the event day t
-        # (known after the close), fill at t+1 open. A day with a missing value on
+        # NEX-27). Same convention as the signals (NEX-28): flows through t-1
+        # only (the day-t flow is confirmed after the close), fill at t+1 open. A day with a missing value on
         # either side is excluded, never zero-filled.
-        fi5 = rolling(ds.flow_fi, params.flow_short_window, "sum")[ts, js]
+        fi5 = rolling(flow_available(ds.flow_fi), params.flow_short_window, "sum")[ts, js]
         known5 = np.isfinite(fi5)
         retail_group = np.zeros(ts.size, dtype=bool)
         if ds.flow_retail is not None:
-            rt5 = rolling(ds.flow_retail, params.flow_short_window, "sum")[ts, js]
+            rt5 = rolling(flow_available(ds.flow_retail), params.flow_short_window, "sum")[ts, js]
             retail_group = known5 & np.isfinite(rt5) & (fi5 <= 0) & (rt5 > 0)
         groups.append((RETAIL_GROUP, retail_group))
         groups.append(("FI-backed breakout (5d: FI > 0)", known5 & (fi5 > 0)))

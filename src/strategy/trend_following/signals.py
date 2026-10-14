@@ -167,7 +167,9 @@ def compute_features(ds, params: StrategyParams) -> Features:
     fi = getattr(ds, "flow_fi", None)
     has_flows = fi is not None and bool(np.isfinite(fi).any())
     if has_flows:
-        fi = np.asarray(fi, dtype=float)
+        # NEX-28 (checklist A2): a day's investor flow is only confirmed after the close, so the
+        # decision at the close of t may use flows through t-1 at the latest.
+        fi = flow_available(fi)
         flow_long = rolling(fi, p.flow_long_window, "sum")
         flow_short = rolling(fi, p.flow_short_window, "sum")
         flow_exit_sum = rolling(fi, p.flow_exit_window, "sum")
@@ -175,7 +177,7 @@ def compute_features(ds, params: StrategyParams) -> Features:
             flow_strength = np.where(adv > 0, flow_long / adv, np.nan)
         flow_ok = (flow_long > 0) & (flow_short > 0)
         flow_exit = (flow_exit_sum < 0) & (close < ma_s)
-        flow_coverage = float(np.isfinite(fi).mean()) if fi.size else 0.0
+        flow_coverage = float(np.isfinite(ds.flow_fi).mean()) if fi.size else 0.0
     else:
         flow_strength = np.full(close.shape, np.nan)
         flow_ok = np.zeros(close.shape, dtype=bool)
@@ -190,6 +192,11 @@ def compute_features(ds, params: StrategyParams) -> Features:
         flow_strength=flow_strength, rs=rs, high52_prox=high52_prox, ma_short=ma_s,
         regime_on=regime_on, check_day=check_day, has_flows=has_flows, flow_coverage=flow_coverage,
     )
+
+
+def flow_available(a: np.ndarray) -> np.ndarray:
+    """Flow series as known at the close of each session: shifted by one session (NEX-28, checklist A2)."""
+    return shift(a, 1)
 
 
 def rank_desc_score(*columns: np.ndarray) -> np.ndarray:
