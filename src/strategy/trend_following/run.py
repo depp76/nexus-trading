@@ -42,6 +42,30 @@ def git_commit(repo: str = BASE_DIR) -> str:
         return "unknown"
 
 
+def _count(info: dict, key: str) -> str:
+    v = info.get(key)
+    return f"{len(v)}개" if isinstance(v, list) else "미기록"
+
+
+def universe_impact_lines(manifest: dict) -> list[str]:
+    """Measured size of the universe biases (checklist B1) from the manifest, plus the
+    look-ahead warning about the build-time market-cap ranking."""
+    info = manifest.get("info", {})
+    built = info.get("universe_built_on") or "미기록"
+    fixed = info.get("universe_fixed_from")
+    lines = [
+        f"- 유니버스 영향 수치: 평가 기간 중 상장폐지·데이터 종료 종목 {_count(info, 'ended_in_window')}, "
+        f"평가 시작 이후 신규 상장 종목 {_count(info, 'listed_after_start')}, "
+        f"제외된 ETF/ETN {_count(info, 'excluded_etf')} (종목 {manifest['rows']['stock_tickers']}개 중). "
+        "종료 종목 수는 데이터가 평가 종료일 10세션 이상 전에 끝난 종목만 센 하한이며, 현재 상장 종목만 목록에 있으므로 "
+        "실제 탈락 종목은 이 수치에 잡히지 않는다.",
+        f"- ⚠ 유니버스 선정에 빌드 시점({built}, 2025년 이후) 시가총액 정보가 쓰였다: 2021~2024 평가 기간보다 "
+        "나중의 순위를 소급 적용한 look-ahead이며, 과거에 성장한 종목이 유리하게 포함된다."
+        + (f" (종목 목록은 `{fixed}`의 것을 고정 재사용)" if fixed else ""),
+    ]
+    return lines
+
+
 def report_header(manifest: dict, commit: str) -> list[str]:
     per = manifest["period"]
     rows = manifest["rows"]
@@ -56,7 +80,8 @@ def report_header(manifest: dict, commit: str) -> list[str]:
         f"종가 봉 {rows['stock_close_bars']}, 수급 셀 {rows['flow_cells']})",
         f"- ⚠ 유니버스 생존편향(체크리스트 B1): {manifest['universe']}. "
         "과거 시점의 구성종목이 아니라 현재 시가총액 상위 종목을 소급 적용했으므로 기간 중 상장폐지·탈락 종목은 "
-        "유니버스에 없다(편향 방향: 성과 과대, 크기 추정 불가).",
+        "유니버스에 없다(편향 방향: 성과 과대).",
+        *universe_impact_lines(manifest),
         f"- ⚠ {HOLDOUT_NOTICE}: 코드 가드(기본 차단)로만 막고 있으며 OS 수준 분리는 없다.",
     ]
 
@@ -86,8 +111,17 @@ def run_from_snapshot(snapshot, out_dir=None, variants: tuple[str, ...] | None =
 
 
 def build_snapshot(name: str, start: date = DEV_START, end: date = DEV_END, universe_size: int = 200,
-                   include_flows: bool = True, progress=None) -> dict:
-    ds = load_dataset(start, end, universe_size=universe_size, include_flows=include_flows, progress=progress)
+                   include_flows: bool = True, progress=None, tickers_from=None) -> dict:
+    """Fetch and save a snapshot. `tickers_from` (a snapshot folder / name) pins the stock list to
+    that manifest's tickers instead of ranking the current market caps."""
+    fixed: dict = {}
+    if tickers_from:
+        src = resolve_snapshot(str(tickers_from))
+        man = read_manifest(src)
+        fixed = dict(tickers=list(man["tickers"]), ticker_names=dict(man.get("names", {})),
+                     fixed_source=str(src), excluded_etf=list(man.get("info", {}).get("excluded_etf", [])))
+    ds = load_dataset(start, end, universe_size=universe_size, include_flows=include_flows,
+                      progress=progress, **fixed)
     return save_snapshot(ds, default_snapshot_dir(name))
 
 
@@ -101,6 +135,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-event-study", action="store_true")
     ap.add_argument("--universe-size", type=int, default=200)
     ap.add_argument("--no-flows", action="store_true", help="--build-snapshot: skip investor flows")
+    ap.add_argument("--tickers-from", metavar="SNAPSHOT",
+                    help="--build-snapshot: reuse the stock list of this snapshot (folder or name) instead of the current market-cap ranking")
     args = ap.parse_args(argv)
 
     def say(msg: str) -> None:
@@ -108,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.build_snapshot:
         man = build_snapshot(args.build_snapshot, universe_size=args.universe_size,
-                             include_flows=not args.no_flows, progress=say)
+                             include_flows=not args.no_flows, progress=say, tickers_from=args.tickers_from)
         say(f"snapshot saved: {default_snapshot_dir(args.build_snapshot)} sha256={man['sha256']}")
         return 0
     variants = tuple(v.strip() for v in args.variants.split(",")) if args.variants else None

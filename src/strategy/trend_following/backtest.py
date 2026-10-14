@@ -252,7 +252,7 @@ class Engine:
                 continue
             px = b.open[t, pos.col]
             prev_close = b.close[t - 1, pos.col] if t > 0 else np.nan
-            if not np.isfinite(px) or px <= 0:
+            if not np.isfinite(px) or px <= 0 or b.volume[t, pos.col] == 0:     # no price, or halted (volume 0)
                 o.tries += 1
                 keep.append(o)
                 continue
@@ -272,7 +272,7 @@ class Engine:
                 continue
             px = b.open[t, col]
             prev_close = b.close[t - 1, col] if t > 0 else np.nan
-            blocked = (not np.isfinite(px) or px <= 0) or (
+            blocked = (not np.isfinite(px) or px <= 0 or b.volume[t, col] == 0) or (
                 self.cm.block_limit_up_down and np.isfinite(prev_close)
                 and self.cm.is_limit_up(d, b.market_of(o.ticker), px, prev_close))
             if blocked:
@@ -453,7 +453,7 @@ class TrendFollowingPolicy(Policy):
         for tk in pending_buys:
             if tk in b._col:
                 held[b.col(tk)] = True
-        mask = f.trend_ok[t] & f.breakout[t] & f.liquid[t] & ~held
+        mask = f.trend_ok[t] & f.breakout[t] & f.liquid[t] & f.traded[t] & ~held
         if v.volume:
             mask &= f.vol_ok[t]
         if v.flow:
@@ -477,7 +477,7 @@ class TrendFollowingPolicy(Policy):
         if not f.check_day[t]:
             return []
         prox = np.where(np.isfinite(f.high52_prox[t]), f.high52_prox[t], -np.inf)
-        eligible = f.trend_ok[t] & f.liquid[t] & np.isfinite(f.high52_prox[t])
+        eligible = f.trend_ok[t] & f.liquid[t] & f.traded[t] & np.isfinite(f.high52_prox[t])
         cands = np.flatnonzero(eligible)
         if cands.size == 0:
             return []

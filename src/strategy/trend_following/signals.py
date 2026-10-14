@@ -115,6 +115,7 @@ class Features:
     vol_ok: np.ndarray          # 2-3 V
     flow_ok: np.ndarray         # 2-3 F
     liquid: np.ndarray          # 2-0 liquidity floor on 20-day average trading value
+    traded: np.ndarray          # 2-0 halted names out: False on a session whose volume is 0
     exit_channel: np.ndarray    # 3-1: close < prior 10-session low
     flow_exit: np.ndarray       # 3-3 FX: 10-day net sell and close < MA20
     atr: np.ndarray             # float: ATR20
@@ -138,6 +139,7 @@ def compute_features(ds, params: StrategyParams) -> Features:
     value = close * vol
     adv = rolling(value, p.volume_window, "mean")
     liquid = adv >= p.min_avg_trading_value
+    traded = ~(vol == 0)        # NaN volume (no bar) stays True: the other filters already fail on it
 
     ma_s = rolling(close, p.trend_ma_short, "mean")
     ma_l = rolling(close, p.trend_ma_long, "mean")
@@ -183,7 +185,7 @@ def compute_features(ds, params: StrategyParams) -> Features:
     regime_on, check_day = regime_state(idx, b.dates, p)
 
     return Features(
-        trend_ok=trend_ok, breakout=breakout, vol_ok=vol_ok, flow_ok=flow_ok, liquid=liquid,
+        trend_ok=trend_ok, breakout=breakout, vol_ok=vol_ok, flow_ok=flow_ok, liquid=liquid, traded=traded,
         exit_channel=exit_channel, flow_exit=flow_exit, atr=atr_arr, adv=adv,
         flow_strength=flow_strength, rs=rs, high52_prox=high52_prox, ma_short=ma_s,
         regime_on=regime_on, check_day=check_day, has_flows=has_flows, flow_coverage=flow_coverage,
