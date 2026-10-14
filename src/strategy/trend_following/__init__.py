@@ -1,5 +1,5 @@
 """strategy.trend_following — Trend Following strategy (spec: trend_following.md
-in this folder, currently v05).
+in this folder, currently v06).
 
 Facade: UI and thread code import from here; the modules underneath are
   config      parameters, the 6-2 variant matrix, cost scenarios

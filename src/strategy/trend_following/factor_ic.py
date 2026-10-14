@@ -1,10 +1,10 @@
 """strategy/trend_following/factor_ic.py — 6-1-2 factor IC and quintile analysis
-(trend_following.md v05, C-series pre-validation).
+(trend_following.md v06, C-series pre-validation).
 
-Answers, before the five 2-5 indicators are combined, whether each one carries
+Answers, before the four scored 2-5 indicators are combined, whether each one carries
 predictive power and whether its sign matches the hypothesis:
 
-  1. correlation matrix of the five indicators (before / after the ATR
+  1. correlation matrix of the four scored indicators plus the reference column R10 (before / after the ATR
      normalisation), average cross-sectional rank correlation, |rho| > 0.8 flagged
   2. daily Rank IC against the forward 5 / 10 / 20-session return, measured from
      the NEXT open (t+1 open -> close of t+h, the event study's convention);
@@ -12,7 +12,7 @@ predictive power and whether its sign matches the hypothesis:
   3. the same per development sub-period (config.PERIODS only)
   4. total-score quintiles: forward return by quintile, monotonicity, Q5 - Q1
   5. the 6-1-2 verdict table applied mechanically on the IC_VERDICT_HORIZON (20)
-     mean IC of the two periods
+     mean IC of the two periods (R10 is a reference column: no verdict, spec v06 / 9-15)
 
 Universe, liquidity filter and indicator values come from ``scoring.compute_scores``
 (nothing is re-implemented here). The analysis never looks past
@@ -34,8 +34,10 @@ from strategy.trend_following.config import (
 from strategy.trend_following.dataset import PriceBook
 from strategy.trend_following.scoring import compute_scores
 
-# Spec 6-1-2 order. Keys are ScoreBook attribute / pct names.
+# Spec 6-1-2 order. Keys are ScoreBook attribute / pct names. R10 is a reference column since v06: it stays in the
+# correlation matrix and the IC tables but is not in JUDGED_FACTORS / HYPOTHESES (it left the score, 9-15).
 FACTORS: tuple[str, ...] = ("r3", "r10", "range52", "ma20_div", "ma50_div")
+JUDGED_FACTORS: tuple[str, ...] = tuple(f for f in FACTORS if f != "r10")
 FACTOR_LABELS = {"r3": "R3", "r10": "R10", "range52": "Range52", "ma20_div": "MA20Div", "ma50_div": "MA50Div",
                  "total": "Total"}
 IC_HORIZONS: tuple[int, ...] = (5, 10, 20)
@@ -50,7 +52,6 @@ HYPOTHESES: dict[str, tuple[int, str]] = {
     "ma50_div": (+1, "게이트·점수에서 제외 검토"),
     "range52": (+1, "`high52_prox`로 교체 검토"),
     "ma20_div": (-1, "과열 게이트 제거"),
-    "r10": (-1, "부호 반전 또는 제외"),
     "r3": (-1, "부호 반전 (눌림 가설 기각 → 모멘텀 타이밍으로 전환)"),
 }
 STATUS_KEEP, STATUS_REVIEW, STATUS_UNSTABLE, STATUS_NA = "유지", "검토 대상", "불안정", "판정 불가"
@@ -279,7 +280,7 @@ def run_factor_ic(ds, params: StrategyParams | None = None, horizons: tuple[int,
             quint_gated[(label, h)] = quintile_stats(q_gate[sel])
 
     verdicts = [judge(f, {label: ic[(label, IC_VERDICT_HORIZON, f)].mean for label, _, _ in PERIODS})
-                for f in FACTORS]
+                for f in JUDGED_FACTORS]
     info = {
         "eval_start": book.dates[t0].isoformat() if t0 < T else "",
         "last_date": book.dates[-1].isoformat() if T else "",
@@ -325,8 +326,8 @@ def render_markdown(result: FactorICResult, header: list[str] | None = None) -> 
         "",
         "## 1. 지표 상관행렬 (일별 횡단면 순위 상관의 평균)",
         "",
-        f"공통 표본: 유동성 충족이고 다섯 지표가 모두 있는 종목, 일 {result.corr_days}개 평균. "
-        f"|ρ| > {CORR_FLAG} 쌍은 합치거나 하나를 제외 검토(특히 R10 ↔ MA20Div).",
+        f"공통 표본: 유동성 충족이고 다섯 열(R10 참고 열 포함)이 모두 있는 종목, 일 {result.corr_days}개 평균. "
+        f"|ρ| > {CORR_FLAG} 쌍은 합치거나 하나를 제외 검토. R10은 v06부터 점수에 쓰지 않는 참고 열이다(R10↔MA20Div 0.90으로 제외, 9-15).",
     ]
     labels = [FACTOR_LABELS[f] for f in FACTORS]
     for tag, mat in (("정규화 전 (원값)", result.corr_before), ("정규화 후 (점수에 쓰는 값)", result.corr_after)):
@@ -345,7 +346,7 @@ def render_markdown(result: FactorICResult, header: list[str] | None = None) -> 
             for h in result.horizons:
                 s = result.ic[(label, h, f)]
                 tag = f"{h} (판정)" if h == IC_VERDICT_HORIZON else str(h)
-                rows.append([FACTOR_LABELS[f], tag, _f(s.mean), _f(s.std), _f(s.ir, 2), _pct(s.pos_ratio, 1), str(s.n)])
+                rows.append([FACTOR_LABELS[f] + (' (참고)' if f == 'r10' else ''), tag, _f(s.mean), _f(s.std), _f(s.ir, 2), _pct(s.pos_ratio, 1), str(s.n)])
         out += _table(["지표", "horizon(일)", "평균 IC", "표준편차", "IR", "IC>0 비율", "일수"], rows) + [""]
 
     out += ["## 4. 총점 5분위 (이후 수익률, t+1 시가 기준)", "",
@@ -368,5 +369,6 @@ def render_markdown(result: FactorICResult, header: list[str] | None = None) -> 
     out += ["",
             "- 유지: 두 구간 모두 가설 부호. 검토 대상: 두 구간 모두 가설과 반대 부호(검토 표시만, 코드는 바꾸지 않음).",
             "- 불안정: 두 구간의 부호가 다름 → 가설 유지, 부호 변경·제외·교체 없이 홀드아웃에서 1회 확인.",
-            "- 판정 불가: 어느 구간의 IC가 없거나 정확히 0.", ""]
+            "- 판정 불가: 어느 구간의 IC가 없거나 정확히 0.",
+            "- R10은 참고 열이라 판정하지 않는다(스펙 v06, 상관 규칙으로 점수에서 제외).", ""]
     return "\n".join(out)

@@ -207,8 +207,8 @@ class TestVerdict(unittest.TestCase):
         self.assertEqual(j("ma20_div", {"2021-22": 0.02, "2023-24": 0.02}).status, fic.STATUS_REVIEW)
         self.assertEqual(j("ma20_div", {"2021-22": -0.02, "2023-24": -0.02}).status, fic.STATUS_KEEP)
         # missing or zero mean -> cannot judge
-        self.assertEqual(j("r10", {"2021-22": float("nan"), "2023-24": -0.02}).status, fic.STATUS_NA)
-        self.assertEqual(j("r10", {"2021-22": 0.0, "2023-24": -0.02}).status, fic.STATUS_NA)
+        self.assertEqual(j("r3", {"2021-22": float("nan"), "2023-24": -0.02}).status, fic.STATUS_NA)
+        self.assertEqual(j("r3", {"2021-22": 0.0, "2023-24": -0.02}).status, fic.STATUS_NA)
 
     def test_verdict_uses_the_fixed_horizon_only(self):
         ds = _dataset(n_days=1250)
@@ -223,8 +223,13 @@ class TestVerdict(unittest.TestCase):
 
     def test_hypothesis_table_matches_spec(self):
         self.assertEqual({f: s for f, (s, _) in fic.HYPOTHESES.items()},
-                         {"ma50_div": 1, "range52": 1, "ma20_div": -1, "r10": -1, "r3": -1})
+                         {"ma50_div": 1, "range52": 1, "ma20_div": -1, "r3": -1})
+        # v06: R10 is a reference column (correlation matrix, IC tables), never judged
         self.assertEqual(fic.FACTORS, ("r3", "r10", "range52", "ma20_div", "ma50_div"))
+        self.assertEqual(fic.JUDGED_FACTORS, ("r3", "range52", "ma20_div", "ma50_div"))
+        res = fic.run_factor_ic(_dataset(n_days=900))
+        self.assertEqual([v.factor for v in res.verdicts], list(fic.JUDGED_FACTORS))
+        self.assertNotIn("R10", [fic.FACTOR_LABELS[v.factor] for v in res.verdicts])
 
     def test_module_never_changes_parameters(self):
         p = StrategyParams()
