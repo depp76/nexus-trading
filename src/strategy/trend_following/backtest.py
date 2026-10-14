@@ -214,10 +214,11 @@ class Engine:
         pos = self.positions.get(ticker)
         stop = price - stop_offset if stop_offset is not None and np.isfinite(stop_offset) else None
         if pos is None:
-            close = b.close[t, col]
+            # marked at the fill price until _mark runs: the session's close is not known at the open,
+            # and weight_cap_qty values positions at last_close for the buys filled after this one
             self.positions[ticker] = Position(
                 ticker=ticker, col=col, qty=qty, entry_price=price, entry_idx=t, stop_price=stop,
-                entry_costs=cost, last_close=float(close) if np.isfinite(close) else price,
+                entry_costs=cost, last_close=price,
             )
         else:
             total_qty = pos.qty + qty
@@ -422,7 +423,9 @@ class TrendFollowingPolicy(Policy):
         return max(0, int(min(risk_qty, cap_qty)))
 
     def _weight_trims(self, t: int, eng: Engine, exiting: set) -> list[Order]:
-        """Sell the excess of every held name whose close weight exceeds max_weight."""
+        """Sell the excess of every held name whose close weight exceeds max_weight.
+
+        A trimmed name stays in the book, so it is not added to `exiting` (slot count, rank_out)."""
         b, cap = eng.book, self.p.max_weight
         equity = eng.equity_now
         out: list[Order] = []
@@ -437,7 +440,6 @@ class TrendFollowingPolicy(Policy):
             excess = pos.qty - int(math.floor(cap * equity / c))
             if excess > 0:
                 out.append(Order(tk, "sell", min(excess, pos.qty), WEIGHT_TRIM_REASON))
-                exiting.add(tk)
         return out
 
     def _equal_size(self, equity: float, close: float) -> int:
@@ -471,8 +473,10 @@ class TrendFollowingPolicy(Policy):
                 exiting.add(tk)
 
         # 2-4 weekly adjustment: only ever trim a name above the cap, never add (C5 standing cap)
+        trims: list[Order] = []
         if f.check_day[t]:
-            orders.extend(self._weight_trims(t, eng, exiting))
+            trims = self._weight_trims(t, eng, exiting)
+            orders.extend(trims)
 
         pending_buys = {o.ticker for o in eng.pending if o.side == "buy"}
         staying = len([tk for tk in eng.positions if tk not in exiting])
@@ -480,7 +484,10 @@ class TrendFollowingPolicy(Policy):
         if v.regime and not f.regime_on[t]:
             return orders     # 2-1: risk-off -> no new entries, exits only
         if v.mode == "high52":
-            return orders + self._high52_rebalance(t, eng, exiting, pending_buys)
+            rebalance = self._high52_rebalance(t, eng, exiting, pending_buys)
+            # a name ranked out is sold whole; its excess-weight trim would only duplicate that sell
+            ranked_out = {o.ticker for o in rebalance if o.reason == "rank_out"}
+            return [o for o in orders if o.reason != WEIGHT_TRIM_REASON or o.ticker not in ranked_out] + rebalance
         if slots <= 0:
             return orders
 
