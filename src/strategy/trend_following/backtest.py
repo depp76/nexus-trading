@@ -546,8 +546,18 @@ class TrendFollowingPolicy(Policy):
 
 
 def run_backtest(ds, feats: Features, params: StrategyParams, variant: Variant, cost_model: CostModel,
-                 label: str | None = None) -> BacktestResult:
-    """One variant of the 6-2 matrix over `ds` under `cost_model`."""
+                 label: str | None = None, scores=None) -> BacktestResult:
+    """One variant of the 6-2 matrix over `ds` under `cost_model`.
+
+    C-series rows (mode "score") run ScoringPolicy on the variant's parameter overrides; `scores` is the
+    matching ScoreBook when the caller already has it (it does not depend on the cost model)."""
+    if variant.mode == "score":
+        from strategy.trend_following.scoring import compute_scores
+        from strategy.trend_following.scoring_policy import ScoringPolicy
+        params = variant.apply(params)
+        eng = Engine(ds.stocks, ds.rf_period, params, cost_model, ds.start_idx, label or variant.id, adv=feats.adv)
+        sb = scores if scores is not None else compute_scores(ds.stocks, params)
+        return eng.run(ScoringPolicy(feats, params, variant, sb))
     eng = Engine(ds.stocks, ds.rf_period, params, cost_model, ds.start_idx, label or variant.id, adv=feats.adv)
     if variant.needs_flows and not feats.has_flows:
         eng.notes.append("variant needs investor flows but the dataset has none: no entries possible")

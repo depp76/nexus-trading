@@ -437,7 +437,7 @@ class CostModel:
 ## 9. 구현 현황 (v03 기준, 2026-09-28; v05 반영은 9-9, v06 반영은 9-15)
 
 > v04에서 추가된 2-5 스코어링 모드는 지표·게이트·점수 계산(`scoring.py`)까지 구현해 Trading Universe의 "Trend Score" 추천(9-4)에
-> 쓴다. C1~C3 백테스트 정책(2-5 (4)·(5)의 매수·매도 규칙을 엔진에 연결)은 **아직 미구현**이고, 6-1-2 IC·5분위 분석은 `factor_ic.py`로 구현했다(9-13).
+> 쓴다. C1~C3 백테스트 정책(2-5 (4)·(5)의 매수·매도 규칙을 엔진에 연결)은 `scoring_policy.py`로 구현했다(9-16, NEX-46). 6-1-2 IC·5분위 분석은 `factor_ic.py`로 구현했다(9-13).
 
 7장의 1~5단계를 `src/strategy/trend_following/` 패키지로 구현했다. 실데이터 백테스트(6단계의
 입력)는 Strategy 탭의 "Run Research"로 실행하고 "Save Report"로 `reports/trend_following_v03_*.md`에
@@ -458,6 +458,7 @@ class CostModel:
 | `event_study.py` | 6-1 | 돌파 이벤트의 다음 날 시가 기준 5/20/60일 수익률을 V 유무·FI 순매수/순매도·FI 순매도(개인 프록시) 그룹으로 비교(KOSPI 차감 초과수익 병기) |
 | `research.py` | 6-2, 4-1, 6-4 | 매트릭스 × 비용 배수 실행, 판정 표, 민감도 표, 비용 분해, 연도별 수익률, 이벤트 스터디를 담은 markdown 리포트 |
 | `scoring.py` | 2-5 (1)~(3) | 날짜×종목 배열: MA50Div·Range52·MA20Div·R3(ATR% 정규화 옵션; R10은 6-1-2 리포트용 참고 값으로만 계산, 점수 미사용), 유동성 종목 내 퍼센타일, 게이트(유동성·MA50Div>0·Range52≥0.70·MA20Div 상위 5% 제외), 추세·타이밍·총점, 게이트 통과 종목 내 총점순위(`compute_scores`); 주간 Top/Bottom 추천(`weekly_recommendation`); Universe 행 → `PriceBook` 로더(`load_score_inputs`) |
+| `scoring_policy.py` | 2-5 (4)(5), 6-2 | C1~C3 엔진 정책 `ScoringPolicy`(9-16): 주간 매수·상대 매도·일별 절대 매도, 점수는 `scoring.compute_scores` 재사용 |
 | `raw_check.py`, `data/raw_prices.py` | A5 | 비수정 일봉 조회(KIS 원주가)와 수정 대비 수준 의존 규칙 차이 집계(9-7) |
 | `data/flows.py`, `data/rates.py` | 5, 6-3 | 종목별 투자자 순매수 수집기(Naver frgn 페이지, `cache/investor_flows/` 캐시), CD91 수집기(ECOS API 키 → `cd91.csv` → 상수 3%) |
 | `ui/strategy_tab.py`, `ui/trend_following_tab.py`, `threads/strategy_threads.py` | 7 | Strategy 탭의 Trend Following 서브탭(폼 → 백그라운드 실행 → 스코어카드 표·NAV 차트·이벤트 스터디 표·리포트 저장) |
@@ -645,3 +646,19 @@ NEX-13 초안(사용자 승인 2026-10-14)을 반영했다. 전략 규칙·파�
 - **스펙과의 차이**: 없음.
 - **한계**: R10↔MA20Div 상관 0.90은 전체 횡단면 평균이다. 상위 5% 꼬리에서만의 중복도는 확인하지 않았다(NEX-37 미확인 항목).
 - **테스트**: 타이밍점수·총점·총점순위·게이트가 R10에만 의존하는 입력 변화에 불변인지 확인하는 테스트(`test_r10_does_not_enter_the_score`), `StrategyParams`에 R10 필드가 없음을 확인하는 테스트, 6-1-2 판정 표에 R10이 없음을 확인하는 테스트를 추가했다. test_pullback_scores_better_timing_than_the_riser의 기대값은 R10 항 제거로 바뀐 합성 데이터 결과(BOUNCE가 DOWN 다음으로 낮은 총점)에 맞춰 BOUNCE·DOWN이 하위 두 개인 것으로 고쳤다. pytest 465 passed, ruff 0건.
+### 9-16. C1~C3 스코어링 정책 (NEX-46, 2026-10-14)
+
+- **구현 위치**: `config.py`(`VARIANTS`에 C1/C2/C3, `Variant.mode="score"`, `Variant.score_overrides`/`apply()`; C2 = `score_vol_normalize=False`, C3 = `score_range_mode="high52_prox"`, C1 = 기본값, 세 행 모두 L1 사용·V/F/FX 미사용), `scoring_policy.py`(`ScoringPolicy`), `backtest.py`(`run_backtest`가 `mode="score"` 행을 `ScoringPolicy`로 분기, 변형 파라미터를 적용한 값으로 엔진을 만들어 `BacktestResult.params`에 남김), `research.py`(C 행 ScoreBook을 비용 배수와 무관하게 한 번만 계산, 리포트에 C 계열 회전율·평균 보유기간 절), `tests/strategy/trend_following/test_scoring_policy.py`(신규), `test_lookahead.py`·`test_research.py`(C1~C3 포함으로 확장). `roadmap.md`는 같은 PR에서 v06 반영 행과 D4 행을 추가했다.
+- **규칙(2-5 (4)(5) 그대로)**: 점수·게이트·총점순위는 `scoring.compute_scores`를 재사용하고 새로 구현하지 않았다. 주간 점검일에 L1 Risk-on이고 게이트 통과이며 총점순위 ≥ 0.80인 종목을 빈 슬롯 수만큼 총점 높은 순으로 매수(비중은 2-4: 1% 위험 / (2×ATR20), 20% 상한, 정수 주, t+1 시가 체결, 체결 시 20% 상한 `weight_cap`과 주간 초과분 `weight_trim`도 A·B와 동일). 상대 매도는 주간 점검일에 게이트 통과이고 총점순위 < 0.50(`score_rank_out`). 절대 매도는 매일 MA50Div < 0(`ma50_exit`) 또는 종가 < 진입가 − 2×ATR20(`stop`). Donchian 10 이탈(`exit_channel`)은 읽지 않는다. 과열 게이트는 신규 진입에만 쓰고 보유 종목을 과열이라는 이유로 매도하지 않는다. 파라미터는 2-5 (6) 기본값 그대로이며 결과를 보고 바꾸지 않았다.
+- **구현 결정(스펙이 정하지 않은 부분)**:
+  1. **MA50Div 외 사유로 게이트에서 탈락한 보유 종목**(Range52 < 0.70, 과열, 유동성 미달)은 총점순위가 정의되지 않는다(총점순위는 게이트 통과 종목 내 퍼센타일). 2-5 (5)의 문언 "게이트는 통과했지만 총점순위 < 0.50"을 그대로 읽어 이런 종목에는 주간 상대 매도를 적용하지 않고, MA50Div < 0 또는 초기 손절이 날 때까지 보유한다. Range52 < 0.70 탈락을 매도 사유로 삼는 해석은 문언에 없어 쓰지 않았다. 이 선택은 보유 기간을 늘리는 쪽이므로 CIO 검토 대상이다.
+  2. **MA50Div가 NaN**(이력 부족)인 보유 종목은 절대 매도 조건이 성립하지 않는 것으로 본다(`NaN < 0`은 거짓).
+  3. **매수 우선순위**는 총점(점수 자체) 내림차순이다. 동점은 열 순서. 후보가 슬롯보다 적으면 모두 매수한다.
+  4. **초기 손절가**는 A 계열과 같은 엔진 경로로 체결가 − 2×(신호일 ATR20)를 포지션에 기록해 쓴다(3장 2번과 같은 값).
+  5. 매도 주문이 걸려 있는 종목은 같은 세션에 중복 매도 주문과 `weight_trim`을 내지 않는다. 보유 종목이 이미 있거나 매수 주문이 대기 중이면 다시 매수하지 않는다.
+  6. 거래정지(`traded` False)인 종목은 신규 매수에서 제외한다. 점수 자체에는 영향이 없다.
+  7. 점검일이 아닌 날에는 매수·상대 매도를 하지 않고 절대 매도만 점검한다. L1 Risk-off 주에도 매도(절대·상대)와 `weight_trim`은 계속 나가고 신규 매수만 막는다.
+- **리포트**: C 계열 행이 있으면 "6-2 C-series turnover and holding period (1x)" 절에 거래 수·회전율(왕복/년, 9-2)·평균 보유일(달력일)·연 비용·승률을 병기한다. 표준 결과 표의 `Turnover`·`Hold(d)` 열도 모든 행에 이미 있다.
+- **스펙과의 차이**: 없음(위 1~7은 스펙이 정하지 않은 구현 선택).
+- **테스트**: `test_scoring_policy.py` — 히스테리시스(순위 0.6 보유, 0.4 매도, 0.50 경계 포함·제외), 매수 문턱 0.80 포함, 슬롯 수와 총점 순서, 2-4 비중, 점검일이 아니면 미매수, Risk-off 신규 매수 없음·Risk-off에도 매도, 과열 보유 종목 미매도, MA50Div 외 탈락 종목 미매도(결정 1), MA50Div 이탈 매도(점검일/비점검일, 순위 무관) 및 다음 날 시가 체결, ATR 손절, Donchian 10이 매 세션 참이어도 미청산, `weight_trim`, C2/C3가 실제로 다른 점수(정규화 유무로 R3 백분위 순서가 뒤집히는 합성 사례, Range52 값 차이)와 변형 파라미터가 결과에 기록됨, 매트릭스 리포트에 C1~C3 행과 회전율·보유기간 절. `test_lookahead.py::TestFillsAreNextOpen`은 VARIANTS 전체 루프에 C1~C3가 들어가 모든 C 체결이 t-1 종가 신호(게이트·총점순위·MA50Div·점검일·Risk-on)로 설명되고 체결가가 t일 시가임을 확인하고, 신호일 이후 입력을 바꿔도 체결이 불변임을 C1~C3에도 적용한다. pytest 493 passed, ruff 0건.
+- **한계**: 실데이터 결과는 기록하지 않았다(성과 수치 미열람·미기록, 홀드아웃 데이터 미사용, 개발 구간 가드 유지). 검증 통과 선언은 하지 않으며 V4는 Validation이 연다.

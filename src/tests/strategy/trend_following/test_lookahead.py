@@ -319,7 +319,12 @@ def _synthetic_worlds():
 
 
 class TestFillsAreNextOpen(unittest.TestCase):
-    def _entry_signal(self, feats, v, s: int, j: int) -> bool:
+    sb: ScoreBook | None = None      # set per variant for the C-series rows
+
+    def _entry_signal(self, feats, v, s: int, j: int, p: StrategyParams | None = None) -> bool:
+        if v.mode == "score":
+            return bool(feats.check_day[s] and feats.regime_on[s] and feats.traded[s, j] and self.sb.gate[s, j]
+                        and self.sb.total_rank[s, j] >= (p or StrategyParams()).score_buy_pct)
         if v.mode == "high52":
             return bool(feats.check_day[s] and feats.regime_on[s] and feats.trend_ok[s, j]
                         and feats.liquid[s, j] and feats.traded[s, j])
@@ -333,6 +338,10 @@ class TestFillsAreNextOpen(unittest.TestCase):
         return bool(ok)
 
     def _exit_signal(self, feats, ds, p, v, fills_before, s: int, j: int, reason: str, ticker: str) -> bool:
+        if reason == "ma50_exit":
+            return bool(self.sb.ma50_div[s, j] < 0)
+        if reason == "score_rank_out":
+            return bool(feats.check_day[s] and self.sb.gate[s, j] and self.sb.total_rank[s, j] < p.score_sell_pct)
         if reason == "channel":
             return bool(feats.exit_channel[s, j])
         if reason == "flow":
@@ -352,6 +361,7 @@ class TestFillsAreNextOpen(unittest.TestCase):
             for vid, v in VARIANTS.items():
                 with self.subTest(world=world_name, variant=vid):
                     res, feats, fills = run_recorded(ds, p, v, cm)
+                    self.sb = compute_scores(b, v.apply(p)) if v.mode == "score" else None
                     self.assertTrue(any(f[0] == "buy" for f in fills), "no entries: the test would be vacuous")
                     kinds = set()
                     for i, (side, t, tk, qty, price, reason) in enumerate(fills):
@@ -368,9 +378,9 @@ class TestFillsAreNextOpen(unittest.TestCase):
                         self.assertEqual(price, cm.fill_price(d, market, b.open[t, j], side), f"{fills[i]}")
                         if side == "buy":
                             self.assertEqual(reason, "entry")
-                            self.assertTrue(self._entry_signal(feats, v, t - 1, j), f"{fills[i]}")
+                            self.assertTrue(self._entry_signal(feats, v, t - 1, j, v.apply(p)), f"{fills[i]}")
                         else:
-                            self.assertTrue(self._exit_signal(feats, ds, p, v, fills[:i], t - 1, j, reason, tk),
+                            self.assertTrue(self._exit_signal(feats, ds, v.apply(p), v, fills[:i], t - 1, j, reason, tk),
                                             f"{fills[i]}")
                     # the ledger and the fills agree
                     for tr in res.trades:
@@ -383,13 +393,13 @@ class TestFillsAreNextOpen(unittest.TestCase):
         p = StrategyParams()
         ds = synthetic_dataset(with_flows=True)
         seen = set()
-        for vid in ("A0", "A5", "B"):
+        for vid in ("A0", "A5", "B", "C1"):
             seen |= {f[5] for f in run_recorded(ds, p, VARIANTS[vid])[2]}
         self.assertTrue({"entry", "channel", "flow"} <= seen, seen)
 
     def test_a_fill_does_not_depend_on_its_own_session_high_low_close(self):
         p = StrategyParams()
-        for vid in ("A0", "A5", "B"):
+        for vid in ("A0", "A5", "B", "C1", "C2", "C3"):
             ds = synthetic_dataset(with_flows=True)
             feats = compute_features(ds, p)
             _, _, base = run_recorded(ds, p, VARIANTS[vid], feats=feats)

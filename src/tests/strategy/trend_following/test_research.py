@@ -97,7 +97,7 @@ class TestResearchRunner(unittest.TestCase):
 
     def test_request_defaults_cover_the_whole_matrix(self):
         req = ResearchRequest(start=date(2021, 1, 4))
-        self.assertEqual(req.variant_ids, ("A0", "A1", "A2", "A3", "A4", "A5", "B"))
+        self.assertEqual(req.variant_ids, ("A0", "A1", "A2", "A3", "A4", "A5", "B", "C1", "C2", "C3"))
         self.assertEqual(req.cost_multipliers, (0.0, 1.0, 2.0))
 
 

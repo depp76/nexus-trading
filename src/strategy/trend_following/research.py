@@ -18,6 +18,7 @@ from strategy.trend_following.costs import CostModel
 from strategy.trend_following.dataset import ResearchCancelled, check_dev_window
 from strategy.trend_following.event_study import run_event_study, HORIZONS
 from strategy.trend_following.metrics import summarize_run
+from strategy.trend_following.scoring import compute_scores
 from strategy.trend_following.signals import compute_features
 
 BENCHMARK_LABELS = {
@@ -113,6 +114,7 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
     warnings.append(ds.info.get("universe", ""))
 
     runs: list[RunSummary] = []
+    score_books: dict[str, object] = {}     # C-series ScoreBook per variant: independent of the cost multiplier
     if req.run_backtests:
         for mult in req.cost_multipliers:
             cm = req.cost_model.scaled(mult)
@@ -126,7 +128,9 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
                     continue
                 _check_stop(should_stop)
                 _say(progress, f"Backtest {vid} at {mult:g}x costs...")
-                res: BacktestResult = run_backtest(ds, feats, p, v, cm)
+                if v.mode == "score" and vid not in score_books:
+                    score_books[vid] = compute_scores(ds.stocks, v.apply(p))
+                res: BacktestResult = run_backtest(ds, feats, p, v, cm, scores=score_books.get(vid))
                 runs.append(RunSummary(vid, v.label, "strategy", mult, summarize_run(res, bm1, bm3),
                                        res.nav, res.dates, res.notes))
             for bid, res in bms.items():
@@ -270,6 +274,20 @@ def render_markdown(result: ResearchResult, header: list[str] | None = None) -> 
                         _won(r.metrics["cost_slippage"]), _won(r.metrics["cost_total"]),
                         _num(r.metrics["turnover"], 1), _won(r.metrics["banked"]), _won(r.metrics["topped_up"])]
                        for r in result.runs_at(1.0)]))
+
+    c_rows = [r for r in result.runs_at(1.0, "strategy") if VARIANTS.get(r.id) is not None
+              and VARIANTS[r.id].mode == "score"]
+    if c_rows:
+        out.append("")
+        out.append("## 6-2 C-series turnover and holding period (1x)")
+        out.append("")
+        out.append("Weekly rank-based rules trade more than the breakout rows, so turnover and holding period are "
+                   "reported next to the cost they drive (round trips per year, calendar days).")
+        out.append("")
+        out.append(_table(["ID", "Trades", "Turnover (round trips/yr)", "Avg hold (d)", "Cost/yr", "Win"],
+                          [[r.id, str(r.metrics["n_trades"]), _num(r.metrics["turnover"], 1),
+                            _num(r.metrics["avg_holding_days"], 0), _pct(r.metrics["cost_pct_per_year"], 2),
+                            _pct(r.metrics["win_rate"], 0)] for r in c_rows]))
 
     yearly_rows = result.runs_at(1.0)
     if yearly_rows:

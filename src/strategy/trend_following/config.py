@@ -8,7 +8,7 @@ them, so nothing here is tuned.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, replace
 from datetime import date
 
 SPEC_VERSION = "v06"
@@ -88,20 +88,34 @@ class Variant:
     volume: bool          # V: volume confirmation on entry
     flow: bool            # F: foreign+institution net-buy confirmation on entry
     flow_exit: bool       # FX: flow-based exit
-    mode: str = "breakout"   # "breakout" (A-series) or "high52" (B: hold top names by 52-week-high proximity)
+    mode: str = "breakout"   # "breakout" (A-series), "high52" (B: hold top names by 52-week-high proximity)
+                             # or "score" (C-series: 2-5 trend + pullback scoring)
+    score_overrides: tuple[tuple[str, object], ...] = ()   # C-series: StrategyParams fields this row changes
 
     @property
     def needs_flows(self) -> bool:
         return self.flow or self.flow_exit
 
+    def apply(self, params: StrategyParams) -> StrategyParams:
+        """`params` with this row's overrides (C2: no volatility normalisation, C3: high52_prox)."""
+        return replace(params, **dict(self.score_overrides)) if self.score_overrides else params
+
     @property
     def label(self) -> str:
         if self.mode == "high52":
             return "B: L1 + 52w-high proximity ranking"
+        if self.mode == "score":
+            return f"{self.id}: {SCORE_LABELS.get(self.id, 'L1 + trend/pullback score')}"
         parts = ["L1" if self.regime else "-", "V" if self.volume else "-",
                  "F" if self.flow else "-", "FX" if self.flow_exit else "-"]
         return f"{self.id}: " + "/".join(parts)
 
+
+SCORE_LABELS = {
+    "C1": "L1 + trend/pullback score (ATR-normalised, Range52)",
+    "C2": "C1 without volatility normalisation",
+    "C3": "C1 with Range52 -> 52w-high proximity",
+}
 
 VARIANTS: dict[str, Variant] = {
     "A0": Variant("A0", regime=False, volume=False, flow=False, flow_exit=False),
@@ -111,6 +125,12 @@ VARIANTS: dict[str, Variant] = {
     "A4": Variant("A4", regime=True, volume=True, flow=True, flow_exit=False),
     "A5": Variant("A5", regime=True, volume=True, flow=True, flow_exit=True),
     "B": Variant("B", regime=True, volume=False, flow=False, flow_exit=False, mode="high52"),
+    # 2-5 / 6-2: C-series, price data only (no V / F / FX); the rows differ only in the scoring inputs
+    "C1": Variant("C1", regime=True, volume=False, flow=False, flow_exit=False, mode="score"),
+    "C2": Variant("C2", regime=True, volume=False, flow=False, flow_exit=False, mode="score",
+                  score_overrides=(("score_vol_normalize", False),)),
+    "C3": Variant("C3", regime=True, volume=False, flow=False, flow_exit=False, mode="score",
+                  score_overrides=(("score_range_mode", "high52_prox"),)),
 }
 
 # 4-1 mandatory sensitivity scenarios: no cost / base / conservative.
