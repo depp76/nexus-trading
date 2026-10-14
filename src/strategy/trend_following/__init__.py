@@ -11,6 +11,7 @@ Facade: UI and thread code import from here; the modules underneath are
   benchmarks  BM1..BM4 on the same engine
   metrics     6-4 scorecard
   event_study 6-1 breakout event study
+  factor_ic   6-1-2 factor Rank IC, quintiles and the verdict table
   research    the matrix runner and the markdown report
   snapshot    save / load a Dataset with a SHA-256 manifest (cache/snapshots/)
   run         headless entry point: python -m strategy.trend_following.run (not imported here)
@@ -30,6 +31,7 @@ from strategy.trend_following.backtest import (
 from strategy.trend_following.benchmarks import run_benchmarks, run_bm1, run_bm2, run_bm3, run_bm4
 from strategy.trend_following.metrics import summarize_run
 from strategy.trend_following.event_study import run_event_study
+from strategy.trend_following.factor_ic import FactorICResult, run_factor_ic
 from strategy.trend_following.research import (
     ResearchRequest, ResearchResult, RunSummary, run_research, render_markdown,
 )
@@ -48,7 +50,7 @@ __all__ = [
     "save_snapshot", "load_snapshot", "dataset_sha256",
     "BacktestResult", "Trade", "Engine", "Policy", "TrendFollowingPolicy", "run_backtest",
     "run_benchmarks", "run_bm1", "run_bm2", "run_bm3", "run_bm4",
-    "summarize_run", "run_event_study",
+    "summarize_run", "run_event_study", "FactorICResult", "run_factor_ic",
     "ResearchRequest", "ResearchResult", "RunSummary", "run_research", "render_markdown",
     "ScoreBook", "ScoredName", "Recommendation", "compute_scores", "weekly_recommendation", "load_score_inputs",
     "run_universe_scoring",
