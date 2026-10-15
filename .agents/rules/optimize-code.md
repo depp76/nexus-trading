@@ -1,10 +1,10 @@
 ---
 trigger: always_on
 glob:
-description: Coding and convention rules for Portfolio Management (kept in sync with CLAUDE.md)
+description: Coding and convention rules for Nexus Trading (kept in sync with CLAUDE.md)
 ---
 
-# Portfolio Management Coding Rules
+# Nexus Trading Coding Rules
 
 Authoritative reference: `CLAUDE.md` (identical content in `AGENTS.md`). This file is the
 short version for agents that read `.agents/rules/`.

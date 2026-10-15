@@ -62,7 +62,7 @@ from ui.strategy_tab import StrategyTab
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Portfolio Management")
+        self.setWindowTitle("Nexus Trading")
         self.resize(1100, 850)
 
         central_widget = QWidget()
@@ -71,7 +71,7 @@ class MainWindow(QMainWindow):
 
         # Header
         header_layout = QHBoxLayout()
-        title_label = QLabel("Portfolio Management")
+        title_label = QLabel("Nexus Trading")
         title_label.setFont(create_font(FONT_TITLE, QFont.Weight.Bold))
         header_layout.addWidget(title_label)
         
@@ -83,7 +83,7 @@ class MainWindow(QMainWindow):
         self.global_auto_timer.timeout.connect(self._on_global_auto_timer)
 
         # Add Auto Refresh Checkbox
-        self.auto_refresh_cb = QCheckBox("Auto Update (1 min)")
+        self.auto_refresh_cb = QCheckBox("Auto-refresh (1 min)")
         self.auto_refresh_cb.setFont(create_font(10, QFont.Weight.Bold))
         self.auto_refresh_cb.setStyleSheet(f"QCheckBox {{ color: {ACCENT_TEXT}; margin-right: 15px; }}")
         self.auto_refresh_cb.toggled.connect(self._toggle_global_auto_timer)
@@ -137,7 +137,7 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(self.status_label)
         status_layout.addStretch()
 
-        self.update_time_label = QLabel("Update Time: -")
+        self.update_time_label = QLabel("Last updated: -")
         self.update_time_label.setFont(create_font(9, style_name="Semilight"))
         self.update_time_label.setStyleSheet("color: #7f8c8d;")
         status_layout.addWidget(self.update_time_label)
@@ -241,7 +241,7 @@ class MainWindow(QMainWindow):
 
 
 if __name__ == "__main__":
-    print("Starting Portfolio Management...")
+    print("Starting Nexus Trading...")
     app = QApplication(sys.argv)
     # Windows' native style silently ignores parts of the stylesheet below
     # (notably QTabBar and QHeaderView theming); Fusion renders every rule

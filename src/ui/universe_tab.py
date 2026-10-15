@@ -198,7 +198,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     # (highlight status to show, button label): "" = no status filter. The
     # status values are the ones custom_settings.json stores ("On" = Port,
     # "Tg" = Target; docs/ui.md 1.7).
-    _STATUS_FILTER_STATES = (("", ""), ("On", "Port"), ("Tg", "Target"))
+    _STATUS_FILTER_STATES = (("", ""), ("On", "Held"), ("Tg", "Target"))
 
     @classmethod
     def _filter_button(cls, text: str, checked: bool = False) -> QPushButton:

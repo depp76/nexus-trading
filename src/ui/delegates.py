@@ -113,14 +113,14 @@ class CellDelegate(QStyledItemDelegate):
 # ---------------------------------------------------------------------------
 # docs/ui.md 1.7: one vocabulary for the highlight states custom_settings.json
 # stores as "On"/"Tg" (kept as-is; the places that display it -- this
-# button, the toolbar's blank/Port/Target status filter button and the row
-# context menu -- agree on the Port/Target wording). The "-" (blank) state is
+# button, the toolbar's blank/Held/Target status filter button and the row
+# context menu -- agree on the Held/Target wording). The "-" (blank) state is
 # drawn too: the per-row status button keeps one fixed size in every state
 # (user direction 2026-09-29) so clicking it cycles - -> On -> Tg without the
 # cell reflowing. (label, text, border, fill); fill None = outline only.
 STATUS_BUTTON = {
     "-": ("", TEXT_FAINT, LINE, None),
-    "On": ("Port", ACCENT_TEXT, ACCENT, ACCENT_BG),
+    "On": ("Held", ACCENT_TEXT, ACCENT, ACCENT_BG),
     "Tg": ("Target", "#ffffff", ACCENT, ACCENT),
 }
 STATUS_MARKER = {"On": ACCENT, "Tg": ACCENT}

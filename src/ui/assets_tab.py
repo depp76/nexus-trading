@@ -197,7 +197,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         lbl_assets = QLabel("Total Assets:")
         lbl_assets.setFont(create_font(10, style_name="Semilight"))
 
-        live_asset_title = QLabel("Current Total Asset:")
+        live_asset_title = QLabel("Current Total Assets:")
         live_asset_title.setFont(create_font(10, style_name="Semilight"))
 
         # docs/ui.md issue #7 (mockup): these were QLineEdit(readOnly), which
@@ -469,7 +469,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         date_str = self._selected_date()
         raw_amt  = self._asset_edit.text().replace(',', '').strip()
         if not date_str:
-            QMessageBox.warning(self, "Error", "No Friday date selected.")
+            QMessageBox.warning(self, "Error", "Select a Friday.")
             return
         try:
             total = float(raw_amt)

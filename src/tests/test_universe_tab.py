@@ -66,7 +66,7 @@ class TestStartupAddedTickersRenderOnce(unittest.TestCase):
 
 
 class TestStatusFilterButton(unittest.TestCase):
-    """The toolbar's status button cycles blank -> Port -> Target -> blank
+    """The toolbar's status button cycles blank -> Held -> Target -> blank
     (user direction 2026-09-29) at a fixed size and drives the table filter."""
 
     def setUp(self):
@@ -86,7 +86,7 @@ class TestStatusFilterButton(unittest.TestCase):
         seen = []
         with patch.object(tab.table, "apply_col_filters", side_effect=lambda *a, **k: seen.append(k["status"])):
             for expected_label, expected_status, expected_checked in (
-                    ("Port", "On", True), ("Target", "Tg", True), ("", "", False), ("Port", "On", True)):
+                    ("Held", "On", True), ("Target", "Tg", True), ("", "", False), ("Held", "On", True)):
                 btn.click()
                 self.assertEqual(btn.text(), expected_label)
                 self.assertEqual(btn.isChecked(), expected_checked)
@@ -111,7 +111,7 @@ class TestStatusFilterButton(unittest.TestCase):
 
 
 class TestRowStatusButton(unittest.TestCase):
-    """The identity cell's fixed-size blank/Port/Target button cycles the
+    """The identity cell's fixed-size blank/Held/Target button cycles the
     row's status on click (user direction 2026-09-29); other clicks in the
     cell do not."""
 

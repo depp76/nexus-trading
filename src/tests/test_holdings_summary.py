@@ -32,7 +32,7 @@ class TestHoldingsSummary(unittest.TestCase):
         self.assertEqual(names, ["Big", "Small", "Loss"])
         self.assertTrue(tbl.isSortingEnabled())
 
-        # Sorting "Total Buy" ascending must be numeric, not "1,000,000" < "500,000" text order.
+        # Sorting "Buy Amount" ascending must be numeric, not "1,000,000" < "500,000" text order.
         tbl.sortItems(1, Qt.SortOrder.AscendingOrder)
         self.assertEqual([tbl.item(r, 0).text() for r in range(tbl.rowCount())], ["Small", "Loss", "Big"])
 

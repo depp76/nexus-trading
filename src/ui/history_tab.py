@@ -205,8 +205,8 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             cell_widgets.append(cell_widget)
             layout.addWidget(cell_widget, 1)
 
-        cell("total_asset", "Total Asset", "Valuation + cash")
-        cell("cumulative_asset", "Cumulative Asset", "Live NAV + withdrawals")
+        cell("total_asset", "Total Assets", "Valuation + cash")
+        cell("cumulative_asset", "Cumulative Assets", "Live NAV + withdrawals")
         cell("total_pl", "Total P/L", "Realized + unrealized")
         cell("total_pl_pct", "Total P/L (%)", "vs Principal")
         self._principal_edit = self._make_money_input("e.g. 50,000,000")
@@ -249,7 +249,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
 
         # Add Trade is this row's one primary action (docs/ui.md 1.6);
         # Fetch/Reload are secondary utilities and stay neutral.
-        self._fetch_dep_btn = _styled_button("🔄 Fetch", None, self._fetch_account_deposit)
+        self._fetch_dep_btn = _styled_button("🔄 Fetch Deposit", None, self._fetch_account_deposit, width=150)
         reload_btn = _styled_button("🔄 Reload", None, self._reload_current)
         add_btn = _styled_button("➕ Add Trade", "primary", self._show_add_trade_dialog)
         self._deposit_status_lbl = QLabel("")
@@ -262,7 +262,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
 
         self._sort_by_date = False
         # Checked state comes from ui/theme.py's QPushButton:checked rule.
-        self._sort_date_btn = _styled_button("Sort by Date", None, width=120)
+        self._sort_date_btn = _styled_button("📅 Sort: Date", None, width=120)
         self._sort_date_btn.setCheckable(True)
         self._sort_date_btn.toggled.connect(self._on_sort_date_toggled)
         row.addWidget(self._sort_date_btn)
@@ -275,7 +275,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         row.addWidget(self._open_stocks_combo)
 
         self._search_stock_pl_edit = QLineEdit()
-        self._search_stock_pl_edit.setPlaceholderText("Search Company")
+        self._search_stock_pl_edit.setPlaceholderText("Search company...")
         self._search_stock_pl_edit.setFixedHeight(_BTN_H)
         self._search_stock_pl_edit.setFixedWidth(250)
         self._search_stock_pl_edit.returnPressed.connect(self._on_search_stock_pl)
@@ -299,7 +299,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         # trace of it, so a user seeing a blank current-price cell had no
         # way to know why.
         self._hide_stale_closed = True
-        self._stale_toggle_btn = _styled_button("Hide price 30d+ after close", None, width=190)
+        self._stale_toggle_btn = _styled_button("Hide prices 30+ days after sale", None, width=230)
         self._stale_toggle_btn.setCheckable(True)
         self._stale_toggle_btn.setChecked(True)
         self._stale_toggle_btn.toggled.connect(self._on_stale_toggle_changed)
@@ -315,7 +315,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
 
     def _on_sort_date_toggled(self, checked: bool):
         self._sort_by_date = checked
-        self._sort_date_btn.setText("🔄 Sort by Position" if checked else "📅 Sort by Date")
+        self._sort_date_btn.setText("🔄 Sort: Position" if checked else "📅 Sort: Date")
         self._apply_filter()
 
     def _on_period_filter_changed(self, period: str):
@@ -801,7 +801,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         set_kpi("total_asset", f"{nav:,.0f}")
         set_kpi("cumulative_asset", f"{cumulative_asset:,.0f}")
         set_kpi("total_pl", f"{total_pl:+,.0f}", _pos_color(total_pl),
-                 tooltip=f"Cumulative Asset ({cumulative_asset:,.0f}) - Principal ({principal:,.0f})")
+                 tooltip=f"Cumulative Assets ({cumulative_asset:,.0f}) - Principal ({principal:,.0f})")
         set_kpi("total_pl_pct", f"{agg['total_pl_pct']:+.1f}%", _pos_color(agg["total_pl_pct"]))
         set_kpi("cost_basis", f"{agg['cost_total']:,.0f}")
         set_kpi("deposit", None)  # value is the live QLineEdit; only the sub-label updates

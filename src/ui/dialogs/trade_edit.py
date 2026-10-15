@@ -32,7 +32,7 @@ class BuyEditDialog(QDialog):
     """Dialog for editing buy details in TradingHistoryTab."""
     def __init__(self, current_data, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Edit Buy Information")
+        self.setWindowTitle("Edit Buy")
         self.setMinimumWidth(300)
         self.result_data = None
 
@@ -121,7 +121,7 @@ class SellEditDialog(QDialog):
     """Dialog for editing sell details in TradingHistoryTab."""
     def __init__(self, current_data, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Edit Sell Information")
+        self.setWindowTitle("Edit Sell")
         self.setMinimumWidth(300)
         self.result_data = None
         self._buy_date_str = current_data.get("buy_date", "")
@@ -130,7 +130,7 @@ class SellEditDialog(QDialog):
         layout = QFormLayout(self)
 
         self.sell_date_edit = QLineEdit(current_data.get("sell_date", ""))
-        self.sell_date_edit.setPlaceholderText("YYYY-MM-DD (Leave empty if Open)")
+        self.sell_date_edit.setPlaceholderText("YYYY-MM-DD (leave empty if still open)")
 
         s_price = current_data.get("sell_price", 0.0)
         self.sell_price_edit = QLineEdit(f"{s_price:,.0f}" if s_price else "")
@@ -266,7 +266,7 @@ class TradeEntryDialog(QDialog):
         self.market_combo.addItems(["KOSPI", "KOSDAQ", "NASDAQ", "NASDAQ 100", "NYSE", "AMEX"])
 
         self.ticker_edit = QLineEdit()
-        self.ticker_edit.setPlaceholderText("Enter Ticker (e.g. QQQM)")
+        self.ticker_edit.setPlaceholderText("Ticker (e.g. QQQM or 005930)")
 
         self.buy_date_edit = QLineEdit(datetime.now().strftime("%Y-%m-%d"))
         self.buy_date_edit.setPlaceholderText("YYYY-MM-DD")

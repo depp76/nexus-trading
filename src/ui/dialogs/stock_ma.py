@@ -34,10 +34,10 @@ Layout
 
     +-- splitter ------------------------------------------------------+
     | name  ticker · market  price  chg%   [1M 3M 6M 1Y 3Y All] as-of  |
-    | SHOW [Close MA5 MA10 MA20 MA50 Divergence EW]     [Volume] [RSI] |
+    | Series [Close MA5 MA10 MA20 MA50 Divergence EW]     [Volume] [RSI] |
     |   FigureCanvas: price (+MA ramp)      | right panel (optional)   |
     |                 volume                |   investor / futures tbl |
-    |                 divergence            |   "Company Information"  |
+    |                 divergence            |   "Company Info ↗"        |
     |                 rsi                   |                          |
     |   horizontal scrollbar                |                          |
     +------------------------------------------------------------------+
@@ -268,7 +268,7 @@ class StockMaDialog(QDialog):
         if self._has_data and "EqualWeight" in self._df.columns and not self._is_simple_chart:
             keys.append("EW")
         if keys:
-            cap = QLabel("SHOW")
+            cap = QLabel("Series")
             cap.setFont(create_font(FONT_CAPTION, QFont.Weight.Bold))
             cap.setStyleSheet(f"color:{TEXT_FAINT};")
             row.addWidget(cap)
@@ -291,7 +291,7 @@ class StockMaDialog(QDialog):
 
     def _build_right_panel(self, is_stock: bool) -> QWidget:
         """Investor-trend table (KR stocks), futures curve (WTI) and the
-        'Company Information' link button."""
+        'Company Info' link button."""
         panel = QWidget()
         v = QVBoxLayout(panel)
         v.setContentsMargins(0, 0, 0, 0)
@@ -302,11 +302,11 @@ class StockMaDialog(QDialog):
             v.addWidget(self._section_label("Futures Price (Last 8 Months)"))
             v.addWidget(self._build_futures_table(inv))
         elif inv:
-            v.addWidget(self._section_label(f"Supply & Demand Trend (Last {len(inv)} Days)"))
+            v.addWidget(self._section_label(f"Investor Net Buying (Last {len(inv)} Days)"))
             v.addWidget(self._build_investor_table(inv))
 
         if is_stock:
-            fin_btn = QPushButton("Company Information")
+            fin_btn = QPushButton("Company Info ↗")
             fin_btn.setFont(create_font(FONT_BODY, QFont.Weight.Bold))
             fin_btn.setMinimumHeight(40)
             fin_btn.clicked.connect(self._open_company_page)
@@ -383,7 +383,7 @@ class StockMaDialog(QDialog):
 
     def _build_futures_table(self, rows: list) -> QTableWidget:
         right = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        table = self._new_side_table(["Name", "Code", "Return"])
+        table = self._new_side_table(["Name", "Code", "Price"])
         table.setRowCount(len(rows))
         for i, row in enumerate(rows):
             table.setItem(i, 0, self._cell(row['Contract']))
@@ -398,7 +398,7 @@ class StockMaDialog(QDialog):
         headers = ["Date", "Close", "Foreigner", "Institution", "Retail"]
         keys = ["Foreigner", "Institution", "Retail"]
         if has_details:
-            headers.extend(["Inv.Trust", "PrivateEq."])
+            headers.extend(["Inv. Trust", "Private Eq."])
             keys.extend(["InvestmentTrust", "PrivateEquity"])
 
         table = self._new_side_table(headers)
@@ -422,10 +422,10 @@ class StockMaDialog(QDialog):
         webbrowser.open(url)
 
     def _build_y_zoom_row(self) -> QHBoxLayout:
-        """'Y-Axis +/-' buttons (bond yields only; the X range is handled by scroll-zoom)."""
+        """'Zoom Y +/−' buttons (bond yields only; the X range is handled by scroll-zoom)."""
         row = QHBoxLayout()
-        zoom_in_btn = QPushButton("Y-Axis +")
-        zoom_out_btn = QPushButton("Y-Axis -")
+        zoom_in_btn = QPushButton("Zoom Y +")
+        zoom_out_btn = QPushButton("Zoom Y −")
         zoom_in_btn.setFixedSize(70, _SEG_H)
         zoom_out_btn.setFixedSize(70, _SEG_H)
         row.addStretch()
