@@ -274,7 +274,7 @@ Asset에 섞여 있던 누적출금 포함 금액은 별도 `Cumulative Asset` �
 ### 4.1 구조
 
 ```
-헤더:   앱명 · 탭 · [KRW|USD] · USD/KRW 환율 · [Export]
+헤더:   앱명 · 탭 · [KRW|USD] · USD/KRW 환율 ····· [Graph] [Export]
 KPI:    Current Total Assets · Weekly P/L · Cumulative P/L · vs KOSPI · 기록 주차
 차트:   주간 추이 (자산 vs KOSPI, 첫 주 = 100 재계산, 초과수익 음영) — 상시 노출
 입력:   이번 주 기록 [W38 · 2026-09-18] [금액(자동 채움)] [기록 저장]

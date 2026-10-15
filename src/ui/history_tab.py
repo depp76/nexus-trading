@@ -177,7 +177,6 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         layout.setSpacing(0)
 
         self._kpi_labels = {}  # key -> (value QLabel | None, sub QLabel)
-        cell_widgets = []  # equalized below so every gap between fields is identical
 
         def cell(key, label, sub_text="", editable_widget=None):
             box = QVBoxLayout()
@@ -202,7 +201,6 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             self._kpi_labels[key] = (value_lbl, sub_lbl)
             cell_widget = QWidget()
             cell_widget.setLayout(box)
-            cell_widgets.append(cell_widget)
             layout.addWidget(cell_widget, 1)
 
         cell("total_asset", "Total Assets", "Valuation + cash")
@@ -217,14 +215,11 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._withdrawal_edit = self._make_money_input("e.g. 5,000,000")
         cell("withdrawal", "Withdrawal", "Cumulative", self._withdrawal_edit)
 
-        # Content widths vary a lot (e.g. "Realized + unrealized" vs. "Cost
-        # basis"), which used to make the gap between fields look uneven even
-        # though every cell shared the same stretch factor. Giving every cell
-        # the same minimum width makes the columns -- and the gaps between
-        # them -- genuinely equal.
-        max_w = max(cw.sizeHint().width() for cw in cell_widgets)
-        for cw in cell_widgets:
-            cw.setMinimumWidth(max_w)
+        # Every cell has the same stretch factor, so the columns come out
+        # equal whenever the window is wide enough; when it is not, each cell
+        # shrinks to its own content width. Cells used to be pinned to the
+        # widest cell's width, which made the strip 8x that width and pushed
+        # the tab past the screen edge (user report 2026-10-15).
         return card
 
     def _make_money_input(self, placeholder: str) -> QLineEdit:
@@ -244,21 +239,21 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         everything that is left was consolidated into this one row (user
         direction, 2026-09-20)."""
         row = QHBoxLayout()
-        row.setSpacing(10)
+        row.setSpacing(8)
         row.setContentsMargins(0, 0, 0, 0)
 
         # Add Trade is this row's one primary action (docs/ui.md 1.6);
         # Fetch/Reload are secondary utilities and stay neutral.
-        self._fetch_dep_btn = _styled_button("🔄 Fetch Deposit", None, self._fetch_account_deposit, width=150)
-        reload_btn = _styled_button("🔄 Reload", None, self._reload_current)
-        add_btn = _styled_button("➕ Add Trade", "primary", self._show_add_trade_dialog)
+        self._fetch_dep_btn = _styled_button("🔄 Fetch Deposit", None, self._fetch_account_deposit, width=125)
+        reload_btn = _styled_button("🔄 Reload", None, self._reload_current, width=90)
+        add_btn = _styled_button("➕ Add Trade", "primary", self._show_add_trade_dialog, width=105)
         self._deposit_status_lbl = QLabel("")
         self._deposit_status_lbl.setStyleSheet(f"font-size:9pt; color:{_STATUS_SUCCESS_COLOR}; font-weight:bold;")
         self._deposit_status_lbl.setFixedHeight(_BTN_H)
         for w in (self._fetch_dep_btn, reload_btn, add_btn):
             row.addWidget(w)
 
-        row.addWidget(_styled_button("Summary", None, self._show_holdings_summary))
+        row.addWidget(_styled_button("Summary", None, self._show_holdings_summary, width=90))
 
         self._sort_by_date = False
         # Checked state comes from ui/theme.py's QPushButton:checked rule.
@@ -270,14 +265,16 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._open_stocks_combo = QComboBox()
         self._open_stocks_combo.addItem("Current Holdings...")
         self._open_stocks_combo.setFixedHeight(_BTN_H)
-        self._open_stocks_combo.setFixedWidth(250)
+        self._open_stocks_combo.setMinimumWidth(150)
+        self._open_stocks_combo.setMaximumWidth(250)
         self._open_stocks_combo.currentTextChanged.connect(self._on_open_stock_combo_changed)
         row.addWidget(self._open_stocks_combo)
 
         self._search_stock_pl_edit = QLineEdit()
         self._search_stock_pl_edit.setPlaceholderText("Search company...")
         self._search_stock_pl_edit.setFixedHeight(_BTN_H)
-        self._search_stock_pl_edit.setFixedWidth(250)
+        self._search_stock_pl_edit.setMinimumWidth(150)
+        self._search_stock_pl_edit.setMaximumWidth(250)
         self._search_stock_pl_edit.returnPressed.connect(self._on_search_stock_pl)
         row.addWidget(self._search_stock_pl_edit)
         row.addWidget(_styled_button("🔍", None, self._on_search_stock_pl, width=36))
@@ -286,7 +283,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._period_filter = "All"
         self._period_buttons = {}
         for label in ("1M", "3M", "YTD", "All"):
-            btn = _styled_button(label, None, width=44)
+            btn = _styled_button(label, None, width=48)
             btn.setCheckable(True)
             btn.setChecked(label == "All")
             btn.clicked.connect(lambda checked, p=label: self._on_period_filter_changed(p))
@@ -299,7 +296,9 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         # trace of it, so a user seeing a blank current-price cell had no
         # way to know why.
         self._hide_stale_closed = True
-        self._stale_toggle_btn = _styled_button("Hide prices 30+ days after sale", None, width=230)
+        self._stale_toggle_btn = _styled_button(
+            "Hide stale prices", None, width=130,
+            tooltip="Hide the current price of trades closed more than 30 days ago")
         self._stale_toggle_btn.setCheckable(True)
         self._stale_toggle_btn.setChecked(True)
         self._stale_toggle_btn.toggled.connect(self._on_stale_toggle_changed)

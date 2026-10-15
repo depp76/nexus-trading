@@ -229,25 +229,24 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         ctrl.addSpacing(12)
         ctrl.addWidget(live_diff_title)
         ctrl.addWidget(self.live_diff_lbl)
-        ctrl.addSpacing(6)
         ctrl.addWidget(today_btn)
-        ctrl.addSpacing(6)
         ctrl.addWidget(add_btn)
 
+        # Graph/Export sit on the header row, right-aligned above the chart
+        # they belong to: all on one controls row the tab needed ~1,540px
+        # and ran past the screen edge (user report 2026-10-15).
         graph_btn = QPushButton("\U0001f4c8  Graph")
         graph_btn.setFont(create_font(10, QFont.Weight.Bold))
         graph_btn.setFixedHeight(32)
         graph_btn.clicked.connect(self._show_graph)
-        ctrl.addSpacing(6)
-        ctrl.addWidget(graph_btn)
+        header_row.addWidget(graph_btn)
 
         export_btn = QPushButton("\U0001f4e5  Export")
         export_btn.setFont(create_font(10, QFont.Weight.Bold))
         export_btn.setFixedHeight(32)
         export_btn.setToolTip("Export the asset snapshot table to Excel or CSV")
         export_btn.clicked.connect(self._on_export_clicked)
-        ctrl.addSpacing(6)
-        ctrl.addWidget(export_btn)
+        header_row.addWidget(export_btn)
 
         ctrl.addStretch()
         ctrl.addWidget(del_btn)
