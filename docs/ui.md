@@ -1,4 +1,4 @@
-# Portfolio Management — UI 명세
+# Nexus Trading — UI 명세
 
 PyQt6 데스크톱 앱(`src/ui/`)의 탭 재설계 명세(현재 상위 탭 3개; Strategy 탭은 2026-09-28 제거). 각 항목은 현재 소스의 진단에서 도출되었고, 대응하는 mockup 파일이 있습니다.
 
@@ -91,8 +91,8 @@ minmax(<최소폭>, <비율>fr)
 - 상태(보유/관심/타깃/청산)는 **배지 + 행 좌측 3px 마커**로 표기한다.
 - 셀 배경색을 상태 채널로 쓰지 않는다 — 지브라 줄무늬와 충돌하고 인쇄·색각이상에서 사라진다.
 - 용어는 하나로 통일한다. 현재 헤더는 `Pf`, 버튼 라벨은 `On`/`Tg`/`-`, 배경은 노랑/하늘색으로 세 가지가 같은 상태를 가리킨다.
-- (2026-09-29) 저장값 `On`/`Tg`의 표시 용어는 **Port / Target**. 행의 상태 버튼·행 컨텍스트 메뉴·툴바 상태 필터 버튼이 같은 단어를 쓴다. 툴바 상태 필터는 버튼 하나가 **빈 라벨(필터 없음) → Port → Target → 빈 라벨**로 순환하고, 라벨이 바뀌어도 크기는 고정(다른 필터 버튼과 동일 폭). 빈 상태만 unchecked.
-- (2026-09-29) 행의 상태 표기는 배지가 아니라 **고정 크기(56×18) 버튼**이다. 빈 상태는 테두리만, Port는 연한 채움, Target은 진한 채움. 델리게이트가 그리고 `StockTable`이 클릭을 판정하므로 위젯은 없다. 클릭할 때마다 그 종목의 상태가 **빈 → Port → Target → 빈**으로 순환한다(더블클릭은 두 번 전진, MA 차트를 열지 않음). 컨텍스트 메뉴의 항목도 같은 순환을 한다.
+- (2026-09-29) 저장값 `On`/`Tg`의 표시 용어는 **Held / Target**(2026-10-15에 Port → Held; 저장값은 그대로). 행의 상태 버튼·행 컨텍스트 메뉴·툴바 상태 필터 버튼이 같은 단어를 쓴다. 툴바 상태 필터는 버튼 하나가 **빈 라벨(필터 없음) → Held → Target → 빈 라벨**로 순환하고, 라벨이 바뀌어도 크기는 고정(다른 필터 버튼과 동일 폭). 빈 상태만 unchecked.
+- (2026-09-29) 행의 상태 표기는 배지가 아니라 **고정 크기(56×18) 버튼**이다. 빈 상태는 테두리만, Held는 연한 채움, Target은 진한 채움. 델리게이트가 그리고 `StockTable`이 클릭을 판정하므로 위젯은 없다. 클릭할 때마다 그 종목의 상태가 **빈 → Port → Target → 빈**으로 순환한다(더블클릭은 두 번 전진, MA 차트를 열지 않음). 컨텍스트 메뉴의 항목도 같은 순환을 한다.
 
 ### 1.8 표 상호작용
 
@@ -136,7 +136,7 @@ def update_changed_rows(self, data, changed_rows, highlights=None):
 
 ```
 헤더:   앱명 · 탭 · [Auto update 상태] · [+ Ticker]
-툴바:   [검색] [ALL|KOSPI|KOSDAQ] [ |Port|Target 순환] [저장된 뷰…] ····· [Trend Score] [Refresh]
+툴바:   [검색] [ALL|KOSPI|KOSDAQ] [ |Held|Target 순환] [저장된 뷰…] ····· [Trend Score] [Refresh]
 Market rail:  지수·금리·원자재 카드 (표에서 분리)
 표:     13열, 유동 폭, 가로 스크롤 없음
 푸터:   건수 · 정렬 상태 · 모멘텀 공통 스케일 범례
@@ -222,8 +222,8 @@ Market rail:  지수·금리·원자재 카드 (표에서 분리)
 | 그룹 | span | 컬럼 |
 | --- | --- | --- |
 | Trading | 1 | Company (종목명 + `티커 · 시장` + 상태 배지) |
-| Buy | 4 | Date · Price · Q'ty · Amount |
-| Sell | 7 | Date · Days · Price · Q'ty · Amount · P/L · P/L % |
+| Buy | 4 | Date · Price · Qty · Amount |
+| Sell | 7 | Date · Days · Price · Qty · Amount · P/L · P/L % |
 | Position | 4 | Days · Price · P/L · P/L % |
 | Past | 3 | 5D · 10D · 20D |
 
@@ -274,8 +274,8 @@ Asset에 섞여 있던 누적출금 포함 금액은 별도 `Cumulative Asset` �
 ### 4.1 구조
 
 ```
-헤더:   앱명 · 탭 · [KRW|USD] · USD/KRW 환율 · [Export]
-KPI:    Current Total Asset · Weekly P/L · Cumulative P/L · vs KOSPI · 기록 주차
+헤더:   앱명 · 탭 · [KRW|USD] · USD/KRW 환율 ····· [Graph] [Export]
+KPI:    Current Total Assets · Weekly P/L · Cumulative P/L · vs KOSPI · 기록 주차
 차트:   주간 추이 (자산 vs KOSPI, 첫 주 = 100 재계산, 초과수익 음영) — 상시 노출
 입력:   이번 주 기록 [W38 · 2026-09-18] [금액(자동 채움)] [기록 저장]
 표:     10열
@@ -405,14 +405,14 @@ MA Cross는 **비활성 탭 + `준비중` 배지**로 명시한다. 회색 안�
 - **범례 제거 → 우측 끝 값 라벨**: 각 선의 오른쪽 끝에 값 배지(종가는 전체 값, MA는 `MA20 1.7M` 압축). 앵커 순서를 유지한 채 최소 간격으로 밀어내 겹침 방지. 마커 없음.
 - **twin axis 제거**: RSI는 독립 패널, ax1의 Div twin 삭제(이격도 패널이 유일한 자리), EqualWeight는 종가 첫 값 기준으로 리베이스해 가격 축에.
 - **이격도 밴드 3겹**: `100±MA_DIV_NEUTRAL_PCT`(`ui/colors.py`, 표와 공유) 위 과열(PROFIT 틴트)/중립/아래 침체(LOSS 틴트), 기준선 100이 패널 중앙에 오도록 y 범위 대칭.
-- **뷰 세그먼트(배타, `QButtonGroup`)**: Short(MA5·10·20) / Long(MA20·50) / Close only / Divergence(이격도 패널 확대) / Equal Weight(열이 있을 때). 항상 하나가 선택됨.
-  **열 때의 기본은 Close only**(2026-09-29 사용자 지시, `stock_ma._DEFAULT_VIEW`; 그 전에는 Short). 이동평균은 세그먼트를 눌러야 나타난다.
+- **계열 토글(Series, 독립·다중 선택)**: Close / MA5 / MA10 / MA20 / MA50 / Divergence / Equal Weight(열이 있을 때)를 각각 켜고 끔(2026-10-15 사용자 지시, `stock_ma._SERIES`; 그 전에는 Short/Long/Close only/Divergence/Equal Weight 배타 세그먼트). Divergence는 이격도 패널 표시 토글을 겸하며 별도 패널 버튼은 없앰. 가격선이 하나도 선택되지 않으면 가격 패널을 숨기고, 이격도가 그 자리를 대신하면 확대(비율 3).
+  **열 때의 기본은 Close + Divergence**(`stock_ma._DEFAULT_SERIES`; 2026-09-29 지시의 "이동평균 숨김" 유지). 이동평균은 토글을 눌러야 나타난다.
 - **기간 버튼**: 1M / 3M / 6M / 1Y / 3Y / All. 휠 줌·드래그 팬·스크롤바는 미세 조정용으로 유지. 보이는 구간에 맞춰 각 패널 Y 자동 맞춤.
-- **패널 토글(독립)**: Volume / Divergence / RSI. 표시 패널만 다시 그리드(`_apply_layout`).
-- **십자선 + 고정 리드아웃**: 모든 패널을 관통하는 수직선, 헤더 아래 고정 행에 날짜·종가·표시 중인 MA·거래량·Div·RSI를 동시에 표시. 커서가 밖이면 최신 봉.
+- **패널 토글(독립)**: Volume / RSI (이격도는 위 계열 토글의 Divergence). 표시 패널만 다시 그리드(`_apply_layout`).
+- **십자선 + 차트 위 값 표시**: 모든 패널을 관통하는 수직선. 헤더 아래 고정 리드아웃 행(날짜·종가·MA·거래량·Div·RSI)과 "Crosshair spans every panel" 안내는 2026-10-15 사용자 지시로 삭제하고, 날짜는 맨 아래 표시 패널의 x축 위 배지(`_update_date_badge`)로 옮김. 커서 위치의 봉에는 표시 중인 모든 계열(가격선·거래량·Div·RSI)에 점 마커와 값 배지를 함께 그림(2026-10-15 사용자 지시, `_update_hover`; 패널별로 겹치지 않게 밀어내고 오른쪽 20% 구간에서는 십자선 왼쪽으로 뒤집음). 계열 선 자체에는 여전히 마커 없음.
 - **헤더**: 종목명 · 코드/시장 · 마지막 가격 · 전일 대비(색은 PROFIT/LOSS) · 기준일. 차트 제목은 헤더로 대체.
 - **글자**: 눈금·축 라벨 최소 9pt(`FONT_SMALL`).
-- 단순 차트(채권 bp·VIX·WTI)는 가격 패널만 + 기간 버튼(채권은 Y-Axis ± 유지).
+- 단순 차트(채권 bp·VIX·WTI)는 가격 패널만 + 기간 버튼(채권은 Zoom Y ± 유지).
 
 ## 6. Qt 적용 — 목업과 실제 앱이 달라 보이는 이유
 

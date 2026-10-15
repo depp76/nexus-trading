@@ -27,7 +27,7 @@ class TotalAssetsGraphDialog(QDialog):
     def __init__(self, dates, kospi_returns, asset_returns, usd_asset_returns, totals, usd_totals, parent=None):
         super().__init__(parent)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint | Qt.WindowType.WindowMinimizeButtonHint)
-        self.setWindowTitle("Total Assets Cumulative Returns")
+        self.setWindowTitle("Total Assets — Cumulative Return")
         self.resize(900, 600)
         self.showMaximized()
 

@@ -19,10 +19,10 @@ LAST = 5              # sessions of the final leg (the "week")
 def score_book(volume_thin: float = 1e3):
     """Six names on one calendar (all liquid but THIN):
       UP     +0.4%/day throughout                -> gate passes, rising into the week
-      PULL   +0.4%/day then -1%/day for 5 days   -> gate passes, pulled back (low R3/R10)
+      PULL   +0.4%/day then -1%/day for 5 days   -> gate passes, pulled back (low R3)
       SPIKE  +0.4%/day then +6%/day for 5 days   -> overheated (top MA20Div), gate fails
       DOWN   -0.3%/day throughout                -> MA50Div < 0 and Range52 ~ 0, gate fails
-      BOUNCE -0.3%/day then +2%/day for 5 days   -> Range52 low, strongest R3: the weakest total
+      BOUNCE -0.3%/day then +2%/day for 5 days   -> Range52 low, strongest R3: one of the two weakest totals
       THIN   like UP with negligible volume      -> illiquid, never scored
     """
     dates = business_days(date(2025, 1, 2), N_DAYS)
@@ -101,13 +101,12 @@ class TestComputeScores(unittest.TestCase):
 
     def test_scores_compose_and_rank_within_gate(self):
         sb, t = self.sb, self.t
-        p = self.p
         for tk, j in self.j.items():
             if not sb.liquid[t, j]:
                 continue
             self.assertAlmostEqual(sb.trend_score[t, j], sb.pct["ma50_div"][t, j] + sb.pct["range52"][t, j])
             self.assertAlmostEqual(sb.timing_score[t, j],
-                                   -sb.pct["r3"][t, j] - p.score_r_mid_weight * sb.pct["r10"][t, j])
+                                   -sb.pct["r3"][t, j])
             self.assertAlmostEqual(sb.total[t, j], sb.trend_score[t, j] + sb.timing_score[t, j])
         gated = sb.gate[t]
         self.assertTrue(np.isnan(sb.total_rank[t, ~gated]).all())
@@ -116,14 +115,32 @@ class TestComputeScores(unittest.TestCase):
         self.assertEqual(list(np.argsort(ranks)), list(np.argsort(totals)))
         self.assertAlmostEqual(ranks.max(), 1.0)
 
+    def test_r10_does_not_enter_the_score(self):
+        # Spec v06 (9-15): two books that differ only in the close 10 sessions back (R10 changes, R3, MA50Div,
+        # MA20Div, Range52 stay put) score identically; no R10 knob is left on StrategyParams.
+        self.assertFalse(any("r_mid" in f or "r10" in f for f in StrategyParams.__dataclass_fields__))
+        b2 = PriceBook(dates=list(self.book.dates), tickers=list(self.book.tickers), open=self.book.open.copy(),
+                       high=self.book.high.copy(), low=self.book.low.copy(), close=self.book.close.copy(),
+                       volume=self.book.volume.copy(), markets=dict(self.book.markets), names=dict(self.book.names))
+        t, j = self.t, self.j["UP"]
+        for arr in (b2.close, b2.high, b2.low, b2.open):
+            arr[t - 10, j] *= 0.97            # only R10 (close[t-10]) sees this; MA/range windows move by < 0.1%
+        sb2 = compute_scores(b2, self.p)
+        self.assertNotAlmostEqual(sb2.r10[t, j], self.sb.r10[t, j])
+        np.testing.assert_array_equal(sb2.r3[t], self.sb.r3[t])
+        # the pct of R10 may move, but nothing the score or the gate reads does
+        np.testing.assert_allclose(sb2.timing_score[t], -sb2.pct["r3"][t], equal_nan=True)
+        np.testing.assert_array_equal(sb2.timing_score[t], self.sb.timing_score[t])
+
     def test_pullback_scores_better_timing_than_the_riser(self):
         sb, t, j = self.sb, self.t, self.j
         self.assertGreater(sb.timing_score[t, j["PULL"]], sb.timing_score[t, j["UP"]])
         self.assertLess(sb.r3[t, j["PULL"]], 0.0)
         self.assertGreater(sb.r3[t, j["UP"]], 0.0)
-        # The dead-cat bounce carries the weakest total of the universe.
+        # The dead-cat bounce is one of the two weakest totals (with the plain downtrend; since v06 the R10 term
+        # no longer pushes it below DOWN).
         live = [k for k in j if sb.liquid[t, j[k]]]
-        self.assertEqual(min(live, key=lambda k: sb.total[t, j[k]]), "BOUNCE")
+        self.assertEqual(set(sorted(live, key=lambda k: sb.total[t, j[k]])[:2]), {"BOUNCE", "DOWN"})
 
     def test_options_raw_values_and_high52_prox(self):
         p_raw = StrategyParams(score_vol_normalize=False, score_range_mode="high52_prox")

@@ -15,6 +15,7 @@ amount is net quantity x that day's close from the same Naver page.
 from __future__ import annotations
 
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -29,10 +30,76 @@ from data.listing import _fetch_kr_listing_fdr_fallback
 from data.flows import get_investor_flows
 from data.rates import get_cd91_series
 from strategy.trend_following.config import (
-    StrategyParams, BM_TR_TICKER, BM_PRICE_FALLBACK_TICKER,
+    StrategyParams, BM_TR_TICKER, BM_PRICE_FALLBACK_TICKER, DEV_END,
 )
 
 logger = logging.getLogger(__name__)
+
+
+class HoldoutGuardError(ValueError):
+    """A date after the development window end (config.DEV_END) was requested
+    or found without the explicit `allow_holdout` flag."""
+
+
+def check_dev_window(end, allow_holdout: bool = False, what: str = "end date") -> None:
+    """Raise HoldoutGuardError when `end` lies after DEV_END and the holdout
+    flag is off. Only the offending date is named, never any data."""
+    if end is None or allow_holdout:
+        return
+    if _to_date(end) > DEV_END:
+        raise HoldoutGuardError(
+            f"{what} {_to_date(end)} is after the development window end {DEV_END}; "
+            "the holdout is blocked unless allow_holdout=True is passed explicitly")
+
+# Spec 2-0 limits the universe to Korean *stocks*. The Naver / FDR listing rows carry only
+# Code / Name / Marcap, so ETFs and ETNs are told apart by name: the issuer brands below
+# (always followed by a space) and the "ETN" token. Infrastructure funds / REITs (e.g.
+# 맥쿼리인프라) are listed like stocks and are kept.
+ETF_BRANDS = (
+    "KODEX", "TIGER", "KBSTAR", "KOSEF", "ARIRANG", "HANARO", "SOL", "ACE", "RISE", "PLUS",
+    "TIME", "TIMEFOLIO", "KoAct", "KIWOOM", "WON", "UNICORN", "1Q", "TREX", "FOCUS", "MASTER",
+    "마이티", "히어로즈", "파워", "에셋플러스",
+)
+_ETF_NAME_RE = re.compile(r"^(?:%s)(?:\s|$)|(?<![A-Za-z])ETN(?![A-Za-z])" % "|".join(map(re.escape, ETF_BRANDS)),
+                          re.IGNORECASE)
+# Extra listing rows requested so that dropping ETFs still leaves `universe_size` stocks.
+LISTING_POOL_FACTOR = 2
+
+
+def is_etf_name(name: str) -> bool:
+    """True when a listing name is an ETF / ETN (issuer brand prefix or an ETN token)."""
+    return bool(_ETF_NAME_RE.search(str(name or "").strip()))
+
+
+def select_stock_universe(listing: list[dict], size: int) -> tuple[list[dict], list[dict]]:
+    """(top `size` non-ETF rows in listing order, the ETF/ETN rows that ranked above the cut)."""
+    kept: list[dict] = []
+    excluded: list[dict] = []
+    for r in listing:
+        if is_etf_name(r.get("Name", "")):
+            if len(kept) < size:
+                excluded.append(r)
+        elif len(kept) < size:
+            kept.append(r)
+    return kept, excluded
+
+
+def universe_impact(stocks: "PriceBook", start_idx: int, ended_min_missing: int = 10) -> dict:
+    """Measurable size of the survivorship / look-ahead exposure of the universe (checklist B1):
+    names whose data ends inside the evaluation window (last bar followed by at least
+    `ended_min_missing` empty sessions) and names whose first bar lies after the evaluation start."""
+    ended, new = [], []
+    T = stocks.T
+    for j, tk in enumerate(stocks.tickers):
+        idx = np.flatnonzero(np.isfinite(stocks.close[:, j]))
+        if idx.size == 0:
+            continue
+        first, last = int(idx[0]), int(idx[-1])
+        if last >= start_idx and T - 1 - last >= ended_min_missing:
+            ended.append(tk)
+        if first > start_idx:
+            new.append(tk)
+    return {"ended_in_window": ended, "listed_after_start": new}
 
 # Calendar days of history loaded before the evaluation start so the widest
 # windows (252-session 52-week high, BM3's MA200) are warm on day one.
@@ -165,11 +232,17 @@ def build_dataset(calendar: list[date], index_close: np.ndarray, stock_frames: d
                   bm_frame: pl.DataFrame | None = None, bm_ticker: str = BM_TR_TICKER,
                   bm_is_total_return: bool = True, flow_frames: dict[str, pl.DataFrame] | None = None,
                   rf_frame: pl.DataFrame | None = None, rf_fallback: float = 0.03,
-                  rf_source: str = "", info: dict | None = None) -> Dataset:
-    """Assemble a Dataset from already-fetched frames (no network)."""
+                  rf_source: str = "", info: dict | None = None, cutoff: date | None = None) -> Dataset:
+    """Assemble a Dataset from already-fetched frames (no network). `cutoff`
+    drops every calendar row after that date (rows of the frames beyond the
+    calendar are ignored by the reindex)."""
     calendar = [_to_date(d) for d in calendar]
-    stocks = PriceBook.from_frames(stock_frames, calendar, markets, names)
     index_close = np.asarray(index_close, dtype=float)
+    if cutoff is not None:
+        keep = [i for i, d in enumerate(calendar) if d <= cutoff]
+        calendar = [calendar[i] for i in keep]
+        index_close = index_close[keep]
+    stocks = PriceBook.from_frames(stock_frames, calendar, markets, names)
 
     bm = None
     if bm_frame is not None and not bm_frame.is_empty():
@@ -189,9 +262,10 @@ def build_dataset(calendar: list[date], index_close: np.ndarray, stock_frames: d
             # Amount proxy: net quantity x the same page's close (spec 2-3 normalises
             # by trading value, so both sides are in KRW).
             flow_fi[:, j] = (cols["Foreigner"] + cols["Institution"]) * px
-            # With the Naver frgn source "Retail" is -(Foreigner + Institution)
-            # (no retail column there), so flow_retail == -flow_fi and carries
-            # no independent information; a four-party source would change that.
+            # Since NEX-23 (Naver mobile trend API) "Retail" is the API's own
+            # individual net purchase, not -(Foreigner + Institution): other
+            # corporations/the state make the three not sum to zero. Snapshots
+            # built before that (<= dev_2021_2024_nex21) had flow_retail == -flow_fi.
             flow_retail[:, j] = cols["Retail"] * px
 
     if rf_frame is not None and not rf_frame.is_empty() and "Rate" in rf_frame.columns:
@@ -218,7 +292,8 @@ def build_dataset(calendar: list[date], index_close: np.ndarray, stock_frames: d
         "bm_is_total_return": bool(bm_is_total_return and bm is not None),
         "rf_source": rf_source,
         "has_flows": flow_fi is not None,
-        "universe": "current KOSPI constituents by market cap (survivorship bias: no point-in-time list)",
+        "universe": "current KOSPI stocks by market cap, ETF/ETN excluded (survivorship bias: no point-in-time list)",
+        **universe_impact(stocks, start_idx),
     }
     meta.update(info or {})
     return Dataset(
@@ -226,6 +301,13 @@ def build_dataset(calendar: list[date], index_close: np.ndarray, stock_frames: d
         rf_annual=rate, rf_period=rf_period, rf_source=rf_source,
         flow_fi=flow_fi, flow_retail=flow_retail, start_idx=start_idx, info=meta,
     )
+
+
+def _cut_frame(df: pl.DataFrame | None, end: date) -> pl.DataFrame | None:
+    """Drop rows dated after `end` (the development-window guard at load time)."""
+    if df is None or df.is_empty() or "Date" not in df.columns:
+        return df
+    return df.filter(pl.col("Date").cast(pl.Date) <= end)
 
 
 def _load_listing(universe_size: int) -> list[dict]:
@@ -253,19 +335,32 @@ def _check_stop(should_stop, futures=None) -> None:
 
 def load_dataset(start, end=None, universe_size: int = 200, include_flows: bool = False,
                  params: StrategyParams | None = None, progress=None, max_workers: int = 8,
-                 min_rows: int = 60, should_stop=None) -> Dataset:
+                 min_rows: int = 60, should_stop=None, allow_holdout: bool = False,
+                 tickers: list[str] | None = None, ticker_names: dict[str, str] | None = None,
+                 fixed_source: str = "", excluded_etf: list[dict] | None = None) -> Dataset:
     """Network path: KOSPI calendar + top-N KOSPI names + optional flows + BM
     ETF + CD91, warmed up WARMUP_CALENDAR_DAYS before `start`. `should_stop`
-    (no-arg callable) is polled between fetches; True raises ResearchCancelled."""
+    (no-arg callable) is polled between fetches; True raises ResearchCancelled.
+
+    Development-window guard: `end` defaults to DEV_END (not today) and a later
+    one raises HoldoutGuardError unless `allow_holdout`. Every fetched frame is
+    cut at `end` right after the fetch, so rows after it never reach the Dataset.
+
+    Universe: ETFs / ETNs are dropped from the listing (spec 2-0, stocks only) and the top
+    `universe_size` stocks are kept. `tickers` pins the list instead (no listing call, no ETF
+    filter -- the list is taken as given; `ticker_names` / `excluded_etf` / `fixed_source` are the
+    provenance of the manifest it came from) so a snapshot can be rebuilt for the same names."""
     p = params or StrategyParams()
     start = _to_date(start)
-    end = _to_date(end) if end else date.today()
+    check_dev_window(start, allow_holdout, "start date")
+    check_dev_window(end, allow_holdout, "end date")
+    end = _to_date(end) if end else (date.today() if allow_holdout else DEV_END)
     warm_start = start - timedelta(days=WARMUP_CALENDAR_DAYS)
     ws = warm_start.isoformat()
 
     _check_stop(should_stop)
     _say(progress, "Loading KOSPI index history...")
-    idx_df = get_historical_data("KS11", ws)
+    idx_df = _cut_frame(get_historical_data("KS11", ws), end)
     if idx_df is None or idx_df.is_empty():
         raise RuntimeError("KOSPI index history unavailable (data.history returned nothing)")
     idx_dates = [_to_date(d) for d in idx_df.get_column("Date").to_list()]
@@ -274,12 +369,22 @@ def load_dataset(start, end=None, universe_size: int = 200, include_flows: bool 
         raise RuntimeError(f"No KOSPI trading days between {warm_start} and {end}")
     index_close = align_frame(idx_df, calendar, ["Close"])["Close"]
 
-    _say(progress, f"Loading KOSPI top {universe_size} listing...")
-    listing = _load_listing(universe_size)
-    if not listing:
-        raise RuntimeError("KOSPI listing unavailable (Naver and FDR both failed)")
-    codes = [str(r["Code"]).zfill(6) for r in listing]
-    names = {str(r["Code"]).zfill(6): str(r.get("Name", "")) for r in listing}
+    if tickers:
+        codes = [str(c).zfill(6) for c in tickers]
+        names = {c: str((ticker_names or {}).get(c, "")) for c in codes}
+        excluded = list(excluded_etf or [])
+        _say(progress, f"Using the fixed list of {len(codes)} names from {fixed_source or 'the caller'}")
+    else:
+        _say(progress, f"Loading KOSPI top {universe_size} listing (ETF/ETN excluded)...")
+        listing = _load_listing(universe_size * LISTING_POOL_FACTOR)
+        if not listing:
+            raise RuntimeError("KOSPI listing unavailable (Naver and FDR both failed)")
+        kept, excluded_rows = select_stock_universe(listing, universe_size)
+        excluded = [{"Code": str(r["Code"]).zfill(6), "Name": str(r.get("Name", ""))} for r in excluded_rows]
+        codes = [str(r["Code"]).zfill(6) for r in kept]
+        names = {str(r["Code"]).zfill(6): str(r.get("Name", "")) for r in kept}
+        if len(kept) < universe_size:
+            logger.warning("only %d stocks left after the ETF/ETN filter (requested %d)", len(kept), universe_size)
 
     _check_stop(should_stop)
     _say(progress, f"Loading daily history for {len(codes)} names...")
@@ -292,7 +397,7 @@ def load_dataset(start, end=None, universe_size: int = 200, include_flows: bool 
             c = futures[fut]
             done += 1
             try:
-                df = fut.result()
+                df = _cut_frame(fut.result(), end)
             except Exception:
                 logger.warning("history fetch failed for %s", c, exc_info=True)
                 df = None
@@ -316,7 +421,7 @@ def load_dataset(start, end=None, universe_size: int = 200, include_flows: bool 
                 c = futures[fut]
                 done += 1
                 try:
-                    fdf = fut.result()
+                    fdf = _cut_frame(fut.result(), end)
                 except Exception:
                     logger.warning("investor flow fetch failed for %s", c, exc_info=True)
                     fdf = None
@@ -328,15 +433,15 @@ def load_dataset(start, end=None, universe_size: int = 200, include_flows: bool 
     _check_stop(should_stop)
     _say(progress, "Loading benchmark ETF...")
     bm_ticker, bm_tr = BM_TR_TICKER, True
-    bm_df = get_historical_data(bm_ticker, ws)
+    bm_df = _cut_frame(get_historical_data(bm_ticker, ws), end)
     if bm_df is None or bm_df.is_empty():
         bm_ticker, bm_tr = BM_PRICE_FALLBACK_TICKER, False
-        bm_df = get_historical_data(bm_ticker, ws)
+        bm_df = _cut_frame(get_historical_data(bm_ticker, ws), end)
 
     _say(progress, "Loading CD 91-day rate...")
     rf_source = ""
     try:
-        rf_df = get_cd91_series(ws, end.isoformat())
+        rf_df = _cut_frame(get_cd91_series(ws, end.isoformat()), end)
         if rf_df is not None and not rf_df.is_empty():
             rf_source = "CD91 (data.rates)"
     except Exception:
@@ -347,5 +452,9 @@ def load_dataset(start, end=None, universe_size: int = 200, include_flows: bool 
         calendar, index_close, frames, start, markets, names,
         bm_frame=bm_df, bm_ticker=bm_ticker, bm_is_total_return=bm_tr,
         flow_frames=flow_frames, rf_frame=rf_df, rf_fallback=p.risk_free_fallback, rf_source=rf_source,
-        info={"universe_size_requested": universe_size, "flows_requested": include_flows},
+        info={"universe_size_requested": universe_size, "flows_requested": include_flows,
+              "cutoff": end.isoformat(), "holdout_allowed": bool(allow_holdout),
+              "excluded_etf": excluded, "universe_fixed_from": fixed_source,
+              "universe_built_on": date.today().isoformat()},
+        cutoff=end,
     )

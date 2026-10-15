@@ -146,7 +146,7 @@ class TestMetrics(unittest.TestCase):
         pr = period_returns(nav, dates)
         self.assertIsNotNone(pr["2021-22"])
         self.assertIsNotNone(pr["2023-24"])
-        self.assertIsNone(pr["2025-26"])
+        self.assertEqual(set(pr), {"2021-22", "2023-24"})
 
     def test_summarize_run_has_relative_block(self):
         ds = synthetic_dataset()

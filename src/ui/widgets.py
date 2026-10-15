@@ -218,7 +218,7 @@ class FilterPopup(QFrame):
         ok_btn.setFont(create_font(9, QFont.Weight.Bold))
         ok_btn.setFixedHeight(26)
         ok_btn.clicked.connect(self._apply)
-        clear_btn = QPushButton("Reset")
+        clear_btn = QPushButton("Clear")
         clear_btn.setFont(create_font(9, QFont.Weight.Bold))
         clear_btn.setFixedHeight(26)
         clear_btn.clicked.connect(self._clear)
@@ -636,12 +636,12 @@ class StockTable(QTableWidget):
 
         menu = QMenu(self)
         status = data.get("status", "-")
-        toggle_label = {"On": "Set as Target", "Tg": "Clear Port/Target"}.get(status, "Add to Port")
+        toggle_label = {"On": "Set as Target", "Tg": "Clear Held/Target"}.get(status, "Mark as Held")
         toggle_action = menu.addAction(toggle_label)
         ma_action = menu.addAction("📈 View MA Chart")
         report_action = menu.addAction("🤖 AI Stock Report")
         menu.addSeparator()
-        delete_action = menu.addAction("Delete...")
+        delete_action = menu.addAction("Remove from Universe...")
 
         chosen = menu.exec(event.globalPos())
         if chosen is toggle_action:

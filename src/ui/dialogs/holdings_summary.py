@@ -71,9 +71,9 @@ def build_holdings_summary(parent, closed_data: list, open_data: list):
     v.setContentsMargins(12, 10, 12, 10)
     v.setSpacing(8)
 
-    # 5 columns: Company | Total Buy | Total Amount | P/L | P/L(%)
+    # 5 columns: Company | Buy Amount | Value (sell amount if closed, else current) | P/L | P/L(%)
     tbl = QTableWidget(len(rows), 5)
-    tbl.setHorizontalHeaderLabels(["Name", "Total Buy", "Total Amount", "P/L", "P/L (%)"])
+    tbl.setHorizontalHeaderLabels(["Name", "Buy Amount", "Value", "P/L", "P/L(%)"])
     tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
     tbl.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
     tbl.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)

@@ -134,7 +134,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.search_input = QLineEdit()
         self.search_input.setFont(create_font(10, style_name="Semilight"))
         self.search_input.setPlaceholderText("Search by name or ticker...")
-        self.search_input.setFixedWidth(260)
+        self.search_input.setMinimumWidth(160)
+        self.search_input.setMaximumWidth(260)
         self.search_input.textChanged.connect(self.filter_table)
         add_layout.addWidget(self.search_input)
 
@@ -153,9 +154,9 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             add_layout.addWidget(btn)
             self._market_buttons[m] = btn
 
-        # Status filter: one button cycling blank (no filter) -> Port -> Target
+        # Status filter: one button cycling blank (no filter) -> Held -> Target
         # (user direction 2026-09-29); fixed width so the label change never
-        # resizes it. Blank = unchecked, Port/Target = checked.
+        # resizes it. Blank = unchecked, Held/Target = checked.
         self.tg_filter_btn = self._filter_button(self._STATUS_FILTER_STATES[0][1])
         self.tg_filter_btn.clicked.connect(self._on_status_filter_clicked)
         add_layout.addWidget(self.tg_filter_btn)
@@ -194,11 +195,11 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
         universe_layout.addWidget(self.table)
 
-    _FILTER_BTN_W = 100
+    _FILTER_BTN_W = 80
     # (highlight status to show, button label): "" = no status filter. The
-    # status values are the ones custom_settings.json stores ("On" = Port,
+    # status values are the ones custom_settings.json stores ("On" = Held,
     # "Tg" = Target; docs/ui.md 1.7).
-    _STATUS_FILTER_STATES = (("", ""), ("On", "Port"), ("Tg", "Target"))
+    _STATUS_FILTER_STATES = (("", ""), ("On", "Held"), ("Tg", "Target"))
 
     @classmethod
     def _filter_button(cls, text: str, checked: bool = False) -> QPushButton:

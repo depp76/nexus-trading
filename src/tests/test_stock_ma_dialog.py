@@ -1,7 +1,8 @@
 """tests/test_stock_ma_dialog.py — StockMaDialog after the docs/ui.md "MA Chart
 Redesign" (2026-09-19): PROFIT/LOSS volume, accent MA ramp, right-edge value
-labels instead of a legend, exclusive view segment, period buttons, panel
-toggles and the shared crosshair + readout. Synthetic data only."""
+labels instead of a legend, independent series toggles (2026-10-15), period
+buttons, panel toggles and the shared crosshair with on-chart value and date
+badges. Synthetic data only."""
 import unittest
 from datetime import date, timedelta
 
@@ -41,6 +42,12 @@ def _rgb(hex_color):
     return tuple(round(int(hex_color[i:i + 2], 16) / 255, 2) for i in (1, 3, 5))
 
 
+def _show(d, keys):
+    """Set every series toggle so exactly `keys` are on."""
+    for key in d._series_buttons:
+        d._set_series(key, key in keys)
+
+
 class TestStockChart(unittest.TestCase):
 
     @classmethod
@@ -53,17 +60,16 @@ class TestStockChart(unittest.TestCase):
         d = self.dlg
         self.assertEqual(list(d._panel_axes), ["price", "vol", "div", "rsi"])
         self.assertEqual(d._panel_on, {"vol": True, "div": True, "rsi": False})
-        # Opens in "Close only" (user direction 2026-09-29): no MA line visible.
-        # A fresh dialog, since the shared one is left in whatever view the
-        # other tests chose last.
+        # Opens with Close + Divergence (user direction 2026-09-29): no MA
+        # line visible. A fresh dialog, since the shared one is left in
+        # whatever state the other tests chose last.
         fresh = StockMaDialog("005930", "Samsung", "KOSPI", _df())
-        self.assertEqual(fresh._view, "close")
-        self.assertTrue(fresh._view_buttons["close"].isChecked())
+        self.assertEqual({k for k, b in fresh._series_buttons.items() if b.isChecked()}, {"Close", "Div"})
         self.assertEqual({k: fresh._lines[k].get_visible() for k in MA_RAMP},
                          {"MA5": False, "MA10": False, "MA20": False, "MA50": False})
         self.assertTrue(fresh._lines["Close"].get_visible())
         self.assertEqual(set(fresh._end_labels), {"Close"})
-        d._set_view("short")
+        _show(d, {"Close", "MA5", "MA10", "MA20"})
         self.assertEqual({k: d._lines[k].get_visible() for k in MA_RAMP},
                          {"MA5": True, "MA10": True, "MA20": True, "MA50": False})
         self.assertIsNone(d._panel_axes["price"].get_legend())      # issue #3: no legend
@@ -80,16 +86,45 @@ class TestStockChart(unittest.TestCase):
 
     def test_end_labels_follow_the_visible_lines(self):
         d = self.dlg
-        d._set_view("short")
+        _show(d, {"Close", "MA5", "MA10", "MA20"})
         self.assertEqual(set(d._end_labels), {"Close", "MA5", "MA10", "MA20"})
-        d._set_view("long")
+        _show(d, {"Close", "MA20", "MA50"})
         self.assertEqual(set(d._end_labels), {"Close", "MA20", "MA50"})
-        d._set_view("close")
+        _show(d, {"Close"})
         self.assertEqual(set(d._end_labels), {"Close"})
-        d._set_view("ew")
+        _show(d, {"Close", "EW"})
         self.assertTrue(d._lines["EW"].get_visible())
         self.assertEqual(set(d._end_labels), {"Close", "EW"})
-        d._set_view("short")
+        _show(d, {"MA5", "MA50"})                       # Close can be hidden too
+        self.assertEqual(set(d._end_labels), {"MA5", "MA50"})
+        _show(d, {"Close", "Div"})
+
+    def test_series_toggles_are_independent(self):
+        d = StockMaDialog("005930", "Samsung", "KOSPI", _df())
+        self.assertEqual(list(d._series_buttons), ["Close", "MA5", "MA10", "MA20", "MA50", "Div"])
+        d._series_buttons["MA10"].click()
+        d._series_buttons["MA50"].click()
+        self.assertEqual({k for k in MA_RAMP if d._lines[k].get_visible()}, {"MA10", "MA50"})
+        self.assertTrue(d._lines["Close"].get_visible())
+        d._series_buttons["Div"].click()                # Divergence off -> panel hidden
+        self.assertFalse(d._panel_on["div"])
+        self.assertFalse(d._panel_axes["div"].get_visible())
+        d._set_cursor(100)
+        self.assertNotIn("Div(20)", {k for k, (m, _a) in d._hover.items() if m.get_visible()})
+        d._series_buttons["Div"].click()
+        self.assertTrue(d._panel_axes["div"].get_visible())
+
+    def test_no_price_line_hides_the_price_panel(self):
+        d = StockMaDialog("005930", "Samsung", "KOSPI", _df())
+        _show(d, {"Div"})
+        self.assertEqual(d._visible_panels(), [("vol", 1), ("div", 1)])
+        self.assertFalse(d._panel_axes["price"].get_visible())
+        self.assertEqual(d._end_labels, {})
+        d._set_panel("vol", False)
+        self.assertEqual(d._visible_panels(), [("div", 3)])
+        _show(d, set())                                 # nothing at all: empty price panel
+        self.assertEqual(d._visible_panels(), [("price", 3)])
+        d.render(QPixmap(800, 500))
 
     def test_period_buttons_set_the_window(self):
         d, ax = self.dlg, self.dlg._panel_axes["price"]
@@ -100,10 +135,10 @@ class TestStockChart(unittest.TestCase):
         self.assertGreater(ax.get_xlim()[1] - ax.get_xlim()[0], 399)
         d._apply_period("1Y")
 
-    def test_panel_toggles_and_divergence_view_regrid(self):
+    def test_panel_toggles_regrid(self):
         d = self.dlg
-        d._set_view("div")
-        self.assertEqual(d._visible_panels(), [("price", 2), ("vol", 1), ("div", 2)])
+        _show(d, {"Close", "Div"})
+        self.assertEqual(d._visible_panels(), [("price", 3), ("vol", 1), ("div", 1)])
         d._set_panel("rsi", True)
         self.assertEqual([k for k, _ in d._visible_panels()], ["price", "vol", "div", "rsi"])
         self.assertTrue(d._panel_axes["rsi"].get_visible())
@@ -111,21 +146,30 @@ class TestStockChart(unittest.TestCase):
         self.assertFalse(d._panel_axes["vol"].get_visible())
         d._set_panel("vol", True)
         d._set_panel("rsi", False)
-        d._set_view("short")
 
-    def test_crosshair_and_readout(self):
+    def test_crosshair_and_badges(self):
         d, ax = self.dlg, self.dlg._panel_axes["price"]
         d._on_motion(_Ev(ax, d._x[100]))
         self.assertEqual(d._cursor_idx, 100)
         self.assertTrue(all(c.get_visible() for c in d._crosshairs))
-        self.assertIn("2025-04-11", d._readout_lbl.text())
-        self.assertIn("Close", d._readout_lbl.text())
-        self.assertIn("Div(20)", d._readout_lbl.text())
+        # The date sits on the x axis of the bottom visible panel only.
+        bottom = d._visible_panels()[-1][0]
+        self.assertEqual([k for k, a in d._date_badges.items() if a.get_visible()], [bottom])
+        self.assertEqual(d._date_badges[bottom].get_text(), "2025-04-11")
+        self.assertEqual(d._date_badges[bottom].xy[0], d._x[100])
+        # A dot + value label on every visible series at the pointer's bar.
+        shown = {k for k, (m, a) in d._hover.items() if m.get_visible() and a.get_visible()}
+        expected = {k for k, line in d._lines.items() if line.get_visible() and line.axes.get_visible()}
+        self.assertEqual(shown, expected | {"Vol"})
+        marker, label = d._hover["Close"]
+        self.assertEqual(list(marker.get_xdata()), [d._x[100]])
+        self.assertAlmostEqual(marker.get_ydata()[0], d._lines["Close"].get_ydata()[100])
+        self.assertEqual(label.get_text(), d._fmt_str.format(d._lines["Close"].get_ydata()[100]))
         d._on_leave(None)
         self.assertIsNone(d._cursor_idx)
         self.assertFalse(any(c.get_visible() for c in d._crosshairs))
-        # Readout falls back to the latest bar.
-        self.assertIn("2026-02-04", d._readout_lbl.text())
+        self.assertFalse(any(m.get_visible() or a.get_visible() for m, a in d._hover.values()))
+        self.assertFalse(any(a.get_visible() for a in d._date_badges.values()))
 
     def test_header_and_render(self):
         d = self.dlg
@@ -159,7 +203,7 @@ class TestSimpleAndEmptyCharts(unittest.TestCase):
     def test_bond_yield_is_a_single_panel_without_views(self):
         d = StockMaDialog("KR3YT", "KR 3Y", "Index", _df(volume=False), change_mode="bp")
         self.assertEqual(list(d._panel_axes), ["price"])
-        self.assertEqual(d._view_buttons, {})
+        self.assertEqual(d._series_buttons, {})
         self.assertEqual(list(d._lines), ["Close"])
         self.assertTrue(d._chg_lbl.text().endswith("bp"))
         d._zoom_y_in()

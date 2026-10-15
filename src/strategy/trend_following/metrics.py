@@ -5,8 +5,8 @@ returns, volatility, Sharpe over BM4, MDD, Calmar, turnover, win rate,
 average holding period, total costs, average cash weight.
 
 Relative to a benchmark: excess return, information ratio, beta/alpha from a
-daily regression, monthly up/down capture, and the 2021-22 / 2023-24 /
-2025-26 sub-period scorecard. Everything works on the chained ``nav`` series a
+daily regression, monthly up/down capture, and the 2021-22 / 2023-24
+development sub-period scorecard (the 2025 holdout is not reported here). Everything works on the chained ``nav`` series a
 BacktestResult carries, so the annual-reset runs and the benchmarks compare on
 the same footing.
 """
@@ -16,7 +16,7 @@ from datetime import date
 
 import numpy as np
 
-from strategy.trend_following.backtest import BacktestResult, TRIM_REASON
+from strategy.trend_following.backtest import BacktestResult, TRIM_REASON, WEIGHT_TRIM_REASON
 from strategy.trend_following.config import PERIODS
 
 TRADING_DAYS = 252
@@ -164,7 +164,7 @@ def period_returns(nav: np.ndarray, dates: list[date], periods=PERIODS) -> dict[
 
 
 def trade_stats(res: BacktestResult) -> dict:
-    real = [t for t in res.trades if t.reason != TRIM_REASON]
+    real = [t for t in res.trades if t.reason not in (TRIM_REASON, WEIGHT_TRIM_REASON)]
     n = len(real)
     wins = sum(1 for t in real if t.pnl > 0)
     avg_hold = float(np.mean([t.holding_days for t in real])) if real else 0.0

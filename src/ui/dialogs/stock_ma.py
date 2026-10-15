@@ -17,10 +17,16 @@ docs/ui.md "MA Chart Redesign" mockup (12 issues, phases A-D):
      rebased onto the price axis; divergence bands are three (overheated /
      neutral / depressed) around ui.colors.MA_DIV_NEUTRAL_PCT, the same
      constant the Universe table reads, with 100 centred.
-  D  an exclusive view segment (Short / Long / Close only / Divergence [/
-     Equal Weight]) replaces four look-alike independent toggles with a hidden
-     "nothing pressed" default; period buttons (1M..3Y/All); a crosshair shared
-     by every panel with a fixed readout row instead of hover tooltips.
+  D  period buttons (1M..3Y/All); a crosshair shared by every panel.
+
+2026-10-15 (user direction): the exclusive view segment (Short / Long /
+Close only / Divergence / Equal Weight) became independent, multi-select
+series toggles -- Close, MA5, MA10, MA20, MA50, Divergence [, Equal Weight].
+Divergence shows/hides the divergence panel (the separate panel button is
+gone); with no price line selected the price panel is hidden too. The
+crosshair carries its values on the chart: a dot + value badge on every
+visible series and a date badge on the bottom axis; the readout row above
+the chart was removed.
 
 Layout
 ------
@@ -28,11 +34,10 @@ Layout
 
     +-- splitter ------------------------------------------------------+
     | name  ticker · market  price  chg%   [1M 3M 6M 1Y 3Y All] as-of  |
-    | VIEW [Short Long Close Div]  note    [Volume] [Divergence] [RSI] |
-    | 2026-08-21  ■ Close 1,849,000  ■ MA5 ...  ■ Vol 4.2M  ■ Div(20) |
+    | Series [Close MA5 MA10 MA20 MA50 Divergence EW]     [Volume] [RSI] |
     |   FigureCanvas: price (+MA ramp)      | right panel (optional)   |
     |                 volume                |   investor / futures tbl |
-    |                 divergence            |   "Company Information"  |
+    |                 divergence            |   "Company Info ↗"        |
     |                 rsi                   |                          |
     |   horizontal scrollbar                |                          |
     +------------------------------------------------------------------+
@@ -47,19 +52,20 @@ import numpy as np
 import pandas as pd
 import polars as pl
 import matplotlib.dates as mdates
+from matplotlib.colors import to_rgb
 from matplotlib.figure import Figure
 from matplotlib.collections import PolyCollection
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QScrollBar, QButtonGroup,
-    QTableWidget, QTableWidgetItem, QHeaderView, QSplitter, QWidget, QFrame,
+    QTableWidget, QTableWidgetItem, QHeaderView, QSplitter, QWidget,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont, QFontMetrics
 
 from ui.common import create_font, FONT_TITLE, FONT_BODY, FONT_SMALL, FONT_CAPTION
 from ui.colors import PROFIT, LOSS, MA_RAMP, MA_DIV_NEUTRAL_PCT
-from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_FAINT, LINE, LINE_SOFT, GRP_BG, SURFACE
+from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_FAINT, LINE, SURFACE
 
 logger = logging.getLogger(__name__)
 
@@ -74,18 +80,16 @@ _SEG_H = 26
 
 _PERIODS = [("1M", 1), ("3M", 3), ("6M", 6), ("1Y", 12), ("3Y", 36), ("All", None)]
 _DEFAULT_PERIOD = "1Y"
-# The view the dialog opens in: close price only, no moving averages
-# (user direction 2026-09-29; it was "short" before).
-_DEFAULT_VIEW = "close"
-
-# view key -> (label, MA windows shown, note)
-_VIEWS = {
-    "short": ("Short", ("MA5", "MA10", "MA20"), "MA5 · MA10 · MA20"),
-    "long":  ("Long", ("MA20", "MA50"), "MA20 · MA50"),
-    "close": ("Close only", (), "Moving averages hidden"),
-    "div":   ("Divergence", ("MA5", "MA10", "MA20"), "Divergence panel enlarged"),
-    "ew":    ("Equal Weight", (), "KODEX 200 EW rebased to this price"),
+# Independent series toggles (user direction 2026-10-15), key -> label.
+# Price-panel lines use their _lines key; "Div" is the divergence panel.
+_SERIES = {
+    "Close": "Close", "MA5": "MA5", "MA10": "MA10", "MA20": "MA20", "MA50": "MA50",
+    "Div": "Divergence", "EW": "Equal Weight",
 }
+_PRICE_SERIES = ("Close", "MA5", "MA10", "MA20", "MA50", "EW")
+# What the dialog opens with: close price plus the divergence panel, no moving
+# averages (user direction 2026-09-29: close only on the price panel).
+_DEFAULT_SERIES = frozenset({"Close", "Div"})
 
 
 def _make_bars(x, y_bottom, y_top, w):
@@ -158,9 +162,11 @@ class StockMaDialog(QDialog):
         self._lines = {}          # "Close" | "MA5" | ... | "EW" -> Line2D
         self._end_labels = {}     # same keys -> Annotation
         self._crosshairs = []     # one axvline per panel
+        self._hover = {}          # series key -> (marker Line2D, Annotation) at the cursor
+        self._date_badges = {}    # panel key -> Annotation with the cursor date
         self._panel_axes = {}     # "price" | "vol" | "div" | "rsi" -> Axes
         self._panel_on = {"vol": False, "div": False, "rsi": False}
-        self._view = _DEFAULT_VIEW
+        self._series_on = {k: (k in _DEFAULT_SERIES) for k in _PRICE_SERIES}
         self._x = None
         self._pan_start = None
         self._cursor_idx = None
@@ -187,7 +193,6 @@ class StockMaDialog(QDialog):
 
         chart_v.addLayout(self._build_header_row())
         chart_v.addLayout(self._build_view_row())
-        chart_v.addWidget(self._build_readout_row())
 
         self._fig = Figure(figsize=(9.5, 7.5))
         self._canvas = FigureCanvas(self._fig)
@@ -255,62 +260,38 @@ class StockMaDialog(QDialog):
         return row
 
     def _build_view_row(self) -> QHBoxLayout:
-        """VIEW segment (exclusive) + note | panel toggles (independent)."""
+        """SHOW series toggles (independent, multi-select) | panel toggles."""
         row = QHBoxLayout()
         row.setSpacing(6)
-        cap = QLabel("VIEW")
-        cap.setFont(create_font(FONT_CAPTION, QFont.Weight.Bold))
-        cap.setStyleSheet(f"color:{TEXT_FAINT};")
-        row.addWidget(cap)
-
-        self._view_group = QButtonGroup(self)
-        self._view_group.setExclusive(True)
-        self._view_buttons = {}
-        keys = [] if self._is_simple_chart else ["short", "long", "close", "div"]
+        self._series_buttons = {}
+        keys = [] if self._is_simple_chart else ["Close", *MA_RAMP.keys(), "Div"]
         if self._has_data and "EqualWeight" in self._df.columns and not self._is_simple_chart:
-            keys.append("ew")
+            keys.append("EW")
+        if keys:
+            cap = QLabel("Series")
+            cap.setFont(create_font(FONT_CAPTION, QFont.Weight.Bold))
+            cap.setStyleSheet(f"color:{TEXT_FAINT};")
+            row.addWidget(cap)
         for key in keys:
-            btn = _segment_button(_VIEWS[key][0], self._view_group, checked=(key == _DEFAULT_VIEW))
-            btn.clicked.connect(lambda _c, k=key: self._set_view(k))
+            btn = _segment_button(_SERIES[key], checked=(key in _DEFAULT_SERIES))
+            btn.clicked.connect(lambda checked, k=key: self._set_series(k, checked))
             row.addWidget(btn)
-            self._view_buttons[key] = btn
-
-        self._view_note = QLabel(_VIEWS[_DEFAULT_VIEW][2] if keys else "")
-        self._view_note.setFont(create_font(FONT_SMALL, style_name="Semilight"))
-        self._view_note.setStyleSheet(f"color:{TEXT_MUTED};")
-        row.addSpacing(4)
-        row.addWidget(self._view_note)
+            self._series_buttons[key] = btn
         row.addStretch()
 
+        # The divergence panel has no button here: the Divergence series
+        # toggle drives it.
         self._panel_buttons = {}
-        for key, label in (("vol", "Volume"), ("div", "Divergence"), ("rsi", "RSI")):
+        for key, label in (("vol", "Volume"), ("rsi", "RSI")):
             btn = _segment_button(label)
             btn.clicked.connect(lambda checked, k=key: self._set_panel(k, checked))
             row.addWidget(btn)
             self._panel_buttons[key] = btn
         return row
 
-    def _build_readout_row(self) -> QFrame:
-        """Fixed crosshair readout (issue #9): the date plus every visible
-        series' value at the cursor, or the latest bar when the cursor is
-        outside the chart."""
-        frame = QFrame()
-        frame.setStyleSheet(f"QFrame {{ background:{GRP_BG}; border:1px solid {LINE_SOFT}; border-radius:6px; }}")
-        row = QHBoxLayout(frame)
-        row.setContentsMargins(10, 4, 10, 4)
-        self._readout_lbl = QLabel("")
-        self._readout_lbl.setFont(create_font(FONT_SMALL, style_name="Semilight"))
-        self._readout_lbl.setTextFormat(Qt.TextFormat.RichText)
-        row.addWidget(self._readout_lbl, 1)
-        hint = QLabel("Crosshair spans every panel")
-        hint.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
-        hint.setStyleSheet(f"color:{TEXT_FAINT};")
-        row.addWidget(hint)
-        return frame
-
     def _build_right_panel(self, is_stock: bool) -> QWidget:
         """Investor-trend table (KR stocks), futures curve (WTI) and the
-        'Company Information' link button."""
+        'Company Info' link button."""
         panel = QWidget()
         v = QVBoxLayout(panel)
         v.setContentsMargins(0, 0, 0, 0)
@@ -321,11 +302,11 @@ class StockMaDialog(QDialog):
             v.addWidget(self._section_label("Futures Price (Last 8 Months)"))
             v.addWidget(self._build_futures_table(inv))
         elif inv:
-            v.addWidget(self._section_label(f"Supply & Demand Trend (Last {len(inv)} Days)"))
+            v.addWidget(self._section_label(f"Investor Net Buying (Last {len(inv)} Days)"))
             v.addWidget(self._build_investor_table(inv))
 
         if is_stock:
-            fin_btn = QPushButton("Company Information")
+            fin_btn = QPushButton("Company Info ↗")
             fin_btn.setFont(create_font(FONT_BODY, QFont.Weight.Bold))
             fin_btn.setMinimumHeight(40)
             fin_btn.clicked.connect(self._open_company_page)
@@ -402,7 +383,7 @@ class StockMaDialog(QDialog):
 
     def _build_futures_table(self, rows: list) -> QTableWidget:
         right = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        table = self._new_side_table(["Name", "Code", "Return"])
+        table = self._new_side_table(["Name", "Code", "Price"])
         table.setRowCount(len(rows))
         for i, row in enumerate(rows):
             table.setItem(i, 0, self._cell(row['Contract']))
@@ -417,7 +398,7 @@ class StockMaDialog(QDialog):
         headers = ["Date", "Close", "Foreigner", "Institution", "Retail"]
         keys = ["Foreigner", "Institution", "Retail"]
         if has_details:
-            headers.extend(["Inv.Trust", "PrivateEq."])
+            headers.extend(["Inv. Trust", "Private Eq."])
             keys.extend(["InvestmentTrust", "PrivateEquity"])
 
         table = self._new_side_table(headers)
@@ -441,10 +422,10 @@ class StockMaDialog(QDialog):
         webbrowser.open(url)
 
     def _build_y_zoom_row(self) -> QHBoxLayout:
-        """'Y-Axis +/-' buttons (bond yields only; the X range is handled by scroll-zoom)."""
+        """'Zoom Y +/−' buttons (bond yields only; the X range is handled by scroll-zoom)."""
         row = QHBoxLayout()
-        zoom_in_btn = QPushButton("Y-Axis +")
-        zoom_out_btn = QPushButton("Y-Axis -")
+        zoom_in_btn = QPushButton("Zoom Y +")
+        zoom_out_btn = QPushButton("Zoom Y −")
         zoom_in_btn.setFixedSize(70, _SEG_H)
         zoom_out_btn.setFixedSize(70, _SEG_H)
         row.addStretch()
@@ -526,11 +507,12 @@ class StockMaDialog(QDialog):
 
         for key in ("vol", "div", "rsi"):
             available = key in self._panel_axes
-            btn = self._panel_buttons[key]
-            btn.setVisible(available)
-            default_on = available and key != "rsi"
-            btn.setChecked(default_on)
+            default_on = available and (key == "vol" or (key == "div" and "Div" in _DEFAULT_SERIES))
             self._panel_on[key] = default_on
+            btn = self._panel_buttons.get(key) or self._series_buttons.get("Div" if key == "div" else "")
+            if btn is not None:
+                btn.setVisible(available)
+                btn.setChecked(default_on)
 
         for ax in self._panel_axes.values():
             ax.tick_params(axis="both", labelsize=_TICK_PT, colors=TEXT_MUTED, length=3)
@@ -546,9 +528,11 @@ class StockMaDialog(QDialog):
 
         self._install_pan_zoom()
         self._install_crosshair()
-        self._set_view(_DEFAULT_VIEW if not self._is_simple_chart else "close", initial=True)
+        if self._is_simple_chart:
+            self._series_on = {k: (k == "Close") for k in _PRICE_SERIES}
+        self._apply_series_visibility()
+        self._apply_layout()
         self._apply_period(_DEFAULT_PERIOD)
-        self._update_readout(None)
 
     def _plot_price_panel(self) -> None:
         """Close (ink) + MA ramp; Equal Weight rebased onto the same axis."""
@@ -626,19 +610,19 @@ class StockMaDialog(QDialog):
 
     # --------------------------------------------------------- layout / view
     def _visible_panels(self) -> list:
-        order = [("price", 3 if self._view != "div" else 2)]
-        if self._panel_on["vol"] and "vol" in self._panel_axes:
-            order.append(("vol", 1))
-        if self._panel_on["div"] and "div" in self._panel_axes:
-            order.append(("div", 2 if self._view == "div" else 1))
-        if self._panel_on["rsi"] and "rsi" in self._panel_axes:
-            order.append(("rsi", 1))
+        """[(panel, height ratio)]; the price panel drops out when no price
+        line is selected and another panel is on."""
+        others = [k for k in ("vol", "div", "rsi") if self._panel_on[k] and k in self._panel_axes]
+        order = [("price", 3)] if (self._price_series_visible() or not others) else []
+        for key in others:
+            # Divergence is enlarged when it replaces the price panel.
+            order.append((key, 3 if key == "div" and not order else 1))
         return order
 
     def _apply_layout(self) -> None:
         """Re-grid the visible panels (issue #11: the ratio is no longer a
-        fixed 3:1:1 -- panels can be hidden and the Divergence view enlarges
-        that panel)."""
+        fixed 3:1:1 -- panels can be hidden, the price panel too when no
+        price line is selected)."""
         panels = self._visible_panels()
         gs = self._fig.add_gridspec(len(panels), 1, height_ratios=[r for _, r in panels],
                                     hspace=0.08, left=0.075, right=0.90, top=0.97, bottom=0.07)
@@ -655,28 +639,34 @@ class StockMaDialog(QDialog):
 
     def _set_panel(self, key: str, on: bool) -> None:
         self._panel_on[key] = bool(on)
-        self._apply_layout()
-        self._update_readout(self._cursor_idx)
-        self._canvas.draw_idle()
+        self._refresh_after_toggle()
 
-    def _set_view(self, key: str, initial: bool = False) -> None:
-        self._view = key
-        shown = set(_VIEWS[key][1])
+    def _set_series(self, key: str, on: bool) -> None:
+        """Toggle one series independently of the others (user direction
+        2026-10-15): a price-panel line, or "Div" for the divergence panel."""
+        btn = self._series_buttons.get(key)
+        if btn is not None and btn.isChecked() != bool(on):
+            btn.setChecked(bool(on))
+        if key == "Div":
+            self._panel_on["div"] = bool(on)
+        else:
+            self._series_on[key] = bool(on)
+            self._apply_series_visibility()
+        self._refresh_after_toggle()
+
+    def _apply_series_visibility(self) -> None:
         for name, line in self._lines.items():
-            if name in MA_RAMP:
-                line.set_visible(name in shown)
-            elif name == "EW":
-                line.set_visible(key == "ew")
-        if key in self._view_buttons and not self._view_buttons[key].isChecked():
-            self._view_buttons[key].setChecked(True)
-        if self._view_buttons:
-            self._view_note.setText(_VIEWS[key][2])
+            if name in self._series_on:
+                line.set_visible(self._series_on[name])
+
+    def _refresh_after_toggle(self) -> None:
+        if self._x is None:
+            return
         self._apply_layout()
-        if not initial:
-            self._autofit_y()
-            self._place_end_labels()
-            self._update_readout(self._cursor_idx)
-            self._canvas.draw_idle()
+        self._autofit_y()
+        self._place_end_labels()
+        self._update_hover(self._cursor_idx)
+        self._canvas.draw_idle()
 
     # ------------------------------------------------------------ end labels
     def _price_series_visible(self) -> list:
@@ -701,6 +691,8 @@ class StockMaDialog(QDialog):
         idx = int(np.searchsorted(self._x, x_right, side="right") - 1)
         idx = max(0, min(len(self._x) - 1, idx))
         entries = []
+        if not ax.get_visible():
+            return
         for key, line in self._price_series_visible():
             y = line.get_ydata()[idx]
             if y is None or not np.isfinite(y):
@@ -758,8 +750,8 @@ class StockMaDialog(QDialog):
         return i if abs(self._x[i] - xdata) < abs(self._x[i - 1] - xdata) else i - 1
 
     def _set_cursor(self, idx) -> None:
-        """Move the shared crosshair to bar `idx` (None hides it) and refresh
-        the readout row."""
+        """Move the shared crosshair to bar `idx` (None hides it) together
+        with its value and date badges."""
         self._cursor_idx = idx
         for line in self._crosshairs:
             if idx is None:
@@ -767,61 +759,115 @@ class StockMaDialog(QDialog):
             else:
                 line.set_xdata([self._x[idx], self._x[idx]])
                 line.set_visible(True)
-        self._update_readout(idx)
+        self._update_hover(idx)
         self._canvas.draw_idle()
+
+    def _hover_text(self, key: str, v: float) -> str:
+        if key in ("Div(20)", "Div(50)"):
+            return f"{key} {v:.1f}"
+        if key == "RSI":
+            return f"RSI {v:.0f}"
+        if key == "Vol":
+            return f"Vol {_compact(v)}"
+        prefix = "" if key == "Close" else f"{key} "
+        return prefix + self._fmt_str.format(v)
+
+    def _hover_series(self, idx: int) -> list:
+        """[(key, axes, y, color)] for every visible series at bar `idx`."""
+        out = []
+        for key, line in self._lines.items():
+            if not (line.get_visible() and line.axes.get_visible()):
+                continue
+            y = line.get_ydata()[idx]
+            if y is not None and np.isfinite(y):
+                out.append((key, line.axes, float(y), line.get_color()))
+        ax_vol = self._panel_axes.get("vol")
+        vol = self._col("Volume")
+        if ax_vol is not None and ax_vol.get_visible() and vol is not None:
+            v = float(vol[idx])
+            if np.isfinite(v):
+                opens = self._col("Open")
+                up = opens is None or self._col("Close")[idx] >= opens[idx]
+                out.append(("Vol", ax_vol, v, PROFIT if up else LOSS))
+        return out
+
+    def _update_hover(self, idx) -> None:
+        """A dot on every visible series at the cursor bar with its value next
+        to it (user direction 2026-10-15), pushed apart per panel like the end
+        labels; flipped to the left of the crosshair near the right edge."""
+        shown = set()
+        if idx is not None and self._x is not None:
+            x = self._x[idx]
+            xmin, xmax = self._panel_axes["price"].get_xlim()
+            left = x > xmin + (xmax - xmin) * 0.8
+            dpi = self._fig.dpi
+            pitch_px = 1.6 * _TICK_PT * dpi / 72
+            by_ax = {}
+            for key, ax, y, color in self._hover_series(idx):
+                by_ax.setdefault(ax, []).append((ax.transData.transform((x, y))[1], key, y, color))
+            for ax, entries in by_ax.items():
+                entries.sort(key=lambda t: t[0])
+                placed = []
+                for disp_y, key, y, color in entries:
+                    if placed and disp_y - placed[-1][0] < pitch_px:
+                        disp_y = placed[-1][0] + pitch_px
+                    placed.append((disp_y, key, y, color))
+                for disp_y, key, y, color in placed:
+                    marker, ann = self._hover_artist(key, ax)
+                    marker.set_data([x], [y])
+                    marker.set_markerfacecolor(color)
+                    anchor_px = ax.transData.transform((x, y))[1]
+                    ann.xy = (x, y)
+                    ann.set_position((-8 if left else 8, (disp_y - anchor_px) * 72 / dpi))
+                    ann.set_horizontalalignment("right" if left else "left")
+                    ann.set_text(self._hover_text(key, y))
+                    r, g, b = to_rgb(color)
+                    ann.set_color(TEXT if 0.299 * r + 0.587 * g + 0.114 * b > 0.6 else SURFACE)
+                    ann.get_bbox_patch().set_facecolor(color)
+                    marker.set_visible(True)
+                    ann.set_visible(True)
+                    shown.add(key)
+        for key, (marker, ann) in self._hover.items():
+            if key not in shown:
+                marker.set_visible(False)
+                ann.set_visible(False)
+        self._update_date_badge(idx)
+
+    def _update_date_badge(self, idx) -> None:
+        """The cursor bar's date on the x axis of the bottom visible panel
+        (user direction 2026-10-15, replacing the readout row's date)."""
+        bottom = None
+        if idx is not None and self._x is not None:
+            visible = [k for k, _r in self._visible_panels()]
+            bottom = visible[-1] if visible else None
+        for key, ann in self._date_badges.items():
+            ann.set_visible(key == bottom)
+        if bottom is None:
+            return
+        if bottom not in self._date_badges:
+            self._date_badges[bottom] = self._panel_axes[bottom].annotate(
+                "", xy=(0, 0), xycoords=("data", "axes fraction"), xytext=(0, -3), textcoords="offset points",
+                fontsize=_TICK_PT, color=SURFACE, ha="center", va="top", annotation_clip=False, zorder=10,
+                bbox=dict(boxstyle="round,pad=0.3", facecolor=ACCENT, edgecolor="none"))
+        ann = self._date_badges[bottom]
+        ann.xy = (self._x[idx], 0)
+        ann.set_text(pd.to_datetime(self._dates[idx]).strftime("%Y-%m-%d"))
+        ann.set_visible(True)
+
+    def _hover_artist(self, key: str, ax) -> tuple:
+        """The (marker, label) pair for `key`, created on first use."""
+        if key not in self._hover:
+            marker, = ax.plot([np.nan], [np.nan], marker="o", markersize=6, linestyle="none",
+                              markeredgecolor=SURFACE, markeredgewidth=1.2, zorder=8, visible=False)
+            ann = ax.annotate("", xy=(0, 0), xytext=(8, 0), textcoords="offset points",
+                              fontsize=_TICK_PT, va="center", annotation_clip=False, zorder=9, visible=False,
+                              bbox=dict(boxstyle="round,pad=0.25", edgecolor="none", alpha=0.92))
+            self._hover[key] = (marker, ann)
+        return self._hover[key]
 
     def _on_leave(self, _event) -> None:
         if self._cursor_idx is not None:
             self._set_cursor(None)
-
-    def _update_readout(self, idx) -> None:
-        """Readout chips for bar `idx` (latest bar when None)."""
-        if self._x is None:
-            self._readout_lbl.setText("")
-            return
-        i = len(self._x) - 1 if idx is None else idx
-        date_str = pd.to_datetime(self._dates[i]).strftime("%Y-%m-%d")
-
-        def chip(color, key, value):
-            return (f'<span style="color:{color};">&#9644;</span>&nbsp;'
-                    f'<span style="color:{TEXT_MUTED};">{key}</span>&nbsp;'
-                    f'<b style="color:{TEXT};">{value}</b>')
-
-        def val(col):
-            arr = self._col(col)
-            if arr is None or i >= len(arr):
-                return None
-            v = arr[i]
-            return None if v is None or (isinstance(v, float) and np.isnan(v)) else float(v)
-
-        parts = [f'<span style="color:{TEXT_MUTED};">{date_str}</span>']
-        close = val("Close")
-        if close is not None:
-            parts.append(chip(TEXT, "Close", self._fmt_price(close)))
-        for key, line in self._price_series_visible():
-            if key in ("Close", "EW"):
-                continue
-            v = val(key)
-            if v is not None:
-                parts.append(chip(MA_RAMP[key], key, self._fmt_str.format(v)))
-        if "EW" in self._lines and self._lines["EW"].get_visible():
-            v = self._lines["EW"].get_ydata()[i]
-            if v is not None and np.isfinite(v):
-                parts.append(chip(TEXT_MUTED, "EW", self._fmt_str.format(float(v))))
-        if self._panel_on.get("vol"):
-            v = val("Volume")
-            if v is not None:
-                parts.append(chip(PROFIT, "Vol", _compact(v)))
-        if self._panel_on.get("div"):
-            for col, key, color in (("MA20_Div", "Div(20)", MA_RAMP["MA5"]), ("MA50_Div", "Div(50)", MA_RAMP["MA20"])):
-                v = val(col)
-                if v is not None:
-                    parts.append(chip(color, key, f"{v:.1f}"))
-        if self._panel_on.get("rsi"):
-            v = val("RSI14")
-            if v is not None:
-                parts.append(chip(ACCENT, "RSI", f"{v:.0f}"))
-        self._readout_lbl.setText("&nbsp;&nbsp;&nbsp;".join(parts))
 
     # ----------------------------------------------------------- pan / zoom
     def _install_pan_zoom(self) -> None:
@@ -873,7 +919,10 @@ class StockMaDialog(QDialog):
             return
 
         def span(arrays, pad):
-            vals = np.concatenate([np.asarray(a, dtype=float)[mask] for a in arrays if a is not None])
+            arrays = [np.asarray(a, dtype=float)[mask] for a in arrays if a is not None]
+            if not arrays:
+                return None
+            vals = np.concatenate(arrays)
             vals = vals[np.isfinite(vals)]
             if len(vals) == 0:
                 return None

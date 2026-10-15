@@ -31,7 +31,7 @@ class IndexMaDialog(QDialog):
         results: dict {label: (DataFrame | None, error_str)}
         """
         super().__init__(parent)
-        self.setWindowTitle("Major Index - 20 & 50-Day Moving Average")
+        self.setWindowTitle("Major Indices — Moving Averages")
         self.resize(1100, 620)
 
         layout = QVBoxLayout(self)

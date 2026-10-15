@@ -1,4 +1,4 @@
-"""gemini_helper.py — Gemini API helpers for Portfolio Management.
+"""gemini_helper.py — Gemini API helpers for Nexus Trading.
 
 Provides one feature:
   stock_report_summary(item) → str

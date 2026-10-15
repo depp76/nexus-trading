@@ -6,7 +6,6 @@ import time
 import ast
 from datetime import datetime, date as _date
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from bs4 import BeautifulSoup
 import pandas as pd
 import polars as pl
 import logging
@@ -403,61 +402,72 @@ def _fetch_index_investor_trend(market: str, days: int = 60) -> list:
     return results
 
 
-def _fetch_investor_trend_naver(ticker: str, days: int = 60) -> list:
-    """Fallback: scrape net-purchase data from Naver Finance frgn.naver page."""
-    if isinstance(ticker, str) and ticker.isdigit():
-        ticker = ticker.zfill(6)
-    elif isinstance(ticker, int):
-        ticker = f"{ticker:06d}"
+_TREND_PAGE_SIZE = 60   # the endpoint answers HTTP 400 above ~60-70 rows per request
 
-    url_base = f"https://finance.naver.com/item/frgn.naver?code={ticker}&page="
-    num_pages = (days // 20) + 2
 
-    def _fetch_page(page):
-        page_rows = []
-        try:
-            res = _NAVER_SESSION.get(url_base + str(page), timeout=5)
-            res.encoding = "euc-kr"
-            soup = BeautifulSoup(res.text, "html.parser")
-            tables = soup.select("table.type2")
-            if len(tables) < 2:
-                return page_rows
-            for tr in tables[1].select("tr"):
-                tds = tr.select("td")
-                if len(tds) >= 9:
-                    date = tds[0].text.strip()
-                    if not date:
-                        continue
-                    try:
-                        vol = int(tds[4].text.strip().replace(",", ""))
-                        if vol == 0:
-                            continue
-                        inst = int(tds[5].text.strip().replace(",", ""))
-                        foreign = int(tds[6].text.strip().replace(",", ""))
-                        close_price = int(tds[1].text.strip().replace(",", ""))
-                        retail = -(inst + foreign)
-                        page_rows.append({
-                            "Date": date,
-                            "Close": close_price,
-                            "Foreigner": foreign,
-                            "Institution": inst,
-                            "Retail": retail,
-                            "InvestmentTrust": 0,
-                            "PrivateEquity": 0,
-                        })
-                    except ValueError:
-                        pass
-        except Exception:
-            logger.warning("[_fetch_investor_trend_naver] Error for ticker=%s page=%d", ticker, page, exc_info=True)
-        return page_rows
+def _to_int(text) -> int:
+    """'+1,016,744' / '-5,943,474' / '' -> int (empty means 0)."""
+    t = str(text or "").replace(",", "").replace("+", "").strip()
+    return int(t) if t else 0
 
+
+def _parse_trend_rows(items: list) -> list:
+    """Map Naver mobile ``/api/stock/<code>/trend`` items (newest first) to flow rows.
+    Rows without a trade (volume 0, e.g. suspended days) are dropped. Individuals are the
+    API's own ``individualPureBuyQuant``; the institution figure is the aggregate
+    ``organPureBuyQuant`` (no investment-trust / private-equity split)."""
     rows = []
-    with ThreadPoolExecutor(max_workers=min(num_pages, 8)) as exe:
-        for page_rows in exe.map(_fetch_page, range(1, num_pages + 1)):
-            rows.extend(page_rows)
-            if len(rows) >= days:
-                break
+    for it in items or []:
+        try:
+            biz = str(it["bizdate"])
+            if _to_int(it.get("accumulatedTradingVolume")) == 0:
+                continue
+            rows.append({
+                "Date": f"{biz[:4]}.{biz[4:6]}.{biz[6:8]}",
+                "Close": _to_int(it.get("closePrice")),
+                "Foreigner": _to_int(it.get("foreignerPureBuyQuant")),
+                "Institution": _to_int(it.get("organPureBuyQuant")),
+                "Retail": _to_int(it.get("individualPureBuyQuant")),
+                "InvestmentTrust": 0,
+                "PrivateEquity": 0,
+            })
+        except (KeyError, TypeError, ValueError):
+            continue
+    return rows
 
+
+def _fetch_investor_trend_naver(ticker: str, days: int = 60) -> list:
+    """Daily net purchases (shares) per investor group for one stock, newest first, up to
+    `days` rows. Source: Naver mobile ``/api/stock/<code>/trend``. The legacy frgn.naver
+    page became a script-rendered page without tables (confirmed 2026-10-14), so the old
+    table scrape returned nothing. Paging is by ``bizdate`` (rows strictly before that
+    date); the plain ``page`` parameter is ignored by the server."""
+    if isinstance(ticker, int):
+        ticker = f"{ticker:06d}"
+    elif isinstance(ticker, str) and ticker.isdigit():
+        ticker = ticker.zfill(6)
+
+    url = f"https://m.stock.naver.com/api/stock/{ticker}/trend"
+    rows: list = []
+    bizdate = None
+    while len(rows) < days:
+        params = {"pageSize": _TREND_PAGE_SIZE}
+        if bizdate:
+            params["bizdate"] = bizdate
+        try:
+            res = _NAVER_SESSION.get(url, params=params, timeout=8)
+            res.raise_for_status()
+            items = res.json()
+        except Exception:
+            logger.warning("[_fetch_investor_trend_naver] Error for ticker=%s bizdate=%s", ticker, bizdate, exc_info=True)
+            break
+        if not items:
+            break
+        rows.extend(_parse_trend_rows(items))
+        oldest = str(items[-1].get("bizdate") or "")
+        if len(oldest) != 8 or oldest == bizdate or len(items) < _TREND_PAGE_SIZE:
+            break
+        bizdate = oldest
     return rows[:days]
 
 

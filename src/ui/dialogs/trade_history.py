@@ -32,9 +32,9 @@ class StockTradeHistoryDialog(QDialog):
         # Table
         tbl = QTableWidget()
         if is_open_position:
-            cols = ["Buy Date", "Buy Price", "Buy Q'ty", "Buy Amt", "Status", "Current Price", "Current Q'ty", "Current Amt", "P/L", "P/L(%)"]
+            cols = ["Buy Date", "Buy Price", "Buy Qty", "Buy Amount", "Status", "Current Price", "Current Qty", "Current Amount", "P/L", "P/L(%)"]
         else:
-            cols = ["Buy Date", "Buy Price", "Buy Q'ty", "Buy Amt", "Days", "Sell Date", "Sell Price", "Sell Q'ty", "Sell Amt", "P/L", "P/L(%)"]
+            cols = ["Buy Date", "Buy Price", "Buy Qty", "Buy Amount", "Days", "Sell Date", "Sell Price", "Sell Qty", "Sell Amount", "P/L", "P/L(%)"]
         tbl.setColumnCount(len(cols))
         tbl.setHorizontalHeaderLabels(cols)
         # open: data rows + total row + weight row; closed: data rows + total row
@@ -132,14 +132,14 @@ class StockTradeHistoryDialog(QDialog):
             # Span cols 0-2 for "Total" label
             tbl.setSpan(total_row, 0, 1, 3)
             tbl.setItem(total_row, 0, _bold_label("Total"))
-            # Buy Amt (col 3)
+            # Buy Amount (col 3)
             tbl.setItem(total_row, 3, _bold_ni(total_buy))
             # Status col blank
             tbl.setItem(total_row, 4, QTableWidgetItem(""))
-            # Current Price / Current Q'ty blank
+            # Current Price / Current Qty blank
             tbl.setItem(total_row, 5, QTableWidgetItem(""))
             tbl.setItem(total_row, 6, QTableWidgetItem(""))
-            # Current Amt (col 7)
+            # Current Amount (col 7)
             tbl.setItem(total_row, 7, _bold_ni(total_sell))
             # P/L (col 8)
             pl_tot_it = _bold_ni(total_pl)
@@ -219,7 +219,7 @@ class StockTradeHistoryDialog(QDialog):
             tbl.setItemDelegate(tbl._closed_delegate)
 
         if is_open_position:
-            # Weight row: weight % in col 7 (Current Amt), all other cols blank
+            # Weight row: weight % in col 7 (Current Amount), all other cols blank
             weight_row = total_row + 1
             total_w = sum(rec.get("position_w", 0.0) for rec in matches)
             for c in range(10):

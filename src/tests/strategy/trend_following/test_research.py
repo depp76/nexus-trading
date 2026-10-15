@@ -19,7 +19,7 @@ class TestEventStudy(unittest.TestCase):
         self.assertGreater(by["all breakouts"]["n"], 100)
         self.assertEqual(by["V: volume >= 1.5x avg"]["n"] + by["V: volume < 1.5x avg"]["n"], by["all breakouts"]["n"])
         self.assertIn("F: FI net buy (20d)", by)
-        self.assertIn("FI net-sell breakout (5d: FI < 0; retail proxy = -FI)", by)
+        self.assertIn("R: retail-only breakout (5d: FI <= 0 & retail > 0)", by)
         for k in ("mean_5", "hit_20", "excess_60", "median_60"):
             self.assertIn(k, by["all breakouts"])
         self.assertGreater(by["all breakouts"]["mean_20"], 0)   # synthetic breakouts trend on
@@ -97,7 +97,7 @@ class TestResearchRunner(unittest.TestCase):
 
     def test_request_defaults_cover_the_whole_matrix(self):
         req = ResearchRequest(start=date(2021, 1, 4))
-        self.assertEqual(req.variant_ids, ("A0", "A1", "A2", "A3", "A4", "A5", "B"))
+        self.assertEqual(req.variant_ids, ("A0", "A1", "A2", "A3", "A4", "A5", "B", "C1", "C2", "C3"))
         self.assertEqual(req.cost_multipliers, (0.0, 1.0, 2.0))
 
 

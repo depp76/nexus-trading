@@ -33,18 +33,21 @@ from strategy.trend_following.dataset import PriceBook
 from strategy.trend_following.signals import Features, rank_desc_score
 
 TRIM_REASON = "year_end_trim"
+WEIGHT_TRIM_REASON = "weight_trim"     # 2-4 weekly excess-weight sell (C5 standing cap)
 
 
 class Order:
-    __slots__ = ("ticker", "side", "qty", "reason", "stop_offset", "tries")
+    __slots__ = ("ticker", "side", "qty", "reason", "stop_offset", "tries", "weight_cap")
 
-    def __init__(self, ticker: str, side: str, qty: int | None, reason: str, stop_offset: float | None = None):
+    def __init__(self, ticker: str, side: str, qty: int | None, reason: str, stop_offset: float | None = None,
+                 weight_cap: float | None = None):
         self.ticker = ticker
         self.side = side          # "buy" | "sell"
         self.qty = qty            # sells: None = the whole position
         self.reason = reason
         self.stop_offset = stop_offset
         self.tries = 0
+        self.weight_cap = weight_cap   # buys: max position weight of pre-fill equity at the fill price
 
     def __repr__(self):
         return f"Order({self.side} {self.ticker} x{self.qty} {self.reason})"
@@ -191,6 +194,15 @@ class Engine:
             q -= 1
         return q
 
+    def weight_cap_qty(self, ticker: str, price: float, cap: float) -> int:
+        """Shares that may still be bought so the position stays <= cap x pre-fill equity at `price`."""
+        if price <= 0:
+            return 0
+        pos = self.positions.get(ticker)
+        held = pos.qty if pos is not None else 0
+        equity = self.cash + self.positions_value()
+        return max(0, int(math.floor(cap * equity / price)) - held)
+
     # -- execution ---------------------------------------------------------
     def _execute_buy(self, t: int, ticker: str, qty: int, price: float, reason: str, stop_offset) -> None:
         b = self.book
@@ -202,10 +214,11 @@ class Engine:
         pos = self.positions.get(ticker)
         stop = price - stop_offset if stop_offset is not None and np.isfinite(stop_offset) else None
         if pos is None:
-            close = b.close[t, col]
+            # marked at the fill price until _mark runs: the session's close is not known at the open,
+            # and weight_cap_qty values positions at last_close for the buys filled after this one
             self.positions[ticker] = Position(
                 ticker=ticker, col=col, qty=qty, entry_price=price, entry_idx=t, stop_price=stop,
-                entry_costs=cost, last_close=float(close) if np.isfinite(close) else price,
+                entry_costs=cost, last_close=price,
             )
         else:
             total_qty = pos.qty + qty
@@ -252,7 +265,7 @@ class Engine:
                 continue
             px = b.open[t, pos.col]
             prev_close = b.close[t - 1, pos.col] if t > 0 else np.nan
-            if not np.isfinite(px) or px <= 0:
+            if not np.isfinite(px) or px <= 0 or b.volume[t, pos.col] == 0:     # no price, or halted (volume 0)
                 o.tries += 1
                 keep.append(o)
                 continue
@@ -272,7 +285,7 @@ class Engine:
                 continue
             px = b.open[t, col]
             prev_close = b.close[t - 1, col] if t > 0 else np.nan
-            blocked = (not np.isfinite(px) or px <= 0) or (
+            blocked = (not np.isfinite(px) or px <= 0 or b.volume[t, col] == 0) or (
                 self.cm.block_limit_up_down and np.isfinite(prev_close)
                 and self.cm.is_limit_up(d, b.market_of(o.ticker), px, prev_close))
             if blocked:
@@ -283,6 +296,8 @@ class Engine:
             market = b.market_of(o.ticker)
             price = self.cm.fill_price(d, market, px, "buy")
             qty = min(int(o.qty or 0), self.affordable_qty(t, market, price, col))
+            if o.weight_cap is not None:
+                qty = min(qty, self.weight_cap_qty(o.ticker, price, o.weight_cap))
             if qty <= 0:
                 continue
             self._execute_buy(t, o.ticker, qty, price, o.reason, o.stop_offset)
@@ -407,6 +422,26 @@ class TrendFollowingPolicy(Policy):
         cap_qty = math.floor(equity * self.p.max_weight / close)
         return max(0, int(min(risk_qty, cap_qty)))
 
+    def _weight_trims(self, t: int, eng: Engine, exiting: set) -> list[Order]:
+        """Sell the excess of every held name whose close weight exceeds max_weight.
+
+        A trimmed name stays in the book, so it is not added to `exiting` (slot count, rank_out)."""
+        b, cap = eng.book, self.p.max_weight
+        equity = eng.equity_now
+        out: list[Order] = []
+        if equity <= 0:
+            return out
+        for tk, pos in eng.positions.items():
+            if tk in exiting:
+                continue
+            c = b.close[t, pos.col]
+            if not (np.isfinite(c) and c > 0):
+                continue
+            excess = pos.qty - int(math.floor(cap * equity / c))
+            if excess > 0:
+                out.append(Order(tk, "sell", min(excess, pos.qty), WEIGHT_TRIM_REASON))
+        return out
+
     def _equal_size(self, equity: float, close: float) -> int:
         if not (np.isfinite(close) and close > 0 and equity > 0):
             return 0
@@ -437,13 +472,22 @@ class TrendFollowingPolicy(Policy):
                 orders.append(Order(tk, "sell", None, reason))
                 exiting.add(tk)
 
+        # 2-4 weekly adjustment: only ever trim a name above the cap, never add (C5 standing cap)
+        trims: list[Order] = []
+        if f.check_day[t]:
+            trims = self._weight_trims(t, eng, exiting)
+            orders.extend(trims)
+
         pending_buys = {o.ticker for o in eng.pending if o.side == "buy"}
         staying = len([tk for tk in eng.positions if tk not in exiting])
         slots = p.max_positions - staying - len(pending_buys)
         if v.regime and not f.regime_on[t]:
             return orders     # 2-1: risk-off -> no new entries, exits only
         if v.mode == "high52":
-            return orders + self._high52_rebalance(t, eng, exiting, pending_buys)
+            rebalance = self._high52_rebalance(t, eng, exiting, pending_buys)
+            # a name ranked out is sold whole; its excess-weight trim would only duplicate that sell
+            ranked_out = {o.ticker for o in rebalance if o.reason == "rank_out"}
+            return [o for o in orders if o.reason != WEIGHT_TRIM_REASON or o.ticker not in ranked_out] + rebalance
         if slots <= 0:
             return orders
 
@@ -453,7 +497,7 @@ class TrendFollowingPolicy(Policy):
         for tk in pending_buys:
             if tk in b._col:
                 held[b.col(tk)] = True
-        mask = f.trend_ok[t] & f.breakout[t] & f.liquid[t] & ~held
+        mask = f.trend_ok[t] & f.breakout[t] & f.liquid[t] & f.traded[t] & ~held
         if v.volume:
             mask &= f.vol_ok[t]
         if v.flow:
@@ -469,7 +513,8 @@ class TrendFollowingPolicy(Policy):
         for j in cands:
             qty = self._size(t, j, equity, b.close[t, j])
             if qty > 0:
-                orders.append(Order(b.tickers[j], "buy", qty, "entry", stop_offset=p.stop_atr_multiple * f.atr[t, j]))
+                orders.append(Order(b.tickers[j], "buy", qty, "entry", stop_offset=p.stop_atr_multiple * f.atr[t, j],
+                                    weight_cap=p.max_weight))
         return orders
 
     def _high52_rebalance(self, t: int, eng: Engine, exiting: set, pending_buys: set) -> list[Order]:
@@ -477,7 +522,7 @@ class TrendFollowingPolicy(Policy):
         if not f.check_day[t]:
             return []
         prox = np.where(np.isfinite(f.high52_prox[t]), f.high52_prox[t], -np.inf)
-        eligible = f.trend_ok[t] & f.liquid[t] & np.isfinite(f.high52_prox[t])
+        eligible = f.trend_ok[t] & f.liquid[t] & f.traded[t] & np.isfinite(f.high52_prox[t])
         cands = np.flatnonzero(eligible)
         if cands.size == 0:
             return []
@@ -495,13 +540,24 @@ class TrendFollowingPolicy(Policy):
                 continue
             qty = self._equal_size(equity, b.close[t, j])
             if qty > 0:
-                orders.append(Order(tk, "buy", qty, "entry", stop_offset=p.stop_atr_multiple * f.atr[t, j]))
+                orders.append(Order(tk, "buy", qty, "entry", stop_offset=p.stop_atr_multiple * f.atr[t, j],
+                                    weight_cap=p.max_weight))
         return orders
 
 
 def run_backtest(ds, feats: Features, params: StrategyParams, variant: Variant, cost_model: CostModel,
-                 label: str | None = None) -> BacktestResult:
-    """One variant of the 6-2 matrix over `ds` under `cost_model`."""
+                 label: str | None = None, scores=None) -> BacktestResult:
+    """One variant of the 6-2 matrix over `ds` under `cost_model`.
+
+    C-series rows (mode "score") run ScoringPolicy on the variant's parameter overrides; `scores` is the
+    matching ScoreBook when the caller already has it (it does not depend on the cost model)."""
+    if variant.mode == "score":
+        from strategy.trend_following.scoring import compute_scores
+        from strategy.trend_following.scoring_policy import ScoringPolicy
+        params = variant.apply(params)
+        eng = Engine(ds.stocks, ds.rf_period, params, cost_model, ds.start_idx, label or variant.id, adv=feats.adv)
+        sb = scores if scores is not None else compute_scores(ds.stocks, params)
+        return eng.run(ScoringPolicy(feats, params, variant, sb))
     eng = Engine(ds.stocks, ds.rf_period, params, cost_model, ds.start_idx, label or variant.id, adv=feats.adv)
     if variant.needs_flows and not feats.has_flows:
         eng.notes.append("variant needs investor flows but the dataset has none: no entries possible")

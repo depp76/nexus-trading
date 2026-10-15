@@ -1,5 +1,5 @@
 """strategy/trend_following/scoring.py — 2-5 "trend + pullback" scoring mode
-(trend_following.md v04, C-series): the five indicators, the gate, the
+(trend_following.md v04, C-series): the four scored indicators, the gate, the
 percentile scores, and the weekly Top/Bottom recommendation the Trading
 Universe tab shows.
 
@@ -10,13 +10,13 @@ Layers, all pure except the loader at the bottom:
   run_universe_scoring(items)       -> the three above chained, for TrendScoreThread
 
 Spec mapping (9-4 in the md lists the decisions this file makes beyond the
-text): MA50Div / Range52 / MA20Div / R10 / R3 are computed from closes as in
-2-5 (1); R3, R10 and MA20Div are divided by ATR20 / close when
+text): MA50Div / Range52 / MA20Div / R3 are computed from closes as in
+2-5 (1); R3 and MA20Div are divided by ATR20 / close when
 ``score_vol_normalize`` is on; every indicator is turned into a percentile
 rank (0, 1] among the liquid names of that day; the gate is liquidity +
 MA50Div > 0 + Range52 >= gate_range_min + not in the top (1 - gate_overheat_pct)
-of normalised MA20Div; total = pct(MA50Div) + pct(Range52) - pct(R3) -
-0.5 x pct(R10); the total's percentile is taken within the gated names only.
+of normalised MA20Div; total = pct(MA50Div) + pct(Range52) - pct(R3)
+(v06: R10 is no longer scored, see REFERENCE_R10_WINDOW); the total's percentile is taken within the gated names only.
 
 The Universe recommendation averages the daily total over the last
 ``score_week_sessions`` sessions ("지난 1주일"). Top N are the names that pass
@@ -45,8 +45,11 @@ from strategy.trend_following.signals import atr, regime_state, rolling, shift
 logger = logging.getLogger(__name__)
 
 INDEX_TICKER = "KS11"          # KOSPI: the trading calendar and the L1 regime input
-INDICATORS = ("ma50_div", "range52", "ma20_div", "r10", "r3")
-DISPLAY_RETURN_WINDOW = 20     # the 20D change shown next to R3 / R10 (display only, not scored)
+INDICATORS = ("ma50_div", "range52", "ma20_div", "r3")   # the scored / gating indicators (2-5 (1))
+DISPLAY_RETURN_WINDOW = 20     # the 20D change shown next to R3 (display only, not scored)
+# R10 left the score in spec v06 (9-15). It is still computed, as a reference column for the 6-1-2 correlation
+# matrix / IC report only: nothing in the score or the gate reads it.
+REFERENCE_R10_WINDOW = 10
 
 
 # ---------------------------------------------------------------------------
@@ -70,14 +73,14 @@ class ScoreBook:
     ma50_div: np.ndarray
     range52: np.ndarray
     ma20_div: np.ndarray
-    r10: np.ndarray
+    r10: np.ndarray             # reference only (6-1-2 report), never scored
     r3: np.ndarray
     atr_pct: np.ndarray
     liquid: np.ndarray          # bool: 20-day average trading value >= floor
     overheated: np.ndarray      # bool: liquid and normalised MA20Div in the top (1 - gate_overheat_pct)
     gate: np.ndarray            # bool: liquid & MA50Div > 0 & Range52 >= min & not overheated
     trend_score: np.ndarray     # pct(MA50Div) + pct(Range52), 0..2
-    timing_score: np.ndarray    # -pct(R3) - w x pct(R10), -(1+w)..0
+    timing_score: np.ndarray    # -pct(R3), -1..0
     total: np.ndarray           # trend + timing (NaN unless liquid with full history)
     total_rank: np.ndarray      # percentile of total within the gated names, NaN elsewhere
     pct: dict[str, np.ndarray] = field(default_factory=dict)
@@ -105,7 +108,7 @@ def compute_scores(book: PriceBook, params: StrategyParams | None = None) -> Sco
     with np.errstate(divide="ignore", invalid="ignore"):
         ma50_div = close / ma_l - 1.0
         ma20_div = close / ma_s - 1.0
-        r10 = close / shift(close, p.score_r_mid) - 1.0
+        r10 = close / shift(close, REFERENCE_R10_WINDOW) - 1.0
         r3 = close / shift(close, p.score_r_short) - 1.0
 
         # 52-week range position. Like signals.high52_prox, 80% of the window
@@ -129,7 +132,7 @@ def compute_scores(book: PriceBook, params: StrategyParams | None = None) -> Sco
         "ma50_div": pct_rank_rows(ma50_div, liquid),
         "range52": pct_rank_rows(range52, liquid),
         "ma20_div": pct_rank_rows(ma20_n, liquid),
-        "r10": pct_rank_rows(r10_n, liquid),
+        "r10": pct_rank_rows(r10_n, liquid),     # reference only
         "r3": pct_rank_rows(r3_n, liquid),
     }
 
@@ -138,7 +141,7 @@ def compute_scores(book: PriceBook, params: StrategyParams | None = None) -> Sco
         gate = liquid & (ma50_div > 0) & (range52 >= p.gate_range_min) & ~overheated
 
     trend_score = pct["ma50_div"] + pct["range52"]
-    timing_score = -pct["r3"] - p.score_r_mid_weight * pct["r10"]
+    timing_score = -pct["r3"]
     total = trend_score + timing_score
     total_rank = pct_rank_rows(total, gate)
 
@@ -169,7 +172,6 @@ class ScoredName:
     ma50_div: float
     range52: float
     ma20_div: float
-    r10: float
     r3: float
     r20: float                 # 20-session close-to-close return (display only, spec has no R20)
     reasons: tuple[str, ...] = ()   # why the gate failed on the latest session ("" when it passed)
@@ -242,7 +244,7 @@ def weekly_recommendation(sb: ScoreBook, book: PriceBook, params: StrategyParams
             liquid=bool(sb.liquid[t_last, j]), gate=bool(sb.gate[t_last, j]),
             overheated=bool(sb.overheated[t_last, j]),
             ma50_div=float(sb.ma50_div[t_last, j]), range52=float(sb.range52[t_last, j]),
-            ma20_div=float(sb.ma20_div[t_last, j]), r10=float(sb.r10[t_last, j]), r3=float(sb.r3[t_last, j]),
+            ma20_div=float(sb.ma20_div[t_last, j]), r3=float(sb.r3[t_last, j]),
             r20=_ret(j, DISPLAY_RETURN_WINDOW),
             reasons=_gate_reasons(sb, t_last, j, p),
         )

@@ -1,5 +1,5 @@
 """strategy/trend_following/config.py — Parameters of the Trend Following
-strategy (trend_following.md v04, sections 2-4, 2-5 and 6-2).
+strategy (trend_following.md v06, sections 2-4, 2-5 and 6-2).
 
 Everything a backtest can vary lives here as a frozen dataclass so a run can
 be reproduced from its parameter snapshot. Defaults are the spec's proposed
@@ -8,10 +8,19 @@ them, so nothing here is tuned.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, replace
+from datetime import date
 
-SPEC_VERSION = "v04"
+SPEC_VERSION = "v06"
 SPEC_FILE = "trend_following.md"
+
+# Development window guard (NEX-11 decision, docs/nexus/README.md 5-1): data and
+# evaluation dates after DEV_END are the 2025 holdout and are blocked unless a
+# caller passes the explicit `allow_holdout` flag. PERIODS holds the two
+# development sub-periods only; the holdout and forward years are separate
+# constants (spec 6-4, 6-5).
+DEV_START = date(2021, 1, 1)
+DEV_END = date(2024, 12, 31)
 
 
 @dataclass(frozen=True)
@@ -57,14 +66,12 @@ class StrategyParams:
     score_ma_long: int = 50                  # MA50Div = close / MA50 - 1 (trend direction, +)
     score_ma_short: int = 20                 # MA20Div = close / MA20 - 1 (overheat gate)
     score_r_short: int = 3                   # R3 = close / close[t-3] - 1 (entry timing, -)
-    score_r_mid: int = 10                    # R10 = close / close[t-10] - 1 (short-term reversal, -)
-    score_r_mid_weight: float = 0.5          # weight of pct(R10) in the timing score
     score_range_window: int = 252            # Range52 = (close - low252) / (high252 - low252)
     gate_range_min: float = 0.70             # gate: Range52 >= 0.70 (top 30% of the 52-week range)
     gate_overheat_pct: float = 0.95          # gate: MA20Div percentile above this -> no new entry
     score_buy_pct: float = 0.80              # buy: total-score percentile (within gated names) >= 0.80
     score_sell_pct: float = 0.50             # weekly relative sell: percentile < 0.50 (hysteresis)
-    score_vol_normalize: bool = True         # divide R3, R10, MA20Div by ATR20 / close
+    score_vol_normalize: bool = True         # divide R3, MA20Div by ATR20 / close
     score_range_mode: str = "range"          # "range" (Range52) | "high52_prox" (close / high252, C3)
     score_week_sessions: int = 5             # Universe recommendation: sessions averaged ("last week")
     score_week_min_sessions: int = 3         # ... and how many of them a name must be scored on
@@ -81,20 +88,34 @@ class Variant:
     volume: bool          # V: volume confirmation on entry
     flow: bool            # F: foreign+institution net-buy confirmation on entry
     flow_exit: bool       # FX: flow-based exit
-    mode: str = "breakout"   # "breakout" (A-series) or "high52" (B: hold top names by 52-week-high proximity)
+    mode: str = "breakout"   # "breakout" (A-series), "high52" (B: hold top names by 52-week-high proximity)
+                             # or "score" (C-series: 2-5 trend + pullback scoring)
+    score_overrides: tuple[tuple[str, object], ...] = ()   # C-series: StrategyParams fields this row changes
 
     @property
     def needs_flows(self) -> bool:
         return self.flow or self.flow_exit
 
+    def apply(self, params: StrategyParams) -> StrategyParams:
+        """`params` with this row's overrides (C2: no volatility normalisation, C3: high52_prox)."""
+        return replace(params, **dict(self.score_overrides)) if self.score_overrides else params
+
     @property
     def label(self) -> str:
         if self.mode == "high52":
             return "B: L1 + 52w-high proximity ranking"
+        if self.mode == "score":
+            return f"{self.id}: {SCORE_LABELS.get(self.id, 'L1 + trend/pullback score')}"
         parts = ["L1" if self.regime else "-", "V" if self.volume else "-",
                  "F" if self.flow else "-", "FX" if self.flow_exit else "-"]
         return f"{self.id}: " + "/".join(parts)
 
+
+SCORE_LABELS = {
+    "C1": "L1 + trend/pullback score (ATR-normalised, Range52)",
+    "C2": "C1 without volatility normalisation",
+    "C3": "C1 with Range52 -> 52w-high proximity",
+}
 
 VARIANTS: dict[str, Variant] = {
     "A0": Variant("A0", regime=False, volume=False, flow=False, flow_exit=False),
@@ -104,13 +125,42 @@ VARIANTS: dict[str, Variant] = {
     "A4": Variant("A4", regime=True, volume=True, flow=True, flow_exit=False),
     "A5": Variant("A5", regime=True, volume=True, flow=True, flow_exit=True),
     "B": Variant("B", regime=True, volume=False, flow=False, flow_exit=False, mode="high52"),
+    # 2-5 / 6-2: C-series, price data only (no V / F / FX); the rows differ only in the scoring inputs
+    "C1": Variant("C1", regime=True, volume=False, flow=False, flow_exit=False, mode="score"),
+    "C2": Variant("C2", regime=True, volume=False, flow=False, flow_exit=False, mode="score",
+                  score_overrides=(("score_vol_normalize", False),)),
+    "C3": Variant("C3", regime=True, volume=False, flow=False, flow_exit=False, mode="score",
+                  score_overrides=(("score_range_mode", "high52_prox"),)),
 }
 
 # 4-1 mandatory sensitivity scenarios: no cost / base / conservative.
 COST_MULTIPLIERS: tuple[float, ...] = (0.0, 1.0, 2.0)
 
-# 6-4 sub-period scorecard: (label, first year, last year).
-PERIODS: tuple[tuple[str, int, int], ...] = (("2021-22", 2021, 2022), ("2023-24", 2023, 2024), ("2025-26", 2025, 2026))
+# 6-4 / 6-1-2 development sub-periods: (label, first year, last year). Two periods
+# only; 2025 is the holdout and 2026 forward observation (v05).
+PERIODS: tuple[tuple[str, int, int], ...] = (("2021-22", 2021, 2022), ("2023-24", 2023, 2024))
+# 6-5: evaluated once, by Validation, after spec and parameters are frozen.
+HOLDOUT_PERIOD: tuple[str, int, int] = ("2025", 2025, 2025)
+# Observation only; never used for a verdict.
+FORWARD_PERIOD: tuple[str, int, int] = ("2026", 2026, 2026)
+# 6-1-2: the Rank IC horizon (sessions) whose per-period sign decides the verdict, fixed before any result.
+IC_VERDICT_HORIZON = 20
+
+# 6-4 / 6-5 / checklist E2: the pre-registered neighbour set (NEX-51 plan rev. 1, approved 2026-10-14).
+# One field at a time, everything else at StrategyParams() defaults; the runner reads only this constant
+# and refuses any (field, value) pair that is not in it. Rows: (id, field, value, variants it applies to).
+# C1-C3 have no neighbour runs (2-5 (6) defaults and regime_ma = 60 stay fixed); no grid combinations.
+E2_NEIGHBORS: tuple[tuple[str, str, object, tuple[str, ...]], ...] = (
+    ("N1", "breakout_window", 15, ("A0", "A1", "A2", "A3", "A4", "A5")),
+    ("N2", "breakout_window", 25, ("A0", "A1", "A2", "A3", "A4", "A5")),
+    ("N3", "trend_ma_long", 120, ("A0", "A1", "A2", "A3", "A4", "A5", "B")),
+    ("N4", "regime_ma", 20, ("A1", "A2", "A3", "A4", "A5", "B")),
+    ("N5", "regime_ma", 120, ("A1", "A2", "A3", "A4", "A5", "B")),
+)
+# Checklist E2: a neighbour whose full-window Sharpe differs from the base run by more than this fails.
+E2_SHARPE_JUMP = 0.5
+# Checklist E4: the share of trades (by net P&L, largest first) whose contribution is reported.
+E4_TOP_SHARE = 0.05
 
 # 6-3 benchmark data. KODEX 200TR (278530) reinvests dividends, so its price is
 # a total-return series with the fund's expense ratio already embedded (no

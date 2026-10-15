@@ -43,6 +43,15 @@ def shift(a: np.ndarray, n: int) -> np.ndarray:
     return out
 
 
+def lead(a: np.ndarray, n: int) -> np.ndarray:
+    """Look ahead by n rows along axis 0 (row t holds the value of t+n), NaN-filled at the tail."""
+    arr = np.asarray(a, dtype=float)
+    out = np.full_like(arr, np.nan)
+    if 0 < n < arr.shape[0]:
+        out[:-n] = arr[n:]
+    return out
+
+
 def true_range(high: np.ndarray, low: np.ndarray, close: np.ndarray) -> np.ndarray:
     prev_close = shift(close, 1)
     hl = high - low
@@ -115,6 +124,7 @@ class Features:
     vol_ok: np.ndarray          # 2-3 V
     flow_ok: np.ndarray         # 2-3 F
     liquid: np.ndarray          # 2-0 liquidity floor on 20-day average trading value
+    traded: np.ndarray          # 2-0 halted names out: False on a session whose volume is 0
     exit_channel: np.ndarray    # 3-1: close < prior 10-session low
     flow_exit: np.ndarray       # 3-3 FX: 10-day net sell and close < MA20
     atr: np.ndarray             # float: ATR20
@@ -129,7 +139,7 @@ class Features:
     flow_coverage: float        # fraction of (date, ticker) cells with a flow value
 
 
-def compute_features(ds, params: StrategyParams) -> Features:
+def compute_features(ds, params: StrategyParams, flow_lead: int = 0) -> Features:
     """All layer signals for `ds` (a dataset.Dataset) under `params`."""
     b = ds.stocks
     close, high, low, vol = b.close, b.high, b.low, b.volume
@@ -138,6 +148,7 @@ def compute_features(ds, params: StrategyParams) -> Features:
     value = close * vol
     adv = rolling(value, p.volume_window, "mean")
     liquid = adv >= p.min_avg_trading_value
+    traded = ~(vol == 0)        # NaN volume (no bar) stays True: the other filters already fail on it
 
     ma_s = rolling(close, p.trend_ma_short, "mean")
     ma_l = rolling(close, p.trend_ma_long, "mean")
@@ -166,6 +177,10 @@ def compute_features(ds, params: StrategyParams) -> Features:
     has_flows = fi is not None and bool(np.isfinite(fi).any())
     if has_flows:
         fi = np.asarray(fi, dtype=float)
+        if flow_lead > 0:
+            # Validation-only contamination (checklist A2, NEX-28): row t holds the flow of
+            # t+flow_lead (look-ahead). Never set in a real run; default 0 = spec 5 convention.
+            fi = lead(fi, flow_lead)
         flow_long = rolling(fi, p.flow_long_window, "sum")
         flow_short = rolling(fi, p.flow_short_window, "sum")
         flow_exit_sum = rolling(fi, p.flow_exit_window, "sum")
@@ -183,7 +198,7 @@ def compute_features(ds, params: StrategyParams) -> Features:
     regime_on, check_day = regime_state(idx, b.dates, p)
 
     return Features(
-        trend_ok=trend_ok, breakout=breakout, vol_ok=vol_ok, flow_ok=flow_ok, liquid=liquid,
+        trend_ok=trend_ok, breakout=breakout, vol_ok=vol_ok, flow_ok=flow_ok, liquid=liquid, traded=traded,
         exit_channel=exit_channel, flow_exit=flow_exit, atr=atr_arr, adv=adv,
         flow_strength=flow_strength, rs=rs, high52_prox=high52_prox, ma_short=ma_s,
         regime_on=regime_on, check_day=check_day, has_flows=has_flows, flow_coverage=flow_coverage,

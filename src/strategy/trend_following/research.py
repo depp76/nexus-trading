@@ -15,9 +15,10 @@ from strategy.trend_following.config import (
     SPEC_VERSION, COST_MULTIPLIERS, PERIODS, VARIANTS, StrategyParams,
 )
 from strategy.trend_following.costs import CostModel
-from strategy.trend_following.dataset import ResearchCancelled
+from strategy.trend_following.dataset import ResearchCancelled, check_dev_window
 from strategy.trend_following.event_study import run_event_study, HORIZONS
 from strategy.trend_following.metrics import summarize_run
+from strategy.trend_following.scoring import compute_scores
 from strategy.trend_following.signals import compute_features
 
 BENCHMARK_LABELS = {
@@ -39,6 +40,11 @@ class ResearchRequest:
     include_flows: bool = False
     run_backtests: bool = True
     run_event_study: bool = True
+    allow_holdout: bool = False     # explicit switch for dates after config.DEV_END (default: blocked)
+
+    def __post_init__(self):
+        check_dev_window(self.start, self.allow_holdout, "start date")
+        check_dev_window(self.end, self.allow_holdout, "end date")
 
 
 @dataclass
@@ -51,6 +57,8 @@ class RunSummary:
     nav: np.ndarray
     dates: list[date]
     notes: list[str] = field(default_factory=list)
+    rf_period: np.ndarray | None = None     # per-session risk-free return (period Sharpe in robustness.py)
+    trades: list = field(default_factory=list)   # strategy runs only (checklist E4)
 
 
 @dataclass
@@ -66,8 +74,8 @@ class ResearchResult:
     def runs_at(self, mult: float, kind: str | None = None) -> list[RunSummary]:
         return [r for r in self.runs if abs(r.cost_mult - mult) < 1e-9 and (kind is None or r.kind == kind)]
 
-    def to_markdown(self) -> str:
-        return render_markdown(self)
+    def to_markdown(self, header: list[str] | None = None) -> str:
+        return render_markdown(self, header)
 
 
 def _say(progress, msg):
@@ -85,6 +93,8 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
     event study; True raises ResearchCancelled."""
     p = req.params
     warnings: list[str] = []
+    if ds.dates:
+        check_dev_window(ds.dates[-1], req.allow_holdout, "dataset last date")
     _say(progress, "Computing signals...")
     feats = compute_features(ds, p)
 
@@ -99,12 +109,14 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
     else:
         if feats.flow_coverage < 0.5:
             warnings.append(f"Investor-flow coverage is only {feats.flow_coverage:.0%} of date x ticker cells.")
-        warnings.append("Retail flow is a proxy: the Naver frgn source has only foreigner and institution, so "
-                        "retail = -(FI) and 'other corporations' (buybacks, block deals) are folded into it; the "
-                        "event study's FI net-sell group is that proxy, not an independent retail signal.")
+        warnings.append("Investor-flow limits (9-10): the institution column is one total, so pension/trust/"
+                        "private-fund sub-investors cannot be separated; foreigner + institution + retail does "
+                        "not sum to zero (other corporations, the state), so retail is an independent series. "
+                        "Snapshots built before NEX-23 carry no flows.")
     warnings.append(ds.info.get("universe", ""))
 
     runs: list[RunSummary] = []
+    score_books: dict[str, object] = {}     # C-series ScoreBook per variant: independent of the cost multiplier
     if req.run_backtests:
         for mult in req.cost_multipliers:
             cm = req.cost_model.scaled(mult)
@@ -118,12 +130,14 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
                     continue
                 _check_stop(should_stop)
                 _say(progress, f"Backtest {vid} at {mult:g}x costs...")
-                res: BacktestResult = run_backtest(ds, feats, p, v, cm)
+                if v.mode == "score" and vid not in score_books:
+                    score_books[vid] = compute_scores(ds.stocks, v.apply(p))
+                res: BacktestResult = run_backtest(ds, feats, p, v, cm, scores=score_books.get(vid))
                 runs.append(RunSummary(vid, v.label, "strategy", mult, summarize_run(res, bm1, bm3),
-                                       res.nav, res.dates, res.notes))
+                                       res.nav, res.dates, res.notes, res.rf_period, res.trades))
             for bid, res in bms.items():
                 runs.append(RunSummary(bid, BENCHMARK_LABELS.get(bid, bid), "benchmark", mult,
-                                       summarize_run(res, bm1, bm3), res.nav, res.dates, res.notes))
+                                       summarize_run(res, bm1, bm3), res.nav, res.dates, res.notes, res.rf_period))
 
     events: list[dict] = []
     if req.run_event_study:
@@ -172,6 +186,7 @@ SUMMARY_COLUMNS = [
     ("vs BM1", lambda r: _pct(r.metrics.get("bm1_excess_cagr"))),
     ("IR", lambda r: _num(r.metrics.get("bm1_ir"))),
     ("Beta", lambda r: _num(r.metrics.get("bm1_beta"))),
+    ("Alpha", lambda r: _pct(r.metrics.get("bm1_alpha"))),      # checklist D3: annualised, vs BM1
     ("Up cap", lambda r: _pct(r.metrics.get("bm1_up_capture"), 0)),
     ("Down cap", lambda r: _pct(r.metrics.get("bm1_down_capture"), 0)),
 ] + [(label, (lambda r, k=label: _pct(r.metrics["periods"].get(k)))) for label, _, _ in PERIODS]
@@ -183,12 +198,16 @@ def _table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join(lines)
 
 
-def render_markdown(result: ResearchResult) -> str:
+def render_markdown(result: ResearchResult, header: list[str] | None = None) -> str:
+    """`header` lines (provenance block from run.py) go right under the title."""
     req = result.request
     p = req.params
     out: list[str] = []
     out.append(f"# Trend Following backtest report — spec {result.spec_version}")
     out.append("")
+    if header:
+        out += list(header)
+        out.append("")
     out.append(f"- Generated: {result.created_at:%Y-%m-%d %H:%M}")
     out.append(f"- Window: {result.dataset_info.get('eval_start', '')} → {result.dataset_info.get('eval_end', '')}")
     out.append(f"- Universe: {result.dataset_info.get('n_tickers', 0)} KOSPI names "
@@ -258,6 +277,20 @@ def render_markdown(result: ResearchResult) -> str:
                         _won(r.metrics["cost_slippage"]), _won(r.metrics["cost_total"]),
                         _num(r.metrics["turnover"], 1), _won(r.metrics["banked"]), _won(r.metrics["topped_up"])]
                        for r in result.runs_at(1.0)]))
+
+    c_rows = [r for r in result.runs_at(1.0, "strategy") if VARIANTS.get(r.id) is not None
+              and VARIANTS[r.id].mode == "score"]
+    if c_rows:
+        out.append("")
+        out.append("## 6-2 C-series turnover and holding period (1x)")
+        out.append("")
+        out.append("Weekly rank-based rules trade more than the breakout rows, so turnover and holding period are "
+                   "reported next to the cost they drive (round trips per year, calendar days).")
+        out.append("")
+        out.append(_table(["ID", "Trades", "Turnover (round trips/yr)", "Avg hold (d)", "Cost/yr", "Win"],
+                          [[r.id, str(r.metrics["n_trades"]), _num(r.metrics["turnover"], 1),
+                            _num(r.metrics["avg_holding_days"], 0), _pct(r.metrics["cost_pct_per_year"], 2),
+                            _pct(r.metrics["win_rate"], 0)] for r in c_rows]))
 
     yearly_rows = result.runs_at(1.0)
     if yearly_rows:
