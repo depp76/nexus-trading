@@ -2,7 +2,6 @@
 
 Split out of the former single ui/dialogs.py (2026-09-17)."""
 import logging
-import datetime as _dt
 from datetime import datetime
 
 from PyQt6.QtWidgets import (
@@ -17,11 +16,13 @@ logger = logging.getLogger(__name__)
 
 from ui.common import (
     _fmt_num_edit,
+    _fmt_num_value,
     _validate_date_str,
     _normalize_date_str,
     _validate_positive_number,
     _mk_field_validator,
 )
+from ui.history_calc import trade_conflict
 from threads.fetch_threads import TickerValidateThread
 
 
@@ -35,20 +36,19 @@ class BuyEditDialog(QDialog):
         self.setWindowTitle("Edit Buy")
         self.setMinimumWidth(300)
         self.result_data = None
+        self._sell_date_str = current_data.get("sell_date", "") or ""
+        self._sell_qty = float(current_data.get("sell_qty", 0.0) or 0.0)
 
         layout = QFormLayout(self)
 
         self.buy_date_edit = QLineEdit(current_data.get("buy_date", ""))
         self.buy_date_edit.setPlaceholderText("YYYY-MM-DD")
 
-        b_price = current_data.get("buy_price", 0.0)
-        self.buy_price_edit = QLineEdit(f"{b_price:,.2f}" if b_price else "")
-
-        b_qty = current_data.get("qty", 0.0)
-        self.buy_qty_edit = QLineEdit(f"{b_qty:,.0f}" if b_qty else "")
-
-        b_amt = current_data.get("buy_amount", 0.0)
-        self.buy_amount_edit = QLineEdit(f"{b_amt:,.2f}" if b_amt else "")
+        # Pre-fill at stored precision (review_codex.md #4): the old ",.2f"/",.0f"
+        # display strings were parsed back on save and rounded the record.
+        self.buy_price_edit = QLineEdit(_fmt_num_value(current_data.get("buy_price", 0.0)))
+        self.buy_qty_edit = QLineEdit(_fmt_num_value(current_data.get("qty", 0.0)))
+        self.buy_amount_edit = QLineEdit(_fmt_num_value(current_data.get("buy_amount", 0.0)))
         self.buy_amount_edit.setPlaceholderText("Auto-calculated if empty")
 
         layout.addRow("Buy Date:", self.buy_date_edit)
@@ -104,9 +104,17 @@ class BuyEditDialog(QDialog):
         b_price = to_f(self.buy_price_edit.text())
         b_qty = to_f(self.buy_qty_edit.text())
         b_amt = to_f(self.buy_amount_edit.text())
+        buy_date_str = _normalize_date_str(self.buy_date_edit.text())
+
+        # The sell side already recorded on this lot still has to hold after
+        # the buy side moves (review_codex.md #5).
+        conflict = trade_conflict(buy_date_str, b_qty, self._sell_date_str, self._sell_qty)
+        if conflict:
+            QMessageBox.warning(self, "Input Error", conflict)
+            return
 
         self.result_data = {
-            "buy_date": _normalize_date_str(self.buy_date_edit.text()),
+            "buy_date": buy_date_str,
             "buy_price": b_price,
             "qty": b_qty,
             "buy_amount": b_amt if b_amt > 0 else b_price * b_qty,
@@ -132,14 +140,9 @@ class SellEditDialog(QDialog):
         self.sell_date_edit = QLineEdit(current_data.get("sell_date", ""))
         self.sell_date_edit.setPlaceholderText("YYYY-MM-DD (leave empty if still open)")
 
-        s_price = current_data.get("sell_price", 0.0)
-        self.sell_price_edit = QLineEdit(f"{s_price:,.0f}" if s_price else "")
-
-        s_qty = current_data.get("sell_qty", 0.0)
-        self.sell_qty_edit = QLineEdit(f"{s_qty:,.0f}" if s_qty else "")
-
-        s_amt = current_data.get("sell_amount", 0.0)
-        self.sell_amount_edit = QLineEdit(f"{s_amt:,.0f}" if s_amt else "")
+        self.sell_price_edit = QLineEdit(_fmt_num_value(current_data.get("sell_price", 0.0)))
+        self.sell_qty_edit = QLineEdit(_fmt_num_value(current_data.get("sell_qty", 0.0)))
+        self.sell_amount_edit = QLineEdit(_fmt_num_value(current_data.get("sell_amount", 0.0)))
         self.sell_amount_edit.setPlaceholderText("Auto-calculated if empty")
 
         layout.addRow("Sell Date:", self.sell_date_edit)
@@ -158,12 +161,15 @@ class SellEditDialog(QDialog):
         btn_box.addWidget(cancel_btn)
 
         # ---1,000-separator auto-format ---
+        # Price/amount accept decimals like the buy side (US sell prices were
+        # truncated to an integer as they were typed); quantities stay whole
+        # shares, matching TradeEntryDialog.
         self.sell_price_edit.textEdited.connect(
-            lambda t: _fmt_num_edit(self.sell_price_edit, t))
+            lambda t: _fmt_num_edit(self.sell_price_edit, t, decimal=True))
         self.sell_qty_edit.textEdited.connect(
             lambda t: _fmt_num_edit(self.sell_qty_edit, t))
         self.sell_amount_edit.textEdited.connect(
-            lambda t: _fmt_num_edit(self.sell_amount_edit, t))
+            lambda t: _fmt_num_edit(self.sell_amount_edit, t, decimal=True))
 
         # ---Real-time validation (roadmap 2-5) ---
         # sell_date may be left empty (position stays open); price/qty are only
@@ -177,10 +183,7 @@ class SellEditDialog(QDialog):
             required = bool(self.sell_date_edit.text().strip())
             if not text:
                 return not required
-            try:
-                return float(text) > 0
-            except ValueError:
-                return False
+            return _validate_positive_number(text)
 
         self._val_sell_date = _mk_field_validator(
             self.sell_date_edit, _validate_sell_date, "Invalid date format (YYYY-MM-DD)")
@@ -206,18 +209,6 @@ class SellEditDialog(QDialog):
             return
 
         sell_date_str = _normalize_date_str(self.sell_date_edit.text())
-        if sell_date_str and self._buy_date_str:
-            try:
-                buy_d = _dt.datetime.strptime(self._buy_date_str, "%Y-%m-%d").date()
-                sell_d = _dt.datetime.strptime(sell_date_str, "%Y-%m-%d").date()
-                if buy_d > sell_d:
-                    QMessageBox.warning(
-                        self, "Input Error",
-                        f"Buy date ({self._buy_date_str}) cannot be later than sell date ({sell_date_str}).",
-                    )
-                    return
-            except ValueError:
-                pass  # buy_date on the record predates this validation; skip the cross-check
 
         def to_f(val):
             try: return float(val.replace(',', '').replace('%', '').strip())
@@ -227,16 +218,9 @@ class SellEditDialog(QDialog):
         s_qty = to_f(self.sell_qty_edit.text())
         s_amt = to_f(self.sell_amount_edit.text())
 
-        # A sell quantity beyond what was actually bought bypasses the
-        # partial-sell proration in history_calc.compute_pl_fields (its
-        # s_qty < b_qty branch), so pl gets computed as the full sell_amount
-        # minus the full buy_amount -- inflating realized P/L with proceeds
-        # from shares that were never owned (review_agy.md #2).
-        if self._orig_qty > 0 and s_qty > self._orig_qty:
-            QMessageBox.warning(
-                self, "Input Error",
-                f"Sell quantity ({s_qty:,.0f}) cannot exceed the holding quantity ({self._orig_qty:,.0f}).",
-            )
+        conflict = trade_conflict(self._buy_date_str, self._orig_qty, sell_date_str, s_qty)
+        if conflict:
+            QMessageBox.warning(self, "Input Error", conflict)
             return
 
         self.result_data = {
@@ -259,6 +243,7 @@ class TradeEntryDialog(QDialog):
         self.setMinimumWidth(300)
         self.result_data = None
         self._validate_thread = None
+        self._pending = None  # input snapshot of the in-flight ticker check
 
         layout = QFormLayout(self)
 
@@ -328,13 +313,33 @@ class TradeEntryDialog(QDialog):
             QMessageBox.warning(self, "Input Error", "Please check the highlighted fields (shown with a red border).")
             return
 
+        def to_f(val):
+            try: return float(val.replace(',', '').replace('%', '').strip())
+            except Exception: return 0.0
+
+        # Everything the record is built from is frozen here, and the inputs
+        # are locked until the reply lands: the reply validates *this* market/
+        # ticker, so reading the widgets again in _on_ticker_validated() could
+        # pair one stock's company name with another ticker, or save numbers
+        # typed after the check (review_codex.md #3).
+        b_price = to_f(self.buy_price_edit.text())
+        qty = to_f(self.qty_edit.text())
+        b_amt = to_f(self.buy_amount_edit.text())
+        self._pending = {
+            "market": market,
+            "ticker": ticker,
+            "buy_date": _normalize_date_str(self.buy_date_edit.text()),
+            "buy_price": b_price,
+            "qty": qty,
+            "buy_amount": b_amt if b_amt > 0 else b_price * qty,
+        }
+
         # Ticker validation hits the network (fetch_single_stock -> yahooquery ->
         # Naver fallback chain), so it runs on TickerValidateThread instead of
         # blocking the UI thread here. Buttons stay disabled and closeEvent()
         # ignores close requests until _on_ticker_validated() fires, so the
         # dialog can't be destroyed while the thread still holds a connection to it.
-        self.save_btn.setEnabled(False)
-        self.cancel_btn.setEnabled(False)
+        self._set_inputs_enabled(False)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
 
         thread = TickerValidateThread(market, ticker)
@@ -342,35 +347,28 @@ class TradeEntryDialog(QDialog):
         self._validate_thread = thread
         thread.start()
 
+    def _set_inputs_enabled(self, enabled: bool) -> None:
+        for w in (self.market_combo, self.ticker_edit, self.buy_date_edit, self.buy_price_edit,
+                  self.qty_edit, self.buy_amount_edit, self.save_btn, self.cancel_btn):
+            w.setEnabled(enabled)
+
     def _on_ticker_validated(self, is_valid: bool, company: str, err: str):
         QApplication.restoreOverrideCursor()
-        self.save_btn.setEnabled(True)
-        self.cancel_btn.setEnabled(True)
+        self._set_inputs_enabled(True)
+        pending, self._pending = self._pending, None
+        if pending is None:
+            return
 
         if not is_valid:
-            ticker = self.ticker_edit.text().strip().upper()
             QMessageBox.warning(
                 self, "Input Error",
-                f"Ticker is not valid (Could not find stock information):\n{ticker}\n\nDetails: {err or ''}",
+                f"Ticker is not valid (Could not find stock information):\n{pending['ticker']}\n\nDetails: {err or ''}",
             )
             return
 
-        def to_f(val):
-            try: return float(val.replace(',', '').replace('%', '').strip())
-            except Exception: return 0.0
-
-        b_price = to_f(self.buy_price_edit.text())
-        qty = to_f(self.qty_edit.text())
-        b_amt = to_f(self.buy_amount_edit.text())
-
         self.result_data = {
-            "market": self.market_combo.currentText(),
-            "ticker": self.ticker_edit.text().strip().upper(),
+            **pending,
             "company": company,
-            "buy_date": _normalize_date_str(self.buy_date_edit.text()),
-            "buy_price": b_price,
-            "qty": qty,
-            "buy_amount": b_amt if b_amt > 0 else b_price * qty,
             "sell_date": "",
             "sell_price": 0.0,
             "sell_qty": 0.0,

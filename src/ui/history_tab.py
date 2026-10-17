@@ -488,8 +488,9 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
     def _show_holdings_summary(self):
         show_holdings_summary(self, self._closed_data, self._open_data)
 
-    def _save_overrides(self, records: list):
-        """Persist just the given edited records back to the DB.
+    def _save_overrides(self, records: list) -> bool:
+        """Persist just the given edited records back to the DB in one
+        transaction; True on success.
 
         Used to re-upsert every closed/overridden/custom trade on each edit
         (one cell change -> N rows rewritten, growing with the trade log);
@@ -498,12 +499,14 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         try:
             if records:
                 trade_db.upsert_trades(records)
+            return True
         except Exception as e:
             logger.error("Failed to save overrides to DB: %s", e, exc_info=True)
             QMessageBox.warning(
                 self, "Database Warning",
                 f"Failed to save modified trades to database:\n{e}"
             )
+            return False
 
 
     # ---Real-time lightweight price fetch (1-min loop) ---
@@ -1057,13 +1060,17 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
                 orig_buy_amount = rec.get("buy_amount", 0.0)
                 sell_qty = res["sell_qty"]
 
-                rec["sell_date"]   = res["sell_date"]
-                rec["sell_price"]  = res["sell_price"]
-                rec["sell_qty"]    = sell_qty
-                rec["sell_amount"] = res["sell_amount"]  # dialog already fills price*qty when blank
-                rec["is_overridden"] = True
+                # Build the edited lot on a copy and only apply it to `rec`
+                # (and the open/closed lists) once the DB write succeeded, so a
+                # failed save leaves screen and DB on the pre-edit state.
+                edited = dict(rec)
+                edited["sell_date"]   = res["sell_date"]
+                edited["sell_price"]  = res["sell_price"]
+                edited["sell_qty"]    = sell_qty
+                edited["sell_amount"] = res["sell_amount"]  # dialog already fills price*qty when blank
+                edited["is_overridden"] = True
 
-                is_now_closed = bool(rec.get("sell_date") or rec.get("sell_price"))
+                is_now_closed = bool(edited.get("sell_date") or edited.get("sell_price"))
                 remainder = None
                 if kind == "open" and is_now_closed and 0 < sell_qty < orig_qty:
                     # Partial sell: split the lot instead of moving the whole
@@ -1074,12 +1081,12 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
                     # keeps tracking as its own open position with its own
                     # DB row (buy_amount split proportionally, no sell fields).
                     remainder_qty = orig_qty - sell_qty
-                    rec["qty"] = sell_qty
-                    rec["buy_amount"] = orig_buy_amount * (sell_qty / orig_qty) if orig_qty else 0.0
-                    remainder = dict(rec)
+                    edited["qty"] = sell_qty
+                    edited["buy_amount"] = orig_buy_amount * (sell_qty / orig_qty) if orig_qty else 0.0
+                    remainder = dict(edited)
                     remainder["orig_key"] = None
                     remainder["qty"] = remainder_qty
-                    remainder["buy_amount"] = orig_buy_amount - rec["buy_amount"]
+                    remainder["buy_amount"] = orig_buy_amount - edited["buy_amount"]
                     remainder["sell_date"] = ""
                     remainder["sell_price"] = 0.0
                     remainder["sell_qty"] = 0.0
@@ -1089,7 +1096,16 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
                     remainder["curr_pl_pct"] = 0.0
                     remainder["curr_pct_pl"] = 0.0
                     remainder["position_w"] = 0.0
+                    self._compute_pl_fields(remainder)
 
+                # The closed sub-lot UPDATE and the remainder INSERT go through
+                # one upsert_trades() transaction: saved separately, a failure
+                # of either left the DB with the original unsold lot plus the
+                # remainder, or the closed sub-lot with no remainder (review_codex.md #1).
+                if not self._save_overrides([edited] if remainder is None else [edited, remainder]):
+                    return
+
+                rec.update(edited)
                 self._compute_pl_fields(rec)
 
                 # Filter by orig_key rather than list.remove(rec): dict
@@ -1100,16 +1116,11 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
                 elif kind == "closed" and not is_now_closed:
                     self._closed_data[:] = [r for r in self._closed_data if r.get("orig_key") != rec.get("orig_key")]
                     self._open_data.append(rec)
-
-                records_to_save = [rec]
                 if remainder is not None:
-                    self._compute_pl_fields(remainder)
-                    if self._save_custom_trade(remainder):
-                        self._open_data.append(remainder)
+                    self._open_data.append(remainder)
 
                 self._refresh_summary()
                 self._apply_filter()
-                self._save_overrides(records_to_save)
             return
 
     def _on_ticker_name_resolved(self, result, error: str, ticker: str):

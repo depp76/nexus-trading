@@ -23,6 +23,8 @@ from data_fetcher import (
     fetch_stock_ma_multi,
     _fetch_naver_info,
     get_usd_krw_rate,
+    get_usd_krw_rate_for_date,
+    get_index_close_for_date,
     get_historical_data,
     start_date,
     INDEX_TICKERS,
@@ -181,27 +183,44 @@ class TickerValidateThread(QThread):
 # Asset-tab metrics preload thread (USD/KRW + KOSPI history warm-up)
 # ---------------------------------------------------------------------------
 class AssetMetricsPreloadThread(QThread):
-    """Warms TradingRecordTab's USD/KRW-rate and KOSPI-close caches off the UI thread.
+    """Builds TradingRecordTab's USD/KRW-rate and KOSPI-close snapshot off the UI thread.
 
-    get_usd_krw_rate_for_date()/get_index_close_for_date() each trigger a full
+    get_usd_krw_rate_for_date()/get_index_close_for_date() trigger a full
     network fetch (fdr.DataReader('USD/KRW') / get_historical_data("KS11", ...))
-    on their first call per session (or once their cache goes stale), and are
-    cheap polars lookups after that — calling the same underlying fetchers here
-    just pays that one-time cost in the background instead of freezing the
-    window at tab construction.
+    on their first call per session and again whenever their cache goes stale,
+    so the tab never calls them itself: this thread looks up every requested
+    date plus the current rate and emits the result, and the tab renders from
+    that snapshot only (review_codex.md #9). A failed lookup yields 0.0, which
+    the tab shows as "-".
     """
-    finished = pyqtSignal()
+    finished = pyqtSignal(dict, float)  # {date: (usd_krw, kospi_close)}, current usd_krw
+
+    def __init__(self, dates=()):
+        super().__init__()
+        self._dates = list(dict.fromkeys(dates))
 
     def run(self):
         try:
-            get_usd_krw_rate()
+            rate = float(get_usd_krw_rate())
         except Exception:
-            logger.debug("AssetMetricsPreloadThread: USD/KRW warm-up failed", exc_info=True)
+            rate = 0.0
+            logger.debug("AssetMetricsPreloadThread: USD/KRW fetch failed", exc_info=True)
         try:
             get_historical_data("KS11", start_date())
         except Exception:
             logger.debug("AssetMetricsPreloadThread: KOSPI warm-up failed", exc_info=True)
-        self.finished.emit()
+        snapshot = {}
+        for d in self._dates:
+            try:
+                usd = float(get_usd_krw_rate_for_date(d))
+            except Exception:
+                usd = 0.0
+            try:
+                kospi = float(get_index_close_for_date("KS11", d))
+            except Exception:
+                kospi = 0.0
+            snapshot[d] = (usd, kospi)
+        self.finished.emit(snapshot, rate)
 
 
 # ---------------------------------------------------------------------------

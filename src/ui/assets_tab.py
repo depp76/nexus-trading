@@ -6,6 +6,7 @@ Contains:
 """
 import csv
 import logging
+import math
 import datetime as _dt
 from datetime import datetime
 
@@ -22,7 +23,6 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
 import trade_db
-from data_fetcher import get_usd_krw_rate, get_usd_krw_rate_for_date, get_index_close_for_date
 from threads.fetch_threads import AssetMetricsPreloadThread
 from ui.widgets import GroupedHeaderView, ColSpec, NumericItem
 from ui.dialogs import TotalAssetsGraphDialog
@@ -30,6 +30,10 @@ from ui.colors import PROFIT, LOSS
 from ui.theme import ACCENT, TEXT, TEXT_SUB, TEXT_MUTED
 
 logger = logging.getLogger(__name__)
+
+# Age after which a table refresh asks AssetMetricsPreloadThread for a new
+# rate/KOSPI snapshot (same window as data.cache._HIST_CACHE_STALE_TTL).
+_METRICS_STALE_AFTER = _dt.timedelta(minutes=30)
 
 
 class _AssetsTable(QTableWidget):
@@ -105,6 +109,9 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         # instead of blocking __init__ (roadmap 2026-09-18, review.md 1-2).
         self._metrics_ready = False
         self._metrics_thread = None
+        self._date_metrics_cache: dict = {}   # {date: (usd_krw, kospi_close)} from the worker
+        self._live_usd_krw = 0.0
+        self._metrics_fetched_at = None
         self._currency = "KRW"          # docs/ui.md 4.3 toggle
         self._current_live_asset = 0.0
         self._asset_edit_manual = False  # user typed over the auto-filled value (docs/ui.md 4.5)
@@ -455,13 +462,29 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
 
     # ---Background metrics warm-up (roadmap 2026-09-18, review.md 1-2) ---
     def _start_metrics_preload(self):
-        thread = self._track_thread(AssetMetricsPreloadThread(), '_metrics_thread')
+        """(Re)build the rate/KOSPI snapshot for every record date in the
+        background; a run already in flight is left to finish (its reply
+        triggers another request if dates were added meanwhile)."""
+        if self._metrics_thread is not None and self._metrics_thread.isRunning():
+            return
+        dates = [r["date"] for r in self._records]
+        thread = self._track_thread(AssetMetricsPreloadThread(dates), '_metrics_thread')
         thread.finished.connect(self._on_metrics_preloaded)
         thread.start()
 
-    def _on_metrics_preloaded(self):
+    def _on_metrics_preloaded(self, snapshot: dict, rate: float):
+        self._date_metrics_cache.update(snapshot)
+        self._live_usd_krw = rate
+        self._metrics_fetched_at = datetime.now()
         self._metrics_ready = True
         self._refresh_table()
+
+    def _metrics_need_refresh(self) -> bool:
+        if self._metrics_fetched_at is None:
+            return False  # the first run is already on its way from __init__
+        if datetime.now() - self._metrics_fetched_at >= _METRICS_STALE_AFTER:
+            return True
+        return any(r["date"] not in self._date_metrics_cache for r in self._records)
 
     # ---CRUD ---
     def _add_record(self):
@@ -473,6 +496,8 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         try:
             total = float(raw_amt)
         except ValueError:
+            total = math.nan
+        if not math.isfinite(total):  # float() takes "nan"/"inf" (review_codex.md #6)
             QMessageBox.warning(self, "Error", "Total Assets must be a number.")
             return
 
@@ -522,26 +547,18 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self._refresh_table()
 
     def _rate_kospi_for_date(self, date_str: str) -> tuple:
-        """USD/KRW rate + KOSPI close for a date, cached for the tab's lifetime.
+        """USD/KRW rate + KOSPI close for a date from the snapshot
+        AssetMetricsPreloadThread built; (0.0, 0.0) ("-") until it has the date.
 
-        Both values come from an O(N) polars filter over the full history
-        each time they're recomputed, so this cache is shared across
-        _refresh_table and _show_graph to avoid redoing that scan for dates
-        already looked up (e.g. reopening the graph after a table refresh).
-
-        Past dates never change, so they're cached permanently. Today's date
-        is always recomputed: get_usd_krw_rate_for_date/get_index_close_for_date
-        delegate to data_fetcher's own today-staleness-aware caches, so this
-        just makes sure a newly-published close isn't hidden behind a tuple
-        pinned here from earlier in the session (before it was published).
+        This used to call get_usd_krw_rate_for_date/get_index_close_for_date
+        here on the UI thread, which re-fetched from the network whenever their
+        caches went stale (review_codex.md #9); it now never does I/O and only
+        schedules a background refresh for a missing date.
         """
-        cache = getattr(self, '_date_metrics_cache', None)
-        if cache is None:
-            cache = self._date_metrics_cache = {}
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        if date_str not in cache or date_str == today_str:
-            cache[date_str] = (get_usd_krw_rate_for_date(date_str), get_index_close_for_date("KS11", date_str))
-        return cache[date_str]
+        if date_str not in self._date_metrics_cache:
+            self._start_metrics_preload()
+            return (0.0, 0.0)
+        return self._date_metrics_cache[date_str]
 
     def _on_chart_clicked(self, event):
         """Double-click on the inline chart opens the detailed weekly graph."""
@@ -712,6 +729,8 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
             if ok:
                 try:
                     val = float(text.replace(',', '').strip())
+                    if not math.isfinite(val):
+                        raise ValueError(val)
                     rec["total"] = val
                     # A direct table edit is as "manual" as typing over the
                     # auto-filled input (docs/ui.md 4.5).
@@ -956,10 +975,9 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self._table.setSortingEnabled(True)
 
         if self._metrics_ready:
-            try:
-                self._update_rate_label(get_usd_krw_rate())
-            except Exception:
-                self._update_rate_label(0.0)
+            self._update_rate_label(self._live_usd_krw)
+            if self._metrics_need_refresh():
+                self._start_metrics_preload()
 
         self._stretch_columns()
         self._update_live_asset_labels()

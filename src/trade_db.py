@@ -30,10 +30,15 @@ asset_records  (Total Assets tab's weekly snapshots; was trading_record.json,
   total        REAL     NOT NULL    – total assets in KRW
   manual       INTEGER  DEFAULT 1   – 1 = typed by the user, 0 = auto-filled from the live total
   created_at / updated_at TEXT
+
+migrations  (one row per completed one-time JSON import)
+  name         TEXT     PRIMARY KEY – "trades_legacy_json" / "asset_records_json"
+  done_at      TEXT
 """
 
 import sqlite3
 import json
+import math
 import os
 import logging
 import datetime as _dt
@@ -97,6 +102,16 @@ def init_db() -> None:
                 updated_at  TEXT    DEFAULT (datetime('now','localtime'))
             )
         """)
+        # Completed one-time imports. Without it the JSON migrations below
+        # could only tell "not migrated yet" from "data in the table", so
+        # rows the user deleted came back from the legacy files on the next
+        # start (review_codex.md #2).
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS migrations (
+                name    TEXT PRIMARY KEY,
+                done_at TEXT DEFAULT (datetime('now','localtime'))
+            )
+        """)
         conn.commit()
         # 1. Legacy JSON migration (custom_history.json + trade_overrides.json)
         _migrate_legacy_json(conn)
@@ -108,11 +123,30 @@ def init_db() -> None:
 
 # ── Total Assets snapshots (asset_records) ────────────────────────────────────
 
+def _migration_done(conn: sqlite3.Connection, name: str) -> bool:
+    return conn.execute("SELECT 1 FROM migrations WHERE name = ?", (name,)).fetchone() is not None
+
+
+def _mark_migration_done(conn: sqlite3.Connection, name: str) -> None:
+    """Record `name` as done; the caller commits, so the mark lands in the
+    same transaction as the rows it imported."""
+    conn.execute("INSERT OR IGNORE INTO migrations (name) VALUES (?)", (name,))
+
+
+_ASSET_MIGRATION = "asset_records_json"
+_TRADES_MIGRATION = "trades_legacy_json"
+
+
 def _migrate_asset_records_json(conn: sqlite3.Connection) -> None:
-    """One-time import of trading_record.json into asset_records. Runs only
-    while the table is empty, so a JSON left on disk after the import is
-    never re-applied over later edits."""
+    """One-time import of trading_record.json into asset_records. Recorded in
+    `migrations`, so a JSON left on disk is never re-applied, not even after
+    the user deletes every snapshot. A table that already has rows from
+    before the `migrations` table existed counts as migrated."""
+    if _migration_done(conn, _ASSET_MIGRATION):
+        return
     if conn.execute("SELECT COUNT(*) FROM asset_records").fetchone()[0]:
+        _mark_migration_done(conn, _ASSET_MIGRATION)
+        conn.commit()
         return
     if not os.path.exists(_ASSET_JSON):
         return
@@ -127,6 +161,7 @@ def _migrate_asset_records_json(conn: sqlite3.Connection) -> None:
     rows = [(r["date"], float(r["total"]), 1 if r.get("manual", True) else 0)
             for r in records if isinstance(r, dict) and r.get("date") is not None and r.get("total") is not None]
     conn.executemany("INSERT OR IGNORE INTO asset_records (date, total, manual) VALUES (?, ?, ?)", rows)
+    _mark_migration_done(conn, _ASSET_MIGRATION)
     conn.commit()
     logger.info("[trade_db] Imported %d asset snapshot(s) from %s", len(rows), os.path.basename(_ASSET_JSON))
 
@@ -144,15 +179,20 @@ def load_asset_records() -> list[dict]:
 def save_asset_records(records: list[dict]) -> None:
     """Replace the whole asset_records table with `records` in one transaction.
     The Total Assets tab edits an in-memory list (a few hundred rows at most)
-    and saves it as a unit, the same way it saved the JSON file."""
+    and saves it as a unit, the same way it saved the JSON file. A non-finite
+    total raises ValueError before anything is deleted (review_codex.md #6)."""
     now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    rows = [(r["date"], float(r["total"]), 1 if r.get("manual", True) else 0, now, now) for r in records]
+    bad = [row[0] for row in rows if not math.isfinite(row[1])]
+    if bad:
+        raise ValueError(f"asset total must be a finite number: {bad}")
     conn = _connect()
     try:
         with conn:
             conn.execute("DELETE FROM asset_records")
             conn.executemany(
                 "INSERT INTO asset_records (date, total, manual, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                [(r["date"], float(r["total"]), 1 if r.get("manual", True) else 0, now, now) for r in records],
+                rows,
             )
     finally:
         conn.close()
@@ -162,7 +202,12 @@ def save_asset_records(records: list[dict]) -> None:
 
 def _migrate_legacy_json(conn: sqlite3.Connection) -> None:
     """One-time migration: import custom_history.json + trade_overrides.json into DB.
-    Skips records that already exist (idempotent)."""
+    Skips records that already exist, and once it has run (recorded in
+    `migrations`) never runs again, so trades deleted afterwards stay deleted."""
+    if _migration_done(conn, _TRADES_MIGRATION):
+        return
+    if not (os.path.exists(_OVERRIDES_JSON) or os.path.exists(_CUSTOM_JSON)):
+        return
 
     # ── Load overrides to patch buy-side records from JSON ──────────────────
     overrides: dict = {}
@@ -244,6 +289,7 @@ def _migrate_legacy_json(conn: sqlite3.Connection) -> None:
         except Exception as e:
             logger.warning("[trade_db] Migration error for custom trade '%s': %s", key, e)
 
+    _mark_migration_done(conn, _TRADES_MIGRATION)
     conn.commit()
     if imported:
         logger.info("[trade_db] Migrated %d legacy record(s) into portfolio.db", imported)
@@ -318,34 +364,59 @@ _INSERT_ONLY_SQL = """
 """
 
 
+_MAX_KEY_SUFFIX = 1000
+
+
 def _insert_with_generated_key(conn, base_key: str, values_tail: tuple) -> str:
     """Atomically claims a free orig_key derived from base_key by retrying the INSERT
-    on a UNIQUE-constraint collision, rather than pre-checking with a SELECT."""
+    on a UNIQUE-constraint collision, rather than pre-checking with a SELECT.
+
+    Only an orig_key collision is retried: any other IntegrityError (NOT NULL,
+    a future CHECK) fails the same way whatever the key, and used to loop here
+    forever (review_codex.md #7)."""
     candidate = base_key
-    suffix = 2
-    while True:
+    for suffix in range(2, _MAX_KEY_SUFFIX + 2):
         try:
             conn.execute(_INSERT_ONLY_SQL, (candidate, *values_tail))
             return candidate
-        except sqlite3.IntegrityError:
+        except sqlite3.IntegrityError as e:
+            if "trades.orig_key" not in str(e):
+                raise
             candidate = f"{base_key}_{suffix}"
-            suffix += 1
+    raise sqlite3.IntegrityError(f"no free orig_key for {base_key!r} after {_MAX_KEY_SUFFIX} tries")
+
+
+def _values_tail(record: dict, now: str) -> tuple:
+    """The trade columns after orig_key, validated: company and buy_date are
+    required (NOT NULL) and every number must be finite -- inf/NaN would
+    poison every P/L sum, and SQLite stores NaN as NULL (review_codex.md #6/#7).
+    Raises ValueError."""
+    co = record.get("company", "")
+    buy_date = record.get("buy_date", "")
+    if co is None or buy_date is None:
+        raise ValueError(f"trade without company/buy_date: {record.get('orig_key')!r}")
+
+    def num(field):
+        v = float(record.get(field, 0) or 0)
+        if not math.isfinite(v):
+            raise ValueError(f"{field} must be a finite number, got {v!r}")
+        return v
+
+    return (
+        co, record.get("market", ""), record.get("ticker", ""),
+        buy_date, num("buy_price"),
+        num("qty"), num("buy_amount"),
+        record.get("sell_date", "") or "", num("sell_price"),
+        num("sell_qty"), num("sell_amount"),
+        now, now,
+    )
 
 
 def upsert_trade(record: dict) -> str:
     """Insert or update a trade. Returns the orig_key of the saved record."""
-    co = record.get("company", "")
-    buy_date = record.get("buy_date", "")
-    qty = float(record.get("qty", 0))
     now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    values_tail = (
-        co, record.get("market", ""), record.get("ticker", ""),
-        buy_date, float(record.get("buy_price", 0)),
-        qty, float(record.get("buy_amount", 0)),
-        record.get("sell_date", ""), float(record.get("sell_price", 0)),
-        float(record.get("sell_qty", 0)), float(record.get("sell_amount", 0)),
-        now, now,
-    )
+    values_tail = _values_tail(record, now)
+    co, buy_date, qty = values_tail[0], values_tail[3], values_tail[5]
 
     conn = _connect()
     try:
@@ -382,17 +453,8 @@ def upsert_trades(records: list[dict]) -> list[str]:
     unkeyed_indices = []
 
     for i, record in enumerate(records):
-        co = record.get("company", "")
-        buy_date = record.get("buy_date", "")
-        qty = float(record.get("qty", 0))
-        values_tail = (
-            co, record.get("market", ""), record.get("ticker", ""),
-            buy_date, float(record.get("buy_price", 0)),
-            qty, float(record.get("buy_amount", 0)),
-            record.get("sell_date", ""), float(record.get("sell_price", 0)),
-            float(record.get("sell_qty", 0)), float(record.get("sell_amount", 0)),
-            now, now,
-        )
+        values_tail = _values_tail(record, now)
+        co, buy_date, qty = values_tail[0], values_tail[3], values_tail[5]
         key = record.get("orig_key")
         if key:
             keys[i] = key
@@ -402,13 +464,16 @@ def upsert_trades(records: list[dict]) -> list[str]:
 
     conn = _connect()
     try:
-        if keyed_rows:
-            conn.executemany(_UPSERT_SQL, keyed_rows)
-        for i, record, co, buy_date, qty, values_tail in unkeyed_indices:
-            key = _insert_with_generated_key(conn, f"{co}_{buy_date}_{qty}", values_tail)
-            record["orig_key"] = key
-            keys[i] = key
-        conn.commit()
+        # One transaction for the whole batch (the partial-sell split saves its
+        # closed sub-lot and the remainder together, review_codex.md #1); the
+        # generated keys reach the callers' records only after the commit.
+        with conn:
+            if keyed_rows:
+                conn.executemany(_UPSERT_SQL, keyed_rows)
+            for i, record, co, buy_date, qty, values_tail in unkeyed_indices:
+                keys[i] = _insert_with_generated_key(conn, f"{co}_{buy_date}_{qty}", values_tail)
+        for i, record, *_ in unkeyed_indices:
+            record["orig_key"] = keys[i]
         return keys
     finally:
         conn.close()
