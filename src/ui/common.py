@@ -8,6 +8,7 @@ Contains:
 
 import os
 import json
+import math
 import tempfile
 import logging
 import datetime as _dt
@@ -116,6 +117,16 @@ def _fmt_num_edit(edit: QLineEdit, text: str, decimal: bool = False) -> None:
         pass
 
 
+def _fmt_num_value(value) -> str:
+    """Pre-fill text for an edit field: thousands commas, every stored decimal
+    kept and trailing zeros dropped (123.45 -> "123.45", 700000.0 -> "700,000"),
+    so opening an edit dialog and saving unchanged round-trips the value.
+    Empty for 0/None, which the dialogs treat as "not entered"."""
+    if not value:
+        return ""
+    return f"{float(value):,.10f}".rstrip("0").rstrip(".")
+
+
 def _set_field_error(edit: QLineEdit, message: str = "") -> None:
     """Apply red-border error styling and tooltip on QLineEdit when message is truthy,
     or clear error styling when message is empty.
@@ -160,14 +171,16 @@ def _normalize_date_str(text: str) -> str:
 
 
 def _validate_positive_number(text: str) -> bool:
-    """True if text parses (after stripping ',' and '%') to a strictly positive float."""
+    """True if text parses (after stripping ',' and '%') to a strictly positive,
+    finite float -- float() accepts "inf"/"1e309"/"nan" (review_codex.md #6)."""
     text = text.replace(",", "").replace("%", "").strip()
     if not text:
         return False
     try:
-        return float(text) > 0
+        v = float(text)
     except ValueError:
         return False
+    return math.isfinite(v) and v > 0
 
 
 def _mk_field_validator(edit: QLineEdit, check_fn: Callable[[str], bool], error_msg: str) -> Callable[[], bool]:

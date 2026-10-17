@@ -67,6 +67,9 @@ class TestUiCommonValidators(unittest.TestCase):
         self.assertFalse(_validate_positive_number("-15.5"))
         self.assertFalse(_validate_positive_number(""))
         self.assertFalse(_validate_positive_number("abc"))
+        # float() accepts these; they must not pass (review_codex.md #6).
+        for text in ("inf", "-inf", "nan", "1e309"):
+            self.assertFalse(_validate_positive_number(text), text)
 
 
 class TestAtomicJsonIO(unittest.TestCase):

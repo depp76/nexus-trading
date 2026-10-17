@@ -108,5 +108,44 @@ class TestMultiYearDateCombo(_AssetsTabTestCase):
         self.assertEqual(tab._selected_date(), tab._date_combo.itemData(idx))
 
 
+class TestMetricsSnapshotOnly(_AssetsTabTestCase):
+    """review_codex.md #9: after the preload, table refreshes read the
+    worker's snapshot and never fetch on the UI thread; a stale snapshot or
+    a new date only schedules another background run."""
+
+    def setUp(self):
+        super().setUp()
+        self.mock_load.return_value = [{"date": "2026-01-02", "total": 1_450_000.0, "manual": True}]
+        self.tab = self._make_tab()
+        self.preload = self.tab._start_metrics_preload   # the patched mock
+        self.tab._on_metrics_preloaded({"2026-01-02": (1450.0, 2500.0)}, 1460.0)
+        self.preload.reset_mock()
+
+    def _no_network(self):
+        return patch("data.fx.fdr.DataReader", side_effect=AssertionError("network on UI thread")), \
+            patch("data.history.get_historical_data", side_effect=AssertionError("network on UI thread"))
+
+    def test_refresh_uses_the_snapshot(self):
+        fx_patch, hist_patch = self._no_network()
+        with fx_patch, hist_patch:
+            self.tab._refresh_table()
+        self.assertEqual(self.tab._rate_kospi_for_date("2026-01-02"), (1450.0, 2500.0))
+        self.assertEqual(self.tab._rate_lbl.text(), "USD/KRW: 1,460.0")
+        self.preload.assert_not_called()
+
+    def test_stale_snapshot_or_new_date_schedules_a_worker(self):
+        import datetime as _dt
+        self.tab._metrics_fetched_at -= _dt.timedelta(hours=1)
+        fx_patch, hist_patch = self._no_network()
+        with fx_patch, hist_patch:
+            self.tab._refresh_table()
+        self.preload.assert_called()
+
+        self.preload.reset_mock()
+        self.tab._metrics_fetched_at = _dt.datetime.now()
+        self.assertEqual(self.tab._rate_kospi_for_date("2026-01-09"), (0.0, 0.0))
+        self.preload.assert_called()
+
+
 if __name__ == "__main__":
     unittest.main()

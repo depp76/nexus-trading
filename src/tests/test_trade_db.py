@@ -6,6 +6,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import MagicMock
 
 import trade_db
 
@@ -258,6 +259,89 @@ class TestAssetRecords(TempDBMixin, unittest.TestCase):
         trade_db.save_asset_records([{"date": "2026-01-09", "total": 999.0, "manual": True}])
         trade_db.init_db()
         self.assertEqual(trade_db.load_asset_records(), [{"date": "2026-01-09", "total": 999.0, "manual": True}])
+
+    def test_emptied_table_is_not_refilled_from_the_json(self):
+        """review_codex.md #2: deleting every snapshot must stick."""
+        import json
+        with open(trade_db._ASSET_JSON, "w", encoding="utf-8") as f:
+            json.dump([{"date": "2026-01-02", "total": 100.0}], f)
+        trade_db.init_db()
+        self.assertEqual(len(trade_db.load_asset_records()), 1)
+        trade_db.save_asset_records([])
+        trade_db.init_db()
+        self.assertEqual(trade_db.load_asset_records(), [])
+
+    def test_rows_from_before_the_migrations_table_count_as_migrated(self):
+        import json
+        trade_db.save_asset_records([{"date": "2026-01-09", "total": 5.0, "manual": True}])
+        with open(trade_db._ASSET_JSON, "w", encoding="utf-8") as f:
+            json.dump([{"date": "2026-01-02", "total": 100.0}], f)
+        trade_db.init_db()
+        trade_db.save_asset_records([])
+        trade_db.init_db()
+        self.assertEqual(trade_db.load_asset_records(), [])
+
+    def test_non_finite_total_is_rejected_before_the_replace(self):
+        trade_db.save_asset_records([{"date": "2026-01-09", "total": 5.0, "manual": True}])
+        for bad in (float("nan"), float("inf")):
+            with self.assertRaises(ValueError):
+                trade_db.save_asset_records([{"date": "2026-01-16", "total": bad, "manual": True}])
+        self.assertEqual([r["date"] for r in trade_db.load_asset_records()], ["2026-01-09"])
+
+
+class TestLegacyTradeMigration(TempDBMixin, unittest.TestCase):
+    """review_codex.md #2: trades imported from the legacy JSON pair and
+    deleted afterwards must not come back on the next init_db()."""
+
+    def test_deleted_trades_stay_deleted(self):
+        import json
+        with open(trade_db._OVERRIDES_JSON, "w", encoding="utf-8") as f:
+            json.dump({"A_2024-01-01_1.0": {"company": "A", "buy_date": "2024-01-01", "qty": 1.0}}, f)
+        with open(trade_db._CUSTOM_JSON, "w", encoding="utf-8") as f:
+            json.dump([{"company": "B", "buy_date": "2024-02-01", "qty": 2.0}], f)
+        for path in (trade_db._OVERRIDES_JSON, trade_db._CUSTOM_JSON):
+            self.addCleanup(os.unlink, path)
+        trade_db.init_db()
+        trades = trade_db.load_all_trades()
+        self.assertEqual(len(trades), 2)
+        trade_db.delete_trade(trades[0]["orig_key"])
+        trade_db.init_db()
+        self.assertEqual(len(trade_db.load_all_trades()), 1)
+        trade_db.delete_trade(trade_db.load_all_trades()[0]["orig_key"])
+        trade_db.init_db()
+        self.assertEqual(trade_db.load_all_trades(), [])
+
+
+class TestWriteValidation(TempDBMixin, unittest.TestCase):
+
+    def test_not_null_violation_fails_instead_of_retrying_forever(self):
+        """review_codex.md #7: only an orig_key collision is retried."""
+        conn = trade_db._connect()
+        spy = MagicMock(wraps=conn)
+        try:
+            tail = (None, "KOSPI", "005930", "2024-01-01", 1.0, 1.0, 1.0, "", 0.0, 0.0, 0.0, "t", "t")
+            with self.assertRaises(sqlite3.IntegrityError):
+                trade_db._insert_with_generated_key(spy, "k", tail)
+            self.assertEqual(spy.execute.call_count, 1)
+        finally:
+            conn.close()
+
+    def test_none_company_is_rejected(self):
+        with self.assertRaises(ValueError):
+            trade_db.upsert_trade(_make_record(company=None))
+        self.assertEqual(trade_db.load_all_trades(), [])
+
+    def test_non_finite_numbers_are_rejected(self):
+        for field in ("buy_price", "qty", "buy_amount", "sell_price", "sell_qty", "sell_amount"):
+            for bad in (float("inf"), float("-inf"), float("nan")):
+                with self.assertRaises(ValueError, msg=f"{field}={bad}"):
+                    trade_db.upsert_trades([_make_record(**{field: bad})])
+        self.assertEqual(trade_db.load_all_trades(), [])
+
+    def test_real_collision_still_gets_a_distinct_key(self):
+        k1 = trade_db.upsert_trades([_make_record()])[0]
+        k2 = trade_db.upsert_trades([_make_record()])[0]
+        self.assertNotEqual(k1, k2)
 
 
 class TestBackupTo(TempDBMixin, unittest.TestCase):

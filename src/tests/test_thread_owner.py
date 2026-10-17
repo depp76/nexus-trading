@@ -11,6 +11,17 @@ app = QApplication.instance() or QApplication([])
 from ui.common import ThreadOwnerMixin  # noqa: E402
 
 
+def _fake_upsert_trades(generated_key):
+    """Stand-in for trade_db.upsert_trades that hands `generated_key` to the
+    record saved without an orig_key, as the real one does after its commit."""
+    def _upsert(records):
+        for r in records:
+            if not r.get("orig_key"):
+                r["orig_key"] = generated_key
+        return [r["orig_key"] for r in records]
+    return _upsert
+
+
 class _Worker(QThread):
     """Never started unless a test says so; run() returns immediately."""
     def run(self):
@@ -184,8 +195,7 @@ class TestSignalSlotArity(unittest.TestCase):
                             "sell_qty": 40.0, "sell_amount": 48000.0}
 
         with patch("ui.history_tab.SellEditDialog", return_value=dlg), \
-             patch("ui.history_tab.trade_db.upsert_trade", return_value="k1_2") as upsert, \
-             patch("ui.history_tab.trade_db.upsert_trades"), \
+             patch("ui.history_tab.trade_db.upsert_trades", side_effect=_fake_upsert_trades("k1_2")) as upsert, \
              patch.object(tab, "_refresh_summary"), patch.object(tab, "_apply_filter"):
             tab._on_cell_double_clicked(0, 10)
 
@@ -203,8 +213,68 @@ class TestSignalSlotArity(unittest.TestCase):
         self.assertEqual(remainder["buy_amount"], 60000.0)
         self.assertEqual(remainder["sell_date"], "")
         self.assertEqual(remainder["orig_key"], "k1_2")
+        # Closed sub-lot and remainder are saved in one batch (review_codex.md #1).
         upsert.assert_called_once()
+        self.assertEqual(len(upsert.call_args.args[0]), 2)
         tab._settings_save_timer.stop()
+
+    def test_history_tab_partial_sell_failure_leaves_db_and_screen_unchanged(self):
+        """review_codex.md #1: the split is one transaction against a real temp
+        DB; a failure on the remainder INSERT must not leave the closed
+        sub-lot committed, nor change the in-memory lists."""
+        import os
+        import shutil
+        import tempfile
+        import trade_db
+        from ui.history_tab import TradingHistoryTab
+
+        tmp = tempfile.mkdtemp()
+        saved = (trade_db._DB_FILE, trade_db._CUSTOM_JSON, trade_db._OVERRIDES_JSON, trade_db._ASSET_JSON)
+        trade_db._DB_FILE = os.path.join(tmp, "t.db")
+        trade_db._CUSTOM_JSON = trade_db._OVERRIDES_JSON = trade_db._ASSET_JSON = os.path.join(tmp, "none.json")
+        try:
+            trade_db.init_db()
+            rec = {"ticker": "005930", "company": "A", "market": "KOSPI", "buy_date": "2026-01-01",
+                   "buy_price": 1000.0, "qty": 10.0, "buy_amount": 10000.0,
+                   "sell_date": "", "sell_price": 0.0, "sell_qty": 0.0, "sell_amount": 0.0}
+            trade_db.upsert_trade(rec)
+            tab = TradingHistoryTab()
+            tab._open_data = [rec]
+            tab._closed_data = []
+            tab._row_data = [("open", rec)]
+            before = dict(rec)
+
+            dlg = MagicMock()
+            dlg.exec.return_value = QDialog.DialogCode.Accepted
+            dlg.result_data = {"sell_date": "2026-02-01", "sell_price": 1200.0,
+                               "sell_qty": 4.0, "sell_amount": 4800.0}
+            real_insert = trade_db._insert_with_generated_key
+
+            def _failing_insert(*a, **kw):
+                raise RuntimeError("injected")
+            with patch("ui.history_tab.SellEditDialog", return_value=dlg), \
+                 patch("trade_db._insert_with_generated_key", side_effect=_failing_insert), \
+                 patch("ui.history_tab.QMessageBox"), \
+                 patch.object(tab, "_refresh_summary"), patch.object(tab, "_apply_filter"):
+                tab._on_cell_double_clicked(0, 10)
+
+            rows = [(t["qty"], t["sell_qty"]) for t in trade_db.load_all_trades()]
+            self.assertEqual(rows, [(10.0, 0.0)])
+            self.assertEqual(rec, before)
+            self.assertEqual(tab._open_data, [rec])
+            self.assertEqual(tab._closed_data, [])
+
+            # Same edit without the injected failure: 4 sold + 6 open, cost preserved.
+            with patch("ui.history_tab.SellEditDialog", return_value=dlg), \
+                 patch("trade_db._insert_with_generated_key", side_effect=real_insert), \
+                 patch.object(tab, "_refresh_summary"), patch.object(tab, "_apply_filter"):
+                tab._on_cell_double_clicked(0, 10)
+            rows = sorted((t["qty"], t["sell_qty"], t["buy_amount"]) for t in trade_db.load_all_trades())
+            self.assertEqual(rows, [(4.0, 4.0, 4000.0), (6.0, 0.0, 6000.0)])
+            tab._settings_save_timer.stop()
+        finally:
+            trade_db._DB_FILE, trade_db._CUSTOM_JSON, trade_db._OVERRIDES_JSON, trade_db._ASSET_JSON = saved
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_history_tab_sequential_partial_sells_keep_splitting_correctly(self):
         """review_agy.md (4th pass) #6: a second partial sell on the
@@ -226,8 +296,7 @@ class TestSignalSlotArity(unittest.TestCase):
         dlg1.result_data = {"sell_date": "2026-02-01", "sell_price": 1200.0,
                              "sell_qty": 30.0, "sell_amount": 36000.0}
         with patch("ui.history_tab.SellEditDialog", return_value=dlg1), \
-             patch("ui.history_tab.trade_db.upsert_trade", return_value="k1_2"), \
-             patch("ui.history_tab.trade_db.upsert_trades"), \
+             patch("ui.history_tab.trade_db.upsert_trades", side_effect=_fake_upsert_trades("k1_2")), \
              patch.object(tab, "_refresh_summary"), patch.object(tab, "_apply_filter"):
             tab._on_cell_double_clicked(0, 10)
 
@@ -245,8 +314,7 @@ class TestSignalSlotArity(unittest.TestCase):
         dlg2.result_data = {"sell_date": "2026-03-01", "sell_price": 1300.0,
                              "sell_qty": 20.0, "sell_amount": 26000.0}
         with patch("ui.history_tab.SellEditDialog", return_value=dlg2), \
-             patch("ui.history_tab.trade_db.upsert_trade", return_value="k1_3"), \
-             patch("ui.history_tab.trade_db.upsert_trades"), \
+             patch("ui.history_tab.trade_db.upsert_trades", side_effect=_fake_upsert_trades("k1_3")), \
              patch.object(tab, "_refresh_summary"), patch.object(tab, "_apply_filter"):
             tab._on_cell_double_clicked(0, 10)
 

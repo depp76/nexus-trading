@@ -9,6 +9,30 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def trade_conflict(buy_date: str, qty: float, sell_date: str, sell_qty: float) -> str:
+    """Buy/sell consistency of one lot: "" when consistent, else the message
+    to show. Shared by BuyEditDialog and SellEditDialog so editing either side
+    of a closed trade can't break what the other side's check guarantees
+    (review_codex.md #5). Unparseable dates (records predating the date
+    validation) skip the date check."""
+    if buy_date and sell_date:
+        try:
+            if _dt.datetime.strptime(buy_date, "%Y-%m-%d") > _dt.datetime.strptime(sell_date, "%Y-%m-%d"):
+                return f"Buy date ({buy_date}) cannot be later than sell date ({sell_date})."
+        except ValueError:
+            pass
+    if sell_qty < 0:
+        return "Sell quantity cannot be negative."
+    # A sell quantity beyond what was actually bought bypasses the
+    # partial-sell proration in compute_pl_fields (its s_qty < b_qty branch),
+    # so pl gets computed as the full sell_amount minus the full buy_amount --
+    # inflating realized P/L with proceeds from shares that were never owned
+    # (review_agy.md #2).
+    if qty > 0 and sell_qty > qty:
+        return f"Sell quantity ({sell_qty:,.0f}) cannot exceed the holding quantity ({qty:,.0f})."
+    return ""
+
+
 def compute_pl_fields(rec: dict):
     """Recalculate pl, pl_pct, days_held and curr_days in-place."""
     s_amt = rec.get("sell_amount", 0.0)
