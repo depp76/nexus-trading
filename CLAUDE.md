@@ -194,7 +194,8 @@ plus the legacy `custom_history.json` / `trade_overrides.json` pair (read once b
 `_migrate_legacy_json`) and the legacy `trading_record.json` (read once by
 `_migrate_asset_records_json`; left on disk afterwards — both imports record completion in
 `portfolio.db`'s `migrations` table so deleted rows are never re-imported), and
-the rebuildable research caches under `cache/` (`investor_flows/<ticker>.json`, `cd91.json`).
+the rebuildable caches under `cache/` (`investor_flows/<ticker>.json`, `cd91.json`, and
+`jp10y.json`, the last MOF JP 10Y series, served when the download fails).
 All of these paths come from `src/paths.py`. They are runtime data,
 not fixtures. Trading History principal/deposit/withdrawal live in `QSettings`
 (scope "PortfolioManagement"/"PortfolioManagement"; migrated once from the old

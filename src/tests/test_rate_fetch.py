@@ -1,6 +1,9 @@
 """tests/test_rate_fetch.py — JP10Y (MOF CSVs), KR3Y (Naver) and USD/KRW (Yahoo chart)
-fetches: request timeouts, one lock per cache, and keeping the cached value on
-network failures with a one-line warning."""
+fetches: request timeouts, one lock per cache, keeping the cached value on network
+failures with a one-line warning, and the JP10Y disk cache."""
+import json
+import os
+import tempfile
 import threading
 import unittest
 from unittest.mock import MagicMock, patch
@@ -10,6 +13,31 @@ import requests
 
 from data import cache, fx
 from data.collectors import krx, naver
+
+_TMP_DIR = None
+_DISK_PATCH = None
+
+
+def setUpModule():
+    # Every JP10Y test reads/writes a throwaway disk cache, never the real cache/jp10y.json.
+    global _TMP_DIR, _DISK_PATCH
+    _TMP_DIR = tempfile.TemporaryDirectory()
+    _DISK_PATCH = patch("data.collectors.krx.JP10Y_CACHE_FILE",
+                        os.path.join(_TMP_DIR.name, "cache", "jp10y.json"))
+    _DISK_PATCH.start()
+
+
+def tearDownModule():
+    _DISK_PATCH.stop()
+    _TMP_DIR.cleanup()
+
+
+def _clear_jp10y_disk_cache():
+    try:
+        os.remove(krx.JP10Y_CACHE_FILE)
+    except FileNotFoundError:
+        pass
+
 
 _LOCKS = {"jp10y": cache._JP10Y_LOCK, "kr3y": cache._KR3Y_LOCK, "usd_krw": cache._USD_KRW_LOCK}
 
@@ -63,6 +91,7 @@ class TestLocks(unittest.TestCase):
 
         saved_jp, saved_usd = cache._JP10Y_CACHE["df"], dict(cache._USD_KRW_CACHE)
         cache._JP10Y_CACHE["df"] = None
+        _clear_jp10y_disk_cache()
         cache._USD_KRW_CACHE.update(rate=1400.0, df=None, fetched_at=None)
         try:
             with patch.object(krx._MOF_SESSION, "get", side_effect=slow_get):
@@ -75,6 +104,7 @@ class TestLocks(unittest.TestCase):
         finally:
             release.set()
             cache._JP10Y_CACHE["df"] = saved_jp
+            _clear_jp10y_disk_cache()
             cache._USD_KRW_CACHE.update(saved_usd)
 
 
@@ -86,9 +116,11 @@ class TestJp10yFetch(unittest.TestCase):
     def setUp(self):
         self._saved = cache._JP10Y_CACHE["df"]
         cache._JP10Y_CACHE["df"] = None
+        _clear_jp10y_disk_cache()
 
     def tearDown(self):
         cache._JP10Y_CACHE["df"] = self._saved
+        _clear_jp10y_disk_cache()
 
     @patch.object(krx._MOF_SESSION, "get")
     def test_merges_both_csvs_with_timeout(self, mock_get):
@@ -122,6 +154,37 @@ class TestJp10yFetch(unittest.TestCase):
         mock_get.side_effect = fake_get
         krx._get_jp10y_df()
         self.assertEqual(held, [[], []])
+
+    @patch.object(krx._MOF_SESSION, "get")
+    def test_download_is_written_to_disk_and_read_back(self, mock_get):
+        mock_get.side_effect = [_csv_response(_HIST_CSV), _csv_response(_RECENT_CSV)]
+        fetched = krx._get_jp10y_df()
+        with open(krx.JP10Y_CACHE_FILE, encoding="utf-8") as f:
+            self.assertEqual(json.load(f), {"2024-01-04": 0.60, "2024-01-05": 0.62, "2024-01-09": 0.65})
+        loaded = krx._load_jp10y_disk_cache()
+        pd.testing.assert_frame_equal(loaded, fetched, check_freq=False)
+
+    @patch.object(krx._MOF_SESSION, "get")
+    def test_failed_first_download_serves_the_disk_series(self, mock_get):
+        mock_get.side_effect = [_csv_response(_HIST_CSV), _csv_response(_RECENT_CSV)]
+        krx._get_jp10y_df()
+        cache._JP10Y_CACHE["df"] = None  # a new process: memory empty, disk filled
+        mock_get.side_effect = requests.ConnectTimeout("timed out")
+        with patch("data.collectors.krx._pdf_is_stale", return_value=True),                 self.assertLogs("data.collectors.krx", level="WARNING"):
+            result = krx._get_jp10y_df()
+        self.assertEqual(list(result["Close"]), [0.60, 0.62, 0.65])
+        self.assertIs(cache._JP10Y_CACHE["df"], result)
+
+    @patch.object(krx._MOF_SESSION, "get")
+    def test_unreadable_disk_cache_is_ignored(self, mock_get):
+        os.makedirs(os.path.dirname(krx.JP10Y_CACHE_FILE), exist_ok=True)
+        with open(krx.JP10Y_CACHE_FILE, "w", encoding="utf-8") as f:
+            f.write("{not json")
+        mock_get.side_effect = [_csv_response(_HIST_CSV), _csv_response(_RECENT_CSV)]
+        with self.assertLogs("data.collectors.krx", level="WARNING") as logs:
+            df = krx._get_jp10y_df()
+        self.assertEqual(len(df), 3)
+        self.assertIn("unreadable", logs.output[0])
 
 
 class TestKr3yFetch(unittest.TestCase):

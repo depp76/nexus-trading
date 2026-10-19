@@ -11,7 +11,7 @@ import pandas as pd
 import polars as pl
 import logging
 
-from paths import VKOSPI_CACHE_FILE
+from paths import JP10Y_CACHE_FILE, VKOSPI_CACHE_FILE
 from data.cache import (
     start_date,
     _JP10Y_CACHE,
@@ -211,10 +211,49 @@ def _read_mof_csv(path: str) -> pd.DataFrame:
     return pd.read_csv(io.BytesIO(res.content), skiprows=1, encoding='shift_jis')
 
 
+def _load_jp10y_disk_cache():
+    """Last downloaded series from JP10Y_CACHE_FILE ({YYYY-MM-DD: yield %}), or None."""
+    try:
+        with open(JP10Y_CACHE_FILE, "r", encoding="utf-8") as f:
+            rows = json.load(f)
+    except FileNotFoundError:
+        return None
+    except Exception:
+        logger.warning("JP10Y disk cache unreadable, ignoring", exc_info=True)
+        return None
+    if not rows:
+        return None
+    df = pd.DataFrame({"Close": [float(v) for v in rows.values()]},
+                      index=pd.to_datetime(list(rows.keys())))
+    df.index.name = "Date"
+    return df.sort_index()
+
+
+def _save_jp10y_disk_cache(df: pd.DataFrame) -> None:
+    rows = {d.strftime("%Y-%m-%d"): float(v) for d, v in df["Close"].items()}
+    try:
+        os.makedirs(os.path.dirname(JP10Y_CACHE_FILE), exist_ok=True)
+        tmp = JP10Y_CACHE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(rows, f)
+        os.replace(tmp, JP10Y_CACHE_FILE)
+    except Exception:
+        logger.warning("JP10Y disk cache save failed", exc_info=True)
+
+
 def _get_jp10y_df():
-    """Fetch Japan 10-year government bond yield."""
+    """Fetch Japan 10-year government bond yield.
+
+    The last downloaded series is also kept in JP10Y_CACHE_FILE, so a failed download
+    right after startup still returns yesterday's series instead of None. MOF publishes
+    with a lag of a few business days, so on weekdays the series is always "stale" by
+    _pdf_is_stale and each full refresh still tries the network.
+    """
     with _JP10Y_LOCK:
         cached = _JP10Y_CACHE["df"]
+        if cached is None:
+            cached = _load_jp10y_disk_cache()
+            _JP10Y_CACHE["df"] = cached
         if cached is not None and not _pdf_is_stale(cached):
             return cached
         try:
@@ -227,6 +266,7 @@ def _get_jp10y_df():
                   .sort_values('Date')
                   .set_index('Date'))
             _JP10Y_CACHE["df"] = df
+            _save_jp10y_disk_cache(df)
             return df
         except requests.RequestException as e:
             # Network-level failures (timeouts, refused connections, HTTP errors) are
@@ -235,24 +275,4 @@ def _get_jp10y_df():
         except Exception:
             # Anything else means the CSV layout changed, which needs the traceback.
             logger.error("JP10Y parse failed", exc_info=True)
-        return cached
-        try:
-            df1 = pd.read_csv(
-                'https://www.mof.go.jp/english/policy/jgbs/reference/interest_rate/historical/jgbcme_all.csv',
-                skiprows=1, encoding='shift_jis')
-            df2 = pd.read_csv(
-                'https://www.mof.go.jp/english/policy/jgbs/reference/interest_rate/jgbcme.csv',
-                skiprows=1, encoding='shift_jis')
-            df = pd.concat([df1, df2], ignore_index=True)
-            df.rename(columns={'Date': 'Date', '10Y': 'Close'}, inplace=True)
-            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-            df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
-            df = (df[['Date', 'Close']]
-                  .dropna(subset=['Date', 'Close'])
-                  .sort_values('Date')
-                  .set_index('Date'))
-            _JP10Y_CACHE["df"] = df
-            return df
-        except Exception:
-            logger.error("JP10Y fetch failed", exc_info=True)
         return cached
