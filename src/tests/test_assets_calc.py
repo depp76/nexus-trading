@@ -9,23 +9,23 @@ import data_fetcher
 
 
 class TestUsdKrwCache(unittest.TestCase):
-    """get_usd_krw_rate's session cache. `fdr` is patched on data.fx, the
+    """get_usd_krw_rate's session cache. The download is patched on data.fx, the
     module that actually calls it (roadmap 6-2a)."""
 
     def setUp(self):
         data_fetcher._USD_KRW_CACHE["rate"] = None
         data_fetcher._USD_KRW_CACHE["df"] = None
 
-    @patch("data.fx.fdr")
-    def test_cached_rate_is_reused(self, mock_fdr):
+    @patch("data.fx._fetch_usd_krw_history")
+    def test_cached_rate_is_reused(self, mock_fetch):
         data_fetcher._USD_KRW_CACHE["rate"] = 1350.0
         rate = data_fetcher.get_usd_krw_rate()
         self.assertAlmostEqual(rate, 1350.0)
-        mock_fdr.DataReader.assert_not_called()
+        mock_fetch.assert_not_called()
 
-    @patch("data.fx.fdr")
-    def test_fallback_on_fdr_error(self, mock_fdr):
-        mock_fdr.DataReader.side_effect = Exception("Network error")
+    @patch("data.fx._fetch_usd_krw_history")
+    def test_fallback_on_fetch_error(self, mock_fetch):
+        mock_fetch.side_effect = Exception("Network error")
         rate = data_fetcher.get_usd_krw_rate()
         self.assertIsInstance(rate, float)
         self.assertGreater(rate, 0)

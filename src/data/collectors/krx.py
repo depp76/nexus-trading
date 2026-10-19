@@ -1,4 +1,5 @@
 """data/collectors/krx.py — KRX Open API (VKOSPI, derivative indices) and JP10Y bond data."""
+import io
 import os
 import json
 import threading
@@ -14,7 +15,7 @@ from paths import VKOSPI_CACHE_FILE
 from data.cache import (
     start_date,
     _JP10Y_CACHE,
-    _MISC_CACHE_LOCK,
+    _JP10Y_LOCK,
     _pdf_is_stale,
     safe_float,
 )
@@ -195,12 +196,45 @@ def _get_vkospi_pdf() -> pd.DataFrame:
     return pdf
 
 
+_JP10Y_BASE_URL = "https://www.mof.go.jp/english/policy/jgbs/reference/interest_rate/"
+_JP10Y_CSV_PATHS = ("historical/jgbcme_all.csv", "jgbcme.csv")
+# (connect, read) seconds. The connect budget covers three SYN retransmits (1+2+4 s):
+# connects to mof.go.jp from here regularly take 3-7 s (measured 2026-10-19), and an
+# outright drop otherwise waits for the ~21 s OS default. The historical CSV is ~1.2 MB.
+_JP10Y_TIMEOUT = (10, 20)
+
+
+def _read_mof_csv(path: str) -> pd.DataFrame:
+    res = requests.get(_JP10Y_BASE_URL + path, timeout=_JP10Y_TIMEOUT)
+    res.raise_for_status()
+    return pd.read_csv(io.BytesIO(res.content), skiprows=1, encoding='shift_jis')
+
+
 def _get_jp10y_df():
     """Fetch Japan 10-year government bond yield."""
-    with _MISC_CACHE_LOCK:
+    with _JP10Y_LOCK:
         cached = _JP10Y_CACHE["df"]
         if cached is not None and not _pdf_is_stale(cached):
             return cached
+        try:
+            df = pd.concat([_read_mof_csv(path) for path in _JP10Y_CSV_PATHS], ignore_index=True)
+            df.rename(columns={'Date': 'Date', '10Y': 'Close'}, inplace=True)
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+            df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
+            df = (df[['Date', 'Close']]
+                  .dropna(subset=['Date', 'Close'])
+                  .sort_values('Date')
+                  .set_index('Date'))
+            _JP10Y_CACHE["df"] = df
+            return df
+        except requests.RequestException as e:
+            # Network-level failures (timeouts, refused connections, HTTP errors) are
+            # transient; one line is enough and the next refresh retries.
+            logger.warning("JP10Y fetch failed, keeping cached series: %s", e)
+        except Exception:
+            # Anything else means the CSV layout changed, which needs the traceback.
+            logger.error("JP10Y parse failed", exc_info=True)
+        return cached
         try:
             df1 = pd.read_csv(
                 'https://www.mof.go.jp/english/policy/jgbs/reference/interest_rate/historical/jgbcme_all.csv',

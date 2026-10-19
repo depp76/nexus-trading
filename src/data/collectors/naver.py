@@ -8,9 +8,10 @@ from datetime import datetime, date as _date
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import polars as pl
+import requests
 import logging
 
-from data.cache import _KR3Y_CACHE, _MISC_CACHE_LOCK, _NAVER_SESSION, _pdf_is_stale
+from data.cache import _KR3Y_CACHE, _KR3Y_LOCK, _NAVER_SESSION, _pdf_is_stale
 
 logger = logging.getLogger(__name__)
 
@@ -313,7 +314,7 @@ def _fetch_kr_listing_naver(market, top_n):
 
 def _get_kr3y_df():
     """Fetch KR 3-year bond yield from Naver."""
-    with _MISC_CACHE_LOCK:
+    with _KR3Y_LOCK:
         cached = _KR3Y_CACHE["df"]
         if _KR3Y_API_DISABLED:
             return cached
@@ -324,6 +325,7 @@ def _get_kr3y_df():
 
             def fetch_page(p):
                 res = _NAVER_SESSION.get(url_base + str(p), timeout=5)
+                res.raise_for_status()
                 df = pd.read_html(io.StringIO(res.text))[0]
                 return df.dropna(subset=[df.columns[1]])
 
@@ -344,8 +346,13 @@ def _get_kr3y_df():
                         .set_index('Date'))
             _KR3Y_CACHE["df"] = hist
             return hist
+        except requests.RequestException as e:
+            # Network-level failures are transient; one line, the next refresh retries.
+            logger.warning("KR3Y fetch failed, keeping cached series: %s", e)
+            return cached
         except Exception:
-            logger.error("KR3Y fetch failed", exc_info=True)
+            # Anything else means the page layout changed, which needs the traceback.
+            logger.error("KR3Y parse failed", exc_info=True)
             return cached
 
 

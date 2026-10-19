@@ -122,7 +122,7 @@ class TestMetricsSnapshotOnly(_AssetsTabTestCase):
         self.preload.reset_mock()
 
     def _no_network(self):
-        return patch("data.fx.fdr.DataReader", side_effect=AssertionError("network on UI thread")), \
+        return patch("data.fx._fetch_usd_krw_history", side_effect=AssertionError("network on UI thread")), \
             patch("data.history.get_historical_data", side_effect=AssertionError("network on UI thread"))
 
     def test_refresh_uses_the_snapshot(self):
