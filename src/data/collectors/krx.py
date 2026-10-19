@@ -16,6 +16,7 @@ from data.cache import (
     start_date,
     _JP10Y_CACHE,
     _JP10Y_LOCK,
+    _MOF_SESSION,
     _pdf_is_stale,
     safe_float,
 )
@@ -198,14 +199,14 @@ def _get_vkospi_pdf() -> pd.DataFrame:
 
 _JP10Y_BASE_URL = "https://www.mof.go.jp/english/policy/jgbs/reference/interest_rate/"
 _JP10Y_CSV_PATHS = ("historical/jgbcme_all.csv", "jgbcme.csv")
-# (connect, read) seconds. The connect budget covers three SYN retransmits (1+2+4 s):
-# connects to mof.go.jp from here regularly take 3-7 s (measured 2026-10-19), and an
-# outright drop otherwise waits for the ~21 s OS default. The historical CSV is ~1.2 MB.
-_JP10Y_TIMEOUT = (10, 20)
+# (connect, read) seconds. The connect timeout is per attempt: _MOF_SESSION retries a
+# failed connect three times, so a dropped connection costs 3 s instead of the ~21 s OS
+# default and the worst case is ~12 s per CSV. The historical CSV is ~1.2 MB.
+_JP10Y_TIMEOUT = (3, 20)
 
 
 def _read_mof_csv(path: str) -> pd.DataFrame:
-    res = requests.get(_JP10Y_BASE_URL + path, timeout=_JP10Y_TIMEOUT)
+    res = _MOF_SESSION.get(_JP10Y_BASE_URL + path, timeout=_JP10Y_TIMEOUT)
     res.raise_for_status()
     return pd.read_csv(io.BytesIO(res.content), skiprows=1, encoding='shift_jis')
 
