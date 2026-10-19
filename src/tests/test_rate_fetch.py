@@ -65,7 +65,7 @@ class TestLocks(unittest.TestCase):
         cache._JP10Y_CACHE["df"] = None
         cache._USD_KRW_CACHE.update(rate=1400.0, df=None, fetched_at=None)
         try:
-            with patch("data.collectors.krx.requests.get", side_effect=slow_get):
+            with patch.object(krx._MOF_SESSION, "get", side_effect=slow_get):
                 worker = threading.Thread(target=krx._get_jp10y_df)
                 worker.start()
                 self.assertTrue(started.wait(5))
@@ -79,6 +79,10 @@ class TestLocks(unittest.TestCase):
 
 
 class TestJp10yFetch(unittest.TestCase):
+    def test_session_retries_connects_but_not_reads(self):
+        retry = cache._MOF_SESSION.get_adapter(krx._JP10Y_BASE_URL).max_retries
+        self.assertEqual((retry.connect, retry.read, retry.status), (3, 0, 0))
+
     def setUp(self):
         self._saved = cache._JP10Y_CACHE["df"]
         cache._JP10Y_CACHE["df"] = None
@@ -86,7 +90,7 @@ class TestJp10yFetch(unittest.TestCase):
     def tearDown(self):
         cache._JP10Y_CACHE["df"] = self._saved
 
-    @patch("data.collectors.krx.requests.get")
+    @patch.object(krx._MOF_SESSION, "get")
     def test_merges_both_csvs_with_timeout(self, mock_get):
         mock_get.side_effect = [_csv_response(_HIST_CSV), _csv_response(_RECENT_CSV)]
         df = krx._get_jp10y_df()
@@ -96,7 +100,7 @@ class TestJp10yFetch(unittest.TestCase):
             self.assertEqual(call.kwargs["timeout"], krx._JP10Y_TIMEOUT)
         self.assertIs(cache._JP10Y_CACHE["df"], df)
 
-    @patch("data.collectors.krx.requests.get")
+    @patch.object(krx._MOF_SESSION, "get")
     def test_network_failure_keeps_cache_and_logs_one_line(self, mock_get):
         cached = pd.DataFrame({"Close": [0.5]}, index=pd.to_datetime(["2024-01-01"]))
         cache._JP10Y_CACHE["df"] = cached
@@ -107,7 +111,7 @@ class TestJp10yFetch(unittest.TestCase):
         self.assertIs(result, cached)
         self.assertEqual([(r.levelname, r.exc_info) for r in logs.records], [("WARNING", None)])
 
-    @patch("data.collectors.krx.requests.get")
+    @patch.object(krx._MOF_SESSION, "get")
     def test_fetch_holds_only_its_own_lock(self, mock_get):
         held = []
 

@@ -125,6 +125,18 @@ _NAVER_SESSION = requests.Session()
 _NAVER_SESSION.mount("https://", HTTPAdapter(pool_maxsize=100))
 _NAVER_SESSION.headers.update({"User-Agent": "Mozilla/5.0"})
 
+# Session for the Japan MOF JGB CSVs (data/collectors/krx.py::_get_jp10y_df). On 2026-10-19
+# a share of new connections to it never completed (2 of 12 attempts not connected within
+# 10 s, while the rest connected in ~0.02 s and an immediate new attempt usually succeeded;
+# a 15-run check later that day needed 11 retries, 3 of them a second one). The same day
+# connects to Yahoo, KRX and GitHub dropped too, so the cause is more likely the local
+# network than the MOF host. Either way, connection failures are retried right away
+# instead of waiting longer on one attempt. Reads are not retried. One session also lets
+# the two CSVs reuse a connection when the server keeps it open.
+_MOF_SESSION = requests.Session()
+_MOF_SESSION.mount("https://", HTTPAdapter(max_retries=urllib3.util.Retry(
+    total=None, connect=3, read=0, status=0, other=0, backoff_factor=0)))
+
 # Shared session for the KIS (Korea Investment & Securities) Open API (data/collectors/kis.py).
 _KIS_SESSION = requests.Session()
 
