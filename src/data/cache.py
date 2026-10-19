@@ -63,11 +63,14 @@ _JP10Y_CACHE: dict = {"df": None}
 _KR3Y_CACHE: dict = {"df": None}
 _VKOSPI_CACHE: dict = {}
 
-# Shared lock serializing the check-then-fetch-then-set cycle of the
-# low-traffic caches above (_USD_KRW_CACHE, _JP10Y_CACHE, _KR3Y_CACHE), so
-# concurrent callers (e.g. fetch_major_indices_as_stocks fanning out one
-# thread per index) don't each redundantly fetch on a cold/stale cache.
-_MISC_CACHE_LOCK = threading.Lock()
+# One lock per low-traffic cache above, serializing its check-then-fetch-then-set
+# cycle so concurrent callers (e.g. fetch_major_indices_as_stocks fanning out one
+# thread per index) don't each redundantly fetch on a cold/stale cache. They used
+# to share a single lock, which let one slow download (a timed-out MOF CSV) stall
+# the unrelated lookups behind it.
+_USD_KRW_LOCK = threading.Lock()
+_JP10Y_LOCK = threading.Lock()
+_KR3Y_LOCK = threading.Lock()
 
 # Staging cache for yfinance bulk downloads: fetch_us_stock_data_bulk() fills it
 # per chunk and _fetch_historical_uncached() reads it before hitting the network.
