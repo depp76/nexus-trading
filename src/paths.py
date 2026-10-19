@@ -41,6 +41,9 @@ CACHE_DIR = root_path("cache")
 FLOWS_CACHE_DIR = root_path("cache", "investor_flows")
 CD91_CACHE_FILE = root_path("cache", "cd91.json")
 CD91_CSV_FILE = root_path("cd91.csv")
+# Last downloaded JP 10Y JGB yield series (data/collectors/krx.py), served when the
+# MOF download fails.
+JP10Y_CACHE_FILE = root_path("cache", "jp10y.json")
 
 # Backtest reports written by the Strategy tab ("Save Report").
 REPORTS_DIR = root_path("reports")
