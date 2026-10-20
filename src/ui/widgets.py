@@ -59,7 +59,7 @@ ColSpec = namedtuple("ColSpec", ["key", "label", "min_width", "weight", "group",
 # User direction 2026-10-02: column order is Cap, tPER, fPER, 52W Range,
 # MA20 Div, MA50 Div, Price, Chg, 3D ... (Price/Chg moved next to the
 # momentum block; the PER pair sits right of Cap). User direction
-# 2026-10-20: Price moved again, to the left of 52W Range. _populate_row still builds cells in its own order and
+# 2026-10-20: Price and Chg moved again, to the left of 52W Range. _populate_row still builds cells in its own order and
 # addresses them by the COL_* constants, so only this list and the
 # constants below changed.
 _NARROW_W, _NARROW_WEIGHT = 58, 0.62
@@ -70,10 +70,10 @@ COLUMNS = [
     ColSpec("tper",      "tPER",           54, 0.55, "value",    None),
     ColSpec("fper",      "fPER",           54, 0.55, "value",    None),
     ColSpec("price",     "Price",          80, None, "price",    None),
+    ColSpec("chg",       "Chg",            _NARROW_W, _NARROW_WEIGHT, "price",    5),
     ColSpec("range52w",  "52W Range",     112, 1.5,  "price",    None),
     ColSpec("ma20div",   "MA20 Div",       _NARROW_W, _NARROW_WEIGHT, "momentum", 20),
     ColSpec("ma50div",   "MA50 Div",       _NARROW_W, _NARROW_WEIGHT, "momentum", 20),
-    ColSpec("chg",      "Chg",            _NARROW_W, _NARROW_WEIGHT, "price",    5),
     ColSpec("d3",        "3D",             _NARROW_W, _NARROW_WEIGHT, "momentum", 10),
     ColSpec("d10",       "10D",            _NARROW_W, _NARROW_WEIGHT, "momentum", 10),
     ColSpec("d20",       "20D",            _NARROW_W, _NARROW_WEIGHT, "momentum", 10),
@@ -86,21 +86,21 @@ COLUMNS = [
 # truth, but spelling out "self.item(row, 1)" everywhere a specific column
 # is meant makes future reordering a silent bug. Kept in sync with COLUMNS
 # by the assertion below (fails loudly at import time if they drift).
-COL_IDENTITY, COL_CAP, COL_TPER, COL_FPER, COL_PRICE, COL_RANGE52W, COL_MA20DIV, \
-    COL_MA50DIV, COL_CHG, COL_D3, COL_D10, COL_D20, COL_D60, COL_D120, COL_TREND = range(len(COLUMNS))
+COL_IDENTITY, COL_CAP, COL_TPER, COL_FPER, COL_PRICE, COL_CHG, COL_RANGE52W, \
+    COL_MA20DIV, COL_MA50DIV, COL_D3, COL_D10, COL_D20, COL_D60, COL_D120, COL_TREND = range(len(COLUMNS))
 assert [c.key for c in COLUMNS] == [
-    "identity", "cap", "tper", "fper", "price", "range52w", "ma20div", "ma50div",
-    "chg", "d3", "d10", "d20", "d60", "d120", "trend",
+    "identity", "cap", "tper", "fper", "price", "chg", "range52w", "ma20div", "ma50div",
+    "d3", "d10", "d20", "d60", "d120", "trend",
 ]
 
-# Column groups (user direction 2026-10-02; Price moved left of 52W Range
-# on 2026-10-20, Chg now opens the momentum group): [Cap, tPER, fPER],
-# [Price, 52W Range, MA20 Div, MA50 Div], [Chg, 3D..120D], [Trend]. A thin gray
+# Column groups (user direction 2026-10-02; the [Price, Chg] pair moved left
+# of 52W Range on 2026-10-20): [Cap, tPER, fPER], [Price, Chg], [52W Range,
+# MA20 Div, MA50 Div], [3D..120D], [Trend]. A thin gray
 # (GROUP_LINE_W px, LINE_GROUP = the table's outer-frame gray) vertical
 # divider sits on the boundary on the left of each group's first column
 # (the previous column's last pixel, where the grid line is): that also
 # covers the left of Cap and the right of 120D (= the left of Trend).
-GROUP_START_COLS = (COL_CAP, COL_PRICE, COL_CHG, COL_TREND)
+GROUP_START_COLS = (COL_CAP, COL_PRICE, COL_RANGE52W, COL_D3, COL_TREND)
 GROUP_LINE_W = 1
 
 # Momentum columns paired with the changes{} dict key each one reads.
