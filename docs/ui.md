@@ -156,19 +156,21 @@ Market rail:  지수·금리·원자재 카드 (표에서 분리)
 | 2 | Cap | 억원 | 80 | 고정 | 조 단위 축약 |
 | 3 | tPER | 배 | 54 | .55 | <12 초록 / >60 빨강 |
 | 4 | fPER | 배 | 54 | .55 | |
-| 5 | 52W Range | 저·현재·고 | 112 | 1.5 | **레인지 바 1칸** |
-| 6 | MA20 Div | 기준 100 | 58 | .62 | 미니 바 + 수치 |
-| 7 | MA50 Div | 기준 100 | 58 | .62 | MA20 Div와 같은 산식(2026-09-22 재추가) |
-| 8 | Price | 원 | 80 | 고정 | |
-| 9 | Chg | 전일 % | 58 | .62 | PROFIT/LOSS |
+| 5 | Price | 원 | 80 | 고정 | |
+| 6 | Chg | 전일 % | 58 | .62 | PROFIT/LOSS |
+| 7 | 52W Range | 저·현재·고 | 112 | 1.5 | **레인지 바 1칸** |
+| 8 | MA20 Div | 기준 100 | 58 | .62 | 미니 바 + 수치 |
+| 9 | MA50 Div | 기준 100 | 58 | .62 | MA20 Div와 같은 산식(2026-09-22 재추가) |
 | 10–14 | 3D / 10D / 20D / 60D / 120D | % | 58 | .62 | 공통 ±10% 히트 |
 | 15 | Trend | 추세 | 80 | 1.0 | 스파크라인 |
 
 - 헤더는 2단: 라벨 + 단위(소문자, 9px).
 - `tPER`/`fPER`는 대문자 변환하지 않는다.
 - 열 순서는 2026-10-02 사용자 지시로 Cap → tPER → fPER → 52W Range → MA20 Div → MA50 Div → Price → Chg → 3D…
-  (Price/Chg를 모멘텀 블록 앞으로 이동). `ui/widgets.py::COLUMNS`가 단일 기준이고 셀은 `COL_*` 상수로만 접근.
-- 열 그룹 구분선(2026-10-02, 사용자 지시): [Cap·tPER·fPER] / [52W Range·MA20 Div·MA50 Div] / [Price·Chg] / [3D~120D·Trend] 사이에
+  (Price/Chg를 모멘텀 블록 앞으로 이동). 2026-10-20 사용자 지시로 Price·Chg를 52W Range 왼쪽으로 다시 이동:
+  Cap → tPER → fPER → Price → Chg → 52W Range → MA20 Div → MA50 Div → 3D…
+  `ui/widgets.py::COLUMNS`가 단일 기준이고 셀은 `COL_*` 상수로만 접근.
+- 열 그룹 구분선(2026-10-02, 사용자 지시; 2026-10-20 순서 변경 반영): [Cap·tPER·fPER] / [Price·Chg] / [52W Range·MA20 Div·MA50 Div] / [3D~120D·Trend] 사이에
   외곽선과 같은 얇은 회색 세로선(`theme.LINE_GROUP` `#d0d0d0`, `GROUP_LINE_W`=1px, Cap 왼쪽·Trend 왼쪽(=120D 오른쪽) 포함, 격자선 위치에 그림)을 `StockTable.paintEvent`가 그룹 첫 열(`GROUP_START_COLS`) 왼쪽 가장자리에 그리고,
   헤더(`FilterableHeader.divider_cols`)도 같은 열의 `paintSection`에서 같은 선을 그려 제목 행까지 이어진다.
 - 표 외곽선은 1px 얇은 회색(`#d0d0d0`, 격자선과 동일)·직각 모서리로 통일(2026-10-02, 임시 — 이후 디자인 통일 시 재검토). 오른쪽 가장자리는 마지막 열 격자선과 외곽 틀이 겹쳐 2px이 되던 것을 틀의 오른쪽 테두리를 없애고 `paintEvent`가 뷰포트 마지막 픽셀에 1px로 그리도록 정리. 고정 이름 열 오버레이의 오른쪽 선(`#b7bac7`)과 헤더의 아래·오른쪽 선(`#cfd3e5`/`#e4e7f5`)도 같은 회색으로 맞춤.
