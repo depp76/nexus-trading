@@ -4,7 +4,7 @@ Split out of the former single ui/dialogs.py (2026-09-17)."""
 import logging
 
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QPushButton,
+    QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
 )
 from PyQt6.QtCore import Qt
 
@@ -24,7 +24,11 @@ logger = logging.getLogger(__name__)
 # TotalAssetsGraphDialog — Cumulative Returns graph
 # ---------------------------------------------------------------------------
 class TotalAssetsGraphDialog(QDialog):
-    def __init__(self, dates, kospi_returns, asset_returns, usd_asset_returns, totals, usd_totals, parent=None):
+    def __init__(self, dates, kospi_returns, asset_returns, usd_asset_returns, totals, usd_totals, parent=None,
+                 on_report=None):
+        """on_report: called with no arguments by the "Report" button (the
+        owning tab fetches in a thread and opens AssetsReportDialog); the
+        button is hidden when it is None."""
         super().__init__(parent)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint | Qt.WindowType.WindowMinimizeButtonHint)
         self.setWindowTitle("Total Assets — Cumulative Return")
@@ -114,6 +118,16 @@ class TotalAssetsGraphDialog(QDialog):
         canvas = FigureCanvas(fig)
         layout.addWidget(canvas)
 
+        btns = QHBoxLayout()
+        btns.addStretch()
+        self.report_btn = QPushButton("📋  Report")
+        self.report_btn.setToolTip("Positions, cash and KOSPI at the start and middle of every month")
+        if on_report is not None:
+            self.report_btn.clicked.connect(on_report)
+        else:
+            self.report_btn.hide()
+        btns.addWidget(self.report_btn)
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.accept)
-        layout.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignRight)
+        btns.addWidget(close_btn)
+        layout.addLayout(btns)
