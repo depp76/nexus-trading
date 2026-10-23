@@ -1,6 +1,7 @@
 """ui/dialogs/assets_report.py — AssetsReportDialog, the Total Assets graph's
 "Report": positions, cash and total at the start and middle of every month
-next to the KOSPI close (rows from ui.assets_report.build_report)."""
+next to the KOSPI close (rows from ui.assets_report.build_report), with a
+Positions % / vs KOSPI line chart (left/right y axes) above the table."""
 from PyQt6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QHeaderView, QLabel,
     QPushButton, QSplitter, QFileDialog, QMessageBox,
@@ -8,8 +9,13 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 
+import mplcursors
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+
 from ui.common import create_font, FONT_SMALL, FONT_HEADING
 from ui.colors import QC_PROFIT, QC_LOSS, QC_FLAT
+from ui.theme import ACCENT, ACCENT_TEXT, TEXT, TEXT_MUTED, TEXT_FAINT, LINE
 from ui.widgets import NumericItem
 
 _SUMMARY_HEADERS = ["Date", "KOSPI", "KOSPI Cum %", "Positions", "Cash", "Total",
@@ -41,6 +47,12 @@ def _position_weight(row) -> float:
     return row["value"] / row["total"] * 100 if row["total"] else 0.0
 
 
+def _excess(row):
+    """Total Cum % minus KOSPI Cum % (%p), or None when either is missing."""
+    tc, kc = row["total_cum_pct"], row["kospi_cum_pct"]
+    return tc - kc if tc is not None and kc is not None else None
+
+
 def _make_table(headers):
     tbl = QTableWidget(0, len(headers))
     tbl.setHorizontalHeaderLabels(headers)
@@ -61,7 +73,7 @@ class AssetsReportDialog(QDialog):
         self._rows = rows
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint)
         self.setWindowTitle("Total Assets — Early / Mid-Month Report")
-        self.resize(1100, 760)
+        self.resize(1300, 900)
 
         v = QVBoxLayout(self)
         v.setContentsMargins(12, 10, 12, 10)
@@ -91,9 +103,11 @@ class AssetsReportDialog(QDialog):
         lower_v.setContentsMargins(0, 0, 0, 0)
         lower_v.addWidget(self._holdings_lbl)
         lower_v.addWidget(self.holdings)
+        self._build_chart()
+        splitter.addWidget(self.canvas)
         splitter.addWidget(self.summary)
         splitter.addWidget(lower)
-        splitter.setSizes([460, 260])
+        splitter.setSizes([320, 360, 220])
         v.addWidget(splitter, 1)
 
         self._fill_summary()
@@ -110,6 +124,101 @@ class AssetsReportDialog(QDialog):
         close_btn.clicked.connect(self.accept)
         btns.addWidget(close_btn)
         v.addLayout(btns)
+
+    def _build_chart(self):
+        """Positions % (left y axis) and vs KOSPI %p (right y axis) as two
+        lines on one chart over the report rows (user direction, 2026-10-23).
+        Hover shows the values; a click selects that row in the table below,
+        and the selected row is shaded."""
+        rows = self._rows
+        x = list(range(len(rows)))
+        weights = [_position_weight(r) for r in rows]
+        excess = [_excess(r) or 0.0 for r in rows]
+
+        fig = Figure(figsize=(12, 3.2), constrained_layout=True)
+        ax_w = fig.add_subplot(111)
+        ax_x = ax_w.twinx()
+
+        self._line_w, = ax_w.plot(x, weights, color=ACCENT, linewidth=2, marker="o", markersize=5,
+                                  label="Positions % (left)")
+        ax_w.set_ylim(0, 105)
+        ax_w.set_ylabel("Positions % of Total", fontsize=9, color=ACCENT_TEXT)
+
+        ax_x.axhline(0, color=TEXT_FAINT, linewidth=1, linestyle="--")
+        self._line_x, = ax_x.plot(x, excess, color=TEXT, linewidth=2, marker="s", markersize=5,
+                                  label="vs KOSPI %p (right)")
+        ax_x.set_ylabel("vs KOSPI (%p)", fontsize=9, color=TEXT)
+        # Centre the right axis on 0 so the zero line reads as "even with KOSPI".
+        lim = max(1.0, max((abs(v) for v in excess), default=0.0)) * 1.15
+        ax_x.set_ylim(-lim, lim)
+
+        ax_w.grid(True, axis="y", color=LINE, linewidth=0.8)
+        ax_w.set_axisbelow(True)
+        for ax in (ax_w, ax_x):
+            ax.spines["top"].set_visible(False)
+            for side in ("left", "right", "bottom"):
+                ax.spines[side].set_color(LINE)
+            ax.tick_params(colors=TEXT_MUTED, labelsize=8)
+        ax_w.tick_params(axis="y", labelcolor=ACCENT_TEXT)
+        ax_x.tick_params(axis="y", labelcolor=TEXT)
+        ax_w.set_xticks(x)
+        ax_w.set_xticklabels([r["date"][2:].replace("-", ".") for r in rows], rotation=45, ha="right")
+        ax_w.margins(x=0.02)
+        ax_w.set_title("Positions % of Total · vs KOSPI (%p)", fontsize=10, color=TEXT, loc="left")
+        ax_w.legend(handles=[self._line_w, self._line_x], fontsize=8, loc="upper left", frameon=False)
+
+        # Direct label on the latest point only; the rest are on hover.
+        if rows:
+            ax_w.annotate(f"{weights[-1]:.1f}%", (x[-1], weights[-1]), textcoords="offset points",
+                          xytext=(0, 7), ha="center", fontsize=8, color=ACCENT_TEXT)
+            ax_x.annotate(f"{excess[-1]:+.1f}%p", (x[-1], excess[-1]), textcoords="offset points",
+                          xytext=(0, 7), ha="center", fontsize=8, color=TEXT)
+
+        self._ax_w, self._ax_x = ax_w, ax_x
+        self._spans = []
+        self.canvas = FigureCanvas(fig)
+        self.canvas.setMinimumHeight(220)
+
+        # Invisible scatters so the hover snaps to data points only.
+        sc_w = ax_w.scatter(x, weights, s=80, alpha=0)
+        sc_x = ax_x.scatter(x, excess, s=80, alpha=0)
+        cursor = mplcursors.cursor([sc_w, sc_x], hover=2)
+
+        @cursor.connect("add")
+        def _on_hover(sel):
+            i = int(sel.index)
+            if not 0 <= i < len(rows):
+                return
+            r = rows[i]
+            ex = _excess(r)
+            sel.annotation.set_text(
+                f"{r['date']}\nPositions {weights[i]:.1f}%  ({r['value']:,.0f})\n"
+                f"Total {r['total']:,.0f}\nvs KOSPI " + ("-" if ex is None else f"{ex:+.1f}%p")
+            )
+            sel.annotation.get_bbox_patch().set(fc="white", alpha=0.95, edgecolor=LINE)
+
+        self.canvas.mpl_connect("button_press_event", self._on_chart_clicked)
+
+    def _on_chart_clicked(self, event):
+        if event.inaxes not in (self._ax_w, self._ax_x) or event.xdata is None:
+            return
+        i = int(round(event.xdata))
+        if 0 <= i < len(self._rows):
+            self.select_report_row(i)
+
+    def select_report_row(self, i: int):
+        """Select report row i (index into rows) in the summary table."""
+        for r in range(self.summary.rowCount()):
+            if self.summary.item(r, 0).data(Qt.ItemDataRole.UserRole) == i:
+                self.summary.selectRow(r)
+                self.summary.scrollToItem(self.summary.item(r, 0))
+                return
+
+    def _highlight_chart(self, i: int):
+        for span in self._spans:
+            span.remove()
+        self._spans = [self._ax_w.axvspan(i - 0.4, i + 0.4, color=TEXT_FAINT, alpha=0.15, zorder=0)]
+        self.canvas.draw_idle()
 
     def _fill_summary(self):
         tbl = self.summary
@@ -130,8 +239,7 @@ class AssetsReportDialog(QDialog):
                 w = _position_weight(row)
                 tbl.setItem(r, 6, _num(f"{w:.1f}%", w))
                 tbl.setItem(r, 7, _pct(row["total_cum_pct"]))
-                tc, kc = row["total_cum_pct"], row["kospi_cum_pct"]
-                tbl.setItem(r, 8, _pct(tc - kc if tc is not None and kc is not None else None))
+                tbl.setItem(r, 8, _pct(_excess(row)))
         finally:
             tbl.setUpdatesEnabled(True)
 
@@ -139,7 +247,9 @@ class AssetsReportDialog(QDialog):
         sel = self.summary.selectedItems()
         if not sel:
             return
-        row = self._rows[self.summary.item(sel[0].row(), 0).data(Qt.ItemDataRole.UserRole)]
+        idx = self.summary.item(sel[0].row(), 0).data(Qt.ItemDataRole.UserRole)
+        row = self._rows[idx]
+        self._highlight_chart(idx)
         holdings = row["holdings"]
         self._holdings_lbl.setText(
             f"Holdings on {row['date']} — "
