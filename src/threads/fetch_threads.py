@@ -247,8 +247,8 @@ class AllDataFetchThread(QThread):
 
             # ---Step 2: Fetch all 4 markets IN PARALLEL ---
             markets_config = [
-                ("KOSPI",  300),
-                ("KOSDAQ", 150),
+                ("KOSPI",  350),
+                ("KOSDAQ", 300),
                 # ("NASDAQ 100", 150),
                 # ("S&P500", 510),
             ]
