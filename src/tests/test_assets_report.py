@@ -103,18 +103,22 @@ class TestReportDialog(unittest.TestCase):
         dlg.summary.selectRow(1)
         self.assertEqual(dlg.holdings.rowCount(), 2)
 
-    def test_chart_has_a_bar_per_row_and_click_selects_the_row(self):
+    def test_chart_has_a_point_per_row_and_click_selects_the_row(self):
         from ui.dialogs import AssetsReportDialog
         closes = {"aaa": [("2026-01-02", 120.0)], "bbb": [("2026-01-14", 110.0)]}
         rows = build_report(TRADES, END_CASH, [("2026-01-02", "early"), ("2026-01-14", "mid")],
                             closes, [("2026-01-02", 4000.0), ("2026-01-14", 4400.0)], {})
         dlg = AssetsReportDialog(rows)
-        self.assertEqual(len(dlg._bars_w), 2)
-        self.assertEqual(len(dlg._bars_x), 2)
-        self.assertAlmostEqual(dlg._bars_w[0].get_height(), 1200 / 10200 * 100)
+        self.assertEqual(len(dlg._line_w.get_ydata()), 2)
+        self.assertAlmostEqual(dlg._line_w.get_ydata()[0], 1200 / 10200 * 100)
+        self.assertEqual(len(dlg._line_x.get_ydata()), 2)
+        # One chart, two y axes: Positions % on the left, vs KOSPI on the twin.
+        self.assertIs(dlg._line_w.axes, dlg._ax_w)
+        self.assertIs(dlg._line_x.axes, dlg._ax_x)
+        self.assertIs(dlg._ax_x.get_shared_x_axes().joined(dlg._ax_w, dlg._ax_x), True)
         dlg.select_report_row(0)
         self.assertEqual(dlg.holdings.rowCount(), 1)
-        self.assertEqual(len(dlg._spans), 2)
+        self.assertEqual(len(dlg._spans), 1)
 
 
 if __name__ == "__main__":

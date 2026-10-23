@@ -1,7 +1,7 @@
 """ui/dialogs/assets_report.py — AssetsReportDialog, the Total Assets graph's
 "Report": positions, cash and total at the start and middle of every month
 next to the KOSPI close (rows from ui.assets_report.build_report), with a
-Positions % / vs KOSPI chart above the table."""
+Positions % / vs KOSPI line chart (left/right y axes) above the table."""
 from PyQt6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QHeaderView, QLabel,
     QPushButton, QSplitter, QFileDialog, QMessageBox,
@@ -14,8 +14,8 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
 from ui.common import create_font, FONT_SMALL, FONT_HEADING
-from ui.colors import PROFIT, LOSS, QC_PROFIT, QC_LOSS, QC_FLAT
-from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_FAINT, LINE
+from ui.colors import QC_PROFIT, QC_LOSS, QC_FLAT
+from ui.theme import ACCENT, ACCENT_TEXT, TEXT, TEXT_MUTED, TEXT_FAINT, LINE
 from ui.widgets import NumericItem
 
 _SUMMARY_HEADERS = ["Date", "KOSPI", "KOSPI Cum %", "Positions", "Cash", "Total",
@@ -126,59 +126,68 @@ class AssetsReportDialog(QDialog):
         v.addLayout(btns)
 
     def _build_chart(self):
-        """Positions % (top) and vs KOSPI %p (bottom) per report row, two
-        panels on one shared x axis rather than one dual-axis plot. Hover shows
-        the value; a click selects that row in the table below, and the
-        selected row is shaded in both panels."""
+        """Positions % (left y axis) and vs KOSPI %p (right y axis) as two
+        lines on one chart over the report rows (user direction, 2026-10-23).
+        Hover shows the values; a click selects that row in the table below,
+        and the selected row is shaded."""
         rows = self._rows
         x = list(range(len(rows)))
         weights = [_position_weight(r) for r in rows]
         excess = [_excess(r) or 0.0 for r in rows]
 
         fig = Figure(figsize=(12, 3.2), constrained_layout=True)
-        ax_w, ax_x = fig.subplots(2, 1, sharex=True)
-        self._bars_w = ax_w.bar(x, weights, width=0.7, color=ACCENT, edgecolor="white", linewidth=1)
-        ax_w.set_ylim(0, 100)
-        ax_w.set_ylabel("Positions %", fontsize=9, color=TEXT_MUTED)
-        ax_w.set_title("Positions % of Total · vs KOSPI (%p)", fontsize=10, color=TEXT, loc="left")
+        ax_w = fig.add_subplot(111)
+        ax_x = ax_w.twinx()
 
-        self._bars_x = ax_x.bar(x, excess, width=0.7, edgecolor="white", linewidth=1,
-                                color=[PROFIT if v > 0 else (LOSS if v < 0 else TEXT_FAINT) for v in excess])
-        ax_x.axhline(0, color=TEXT_FAINT, linewidth=1)
-        ax_x.set_ylabel("vs KOSPI (%p)", fontsize=9, color=TEXT_MUTED)
+        self._line_w, = ax_w.plot(x, weights, color=ACCENT, linewidth=2, marker="o", markersize=5,
+                                  label="Positions % (left)")
+        ax_w.set_ylim(0, 105)
+        ax_w.set_ylabel("Positions % of Total", fontsize=9, color=ACCENT_TEXT)
 
+        ax_x.axhline(0, color=TEXT_FAINT, linewidth=1, linestyle="--")
+        self._line_x, = ax_x.plot(x, excess, color=TEXT, linewidth=2, marker="s", markersize=5,
+                                  label="vs KOSPI %p (right)")
+        ax_x.set_ylabel("vs KOSPI (%p)", fontsize=9, color=TEXT)
+        # Centre the right axis on 0 so the zero line reads as "even with KOSPI".
+        lim = max(1.0, max((abs(v) for v in excess), default=0.0)) * 1.15
+        ax_x.set_ylim(-lim, lim)
+
+        ax_w.grid(True, axis="y", color=LINE, linewidth=0.8)
+        ax_w.set_axisbelow(True)
         for ax in (ax_w, ax_x):
-            ax.grid(True, axis="y", color=LINE, linewidth=0.8)
-            ax.set_axisbelow(True)
-            for side in ("top", "right"):
-                ax.spines[side].set_visible(False)
-            for side in ("left", "bottom"):
+            ax.spines["top"].set_visible(False)
+            for side in ("left", "right", "bottom"):
                 ax.spines[side].set_color(LINE)
             ax.tick_params(colors=TEXT_MUTED, labelsize=8)
-        ax_x.set_xticks(x)
-        ax_x.set_xticklabels([r["date"][2:].replace("-", ".") for r in rows], rotation=45, ha="right")
-        ax_x.margins(x=0.01)
+        ax_w.tick_params(axis="y", labelcolor=ACCENT_TEXT)
+        ax_x.tick_params(axis="y", labelcolor=TEXT)
+        ax_w.set_xticks(x)
+        ax_w.set_xticklabels([r["date"][2:].replace("-", ".") for r in rows], rotation=45, ha="right")
+        ax_w.margins(x=0.02)
+        ax_w.set_title("Positions % of Total · vs KOSPI (%p)", fontsize=10, color=TEXT, loc="left")
+        ax_w.legend(handles=[self._line_w, self._line_x], fontsize=8, loc="upper left", frameon=False)
 
-        # Direct label on the latest bar only; the rest are on hover.
+        # Direct label on the latest point only; the rest are on hover.
         if rows:
             ax_w.annotate(f"{weights[-1]:.1f}%", (x[-1], weights[-1]), textcoords="offset points",
-                          xytext=(0, 3), ha="center", fontsize=8, color=TEXT)
+                          xytext=(0, 7), ha="center", fontsize=8, color=ACCENT_TEXT)
             ax_x.annotate(f"{excess[-1]:+.1f}%p", (x[-1], excess[-1]), textcoords="offset points",
-                          xytext=(0, 3 if excess[-1] >= 0 else -11), ha="center", fontsize=8, color=TEXT)
+                          xytext=(0, 7), ha="center", fontsize=8, color=TEXT)
 
         self._ax_w, self._ax_x = ax_w, ax_x
         self._spans = []
         self.canvas = FigureCanvas(fig)
         self.canvas.setMinimumHeight(220)
 
-        cursor = mplcursors.cursor(list(self._bars_w) + list(self._bars_x), hover=2)
-        bar_index = {id(b): i for i, b in enumerate(self._bars_w)}
-        bar_index.update({id(b): i for i, b in enumerate(self._bars_x)})
+        # Invisible scatters so the hover snaps to data points only.
+        sc_w = ax_w.scatter(x, weights, s=80, alpha=0)
+        sc_x = ax_x.scatter(x, excess, s=80, alpha=0)
+        cursor = mplcursors.cursor([sc_w, sc_x], hover=2)
 
         @cursor.connect("add")
         def _on_hover(sel):
-            i = bar_index.get(id(sel.artist))
-            if i is None:
+            i = int(sel.index)
+            if not 0 <= i < len(rows):
                 return
             r = rows[i]
             ex = _excess(r)
@@ -208,8 +217,7 @@ class AssetsReportDialog(QDialog):
     def _highlight_chart(self, i: int):
         for span in self._spans:
             span.remove()
-        self._spans = [ax.axvspan(i - 0.45, i + 0.45, color=TEXT_FAINT, alpha=0.15, zorder=0)
-                       for ax in (self._ax_w, self._ax_x)]
+        self._spans = [self._ax_w.axvspan(i - 0.4, i + 0.4, color=TEXT_FAINT, alpha=0.15, zorder=0)]
         self.canvas.draw_idle()
 
     def _fill_summary(self):
