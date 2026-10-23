@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QLabel, QHeaderView, QComboBox, QMessageBox,
     QInputDialog, QFileDialog,
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QSettings
 from PyQt6.QtGui import QColor, QFont
 
 import matplotlib.dates as mdates
@@ -23,9 +23,10 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
 import trade_db
-from threads.fetch_threads import AssetMetricsPreloadThread
+from threads.fetch_threads import AssetMetricsPreloadThread, AssetReportThread
 from ui.widgets import GroupedHeaderView, ColSpec, NumericItem
-from ui.dialogs import TotalAssetsGraphDialog
+from ui.dialogs import TotalAssetsGraphDialog, AssetsReportDialog
+from ui.assets_report import report_dates, build_report
 from ui.colors import PROFIT, LOSS
 from ui.theme import ACCENT, TEXT, TEXT_SUB, TEXT_MUTED
 
@@ -109,6 +110,9 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         # instead of blocking __init__ (roadmap 2026-09-18, review.md 1-2).
         self._metrics_ready = False
         self._metrics_thread = None
+        self._report_thread = None
+        self._report_start = ""
+        self._graph_dlg = None   # the open TotalAssetsGraphDialog, parent of the Report
         self._date_metrics_cache: dict = {}   # {date: (usd_krw, kospi_close)} from the worker
         self._live_usd_krw = 0.0
         self._metrics_fetched_at = None
@@ -619,8 +623,57 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
             totals.append(total)
             usd_totals.append(usd_val)
             
-        dlg = TotalAssetsGraphDialog(dates, kospi_returns, asset_returns, usd_asset_returns, totals, usd_totals, self)
-        dlg.exec()
+        dlg = TotalAssetsGraphDialog(dates, kospi_returns, asset_returns, usd_asset_returns, totals, usd_totals, self,
+                                     on_report=self._start_report)
+        self._graph_dlg = dlg
+        try:
+            dlg.exec()
+        finally:
+            self._graph_dlg = None
+
+    # ---Early/mid-month report (graph dialog's "Report" button) ---
+    # Trading History keeps Principal/Deposit/Withdrawal in this QSettings
+    # scope; the report reads Deposit + Withdrawal as its cash anchor
+    # (ui/assets_report.py docstring).
+    _SETTINGS_SCOPE = ("PortfolioManagement", "PortfolioManagement")
+
+    @staticmethod
+    def _settings_amount(settings: QSettings, key: str) -> float:
+        raw = str(settings.value(f"trading_history/{key}", "") or "").replace(",", "").strip()
+        try:
+            val = float(raw)
+        except ValueError:
+            return 0.0
+        return val if math.isfinite(val) else 0.0
+
+    def _start_report(self):
+        if self._report_thread is not None and self._report_thread.isRunning():
+            return
+        first = self._records[0]["date"] if self._records else datetime.now().strftime("%Y-01-01")
+        self._report_start = first[:8] + "01"
+        if self._graph_dlg is not None:
+            self._graph_dlg.report_btn.setEnabled(False)
+            self._graph_dlg.report_btn.setText("Loading...")
+        thread = self._track_thread(AssetReportThread(self._report_start), '_report_thread')
+        thread.finished.connect(self._on_report_fetched)
+        thread.start()
+
+    def _on_report_fetched(self, trades: list, closes: dict, kospi: list, usd_krw: dict, error: str):
+        parent = self._graph_dlg or self
+        if self._graph_dlg is not None:
+            self._graph_dlg.report_btn.setEnabled(True)
+            self._graph_dlg.report_btn.setText("📋  Report")
+        if error or not kospi:
+            QMessageBox.warning(parent, "Report", f"Could not load the report data.\n{error or 'No KOSPI history.'}")
+            return
+        settings = QSettings(*self._SETTINGS_SCOPE)
+        end_cash = self._settings_amount(settings, "deposit") + self._settings_amount(settings, "withdrawal")
+        points = report_dates([d for d, _ in kospi], self._report_start, datetime.now().strftime("%Y-%m-%d"))
+        rows = build_report(trades, end_cash, points, closes, kospi, usd_krw)
+        if not rows:
+            QMessageBox.information(parent, "Report", "No trading days in the recorded period.")
+            return
+        AssetsReportDialog(rows, parent).exec()
 
     # ---Export (review.md 2-2) ---
     # Always the full KRW+USD dump regardless of the on-screen currency

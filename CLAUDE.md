@@ -106,10 +106,12 @@ Dev tooling is in `requirements-dev.txt`
   `QCalendarWidget` rules have no current caller and are kept for the next `QDateEdit`),
   `dialogs/` (one module per
   dialog group: `index_ma`, `stock_ma`, `trade_edit`, `trade_history`, `assets_graph`,
-  `holdings_summary`, `stock_report`; import from `ui.dialogs`),
+  `holdings_summary`, `assets_report`, `stock_report`; import from `ui.dialogs`),
   `history_table.py` (cell factories, `fill_table_rows`, `SectionTable` + the column
   `SECTIONS` for the history grid), `history_calc.py` (pure P/L maths, no Qt:
-  `compute_pl_fields`, `build_monthly_rows`, `summarize_positions`), `common.py`
+  `compute_pl_fields`, `build_monthly_rows`, `summarize_positions`), `assets_report.py` (pure maths for the Total Assets graph's
+  early/mid-month "Report": holdings and cash rolled back from Deposit + Withdrawal, next
+  to KOSPI), `common.py`
   (`create_font` + the `FONT_*` point-size scale, `FONT_FAMILIES` / `FONT_FAMILY_CSS`,
   `apply_matplotlib_font`, status color constants,
   input validators, `atomic_save_json` /
@@ -120,7 +122,7 @@ Dev tooling is in `requirements-dev.txt`
 - **`src/threads/`**: every network call the UI triggers runs in a `QThread` subclass here
   (`AllDataFetchThread`, `UniverseLightweightFetchThread`, `PositionPriceFetchThread`,
   `RealtimePriceThread`, `StockMaThread`, `IndexMaThread`, `SingleStockFetchThread`,
-  `TickerValidateThread`, `AssetMetricsPreloadThread`, `AccountDepositThread`,
+  `TickerValidateThread`, `AssetMetricsPreloadThread`, `AssetReportThread`, `AccountDepositThread`,
   `GeminiStockReportThread`, `AutoBackupThread`; `strategy_threads.py` holds
   `TrendFollowingResearchThread`, which loads the dataset and runs the research matrix, and
   `TrendScoreThread`, the Universe tab's 2-5 scoring run).

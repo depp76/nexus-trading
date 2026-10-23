@@ -223,6 +223,58 @@ class AssetMetricsPreloadThread(QThread):
         self.finished.emit(snapshot, rate)
 
 
+class AssetReportThread(QThread):
+    """Fetches what the Total Assets "Report" needs (ui/assets_report.py):
+    the trade log, KOSPI closes from `start`, each traded ticker's daily
+    closes and the USD/KRW rate per KOSPI trading day. The tab does the
+    (pure, cheap) report maths on the UI thread from what this emits.
+    A ticker whose history fails is left out of `closes` (valued at cost).
+    """
+    # trades, {ticker: [(date, close)]}, [(date, kospi_close)], {date: usd_krw}, error
+    finished = pyqtSignal(list, dict, list, dict, str)
+
+    def __init__(self, start: str):
+        super().__init__()
+        self._start = start
+
+    @staticmethod
+    def _series(df) -> list:
+        if df is None or df.is_empty():
+            return []
+        return [(str(d)[:10], float(c)) for d, c in zip(df.get_column("Date"), df.get_column("Close"))
+                if c is not None]
+
+    def run(self):
+        import trade_db
+        try:
+            trades = trade_db.load_all_trades()
+            kospi = self._series(get_historical_data("KS11", self._start))
+        except Exception as e:
+            logger.warning("AssetReportThread: trades/KOSPI load failed", exc_info=True)
+            self.finished.emit([], {}, [], {}, str(e))
+            return
+        # Only tickers held at some point on or after start.
+        tickers = {t["ticker"] for t in trades
+                   if t.get("ticker") and not (t.get("sell_date") and str(t["sell_date"])[:10] < self._start)}
+        closes = {}
+        for tk in sorted(tickers):
+            try:
+                series = self._series(get_historical_data(tk, self._start))
+            except Exception:
+                logger.debug("AssetReportThread: history failed for %s", tk, exc_info=True)
+                continue
+            if series:
+                closes[tk] = series
+        usd_krw = {}
+        if any(str(t.get("market", "")).upper() == "US" for t in trades if t.get("ticker") in closes):
+            for d, _ in kospi:
+                try:
+                    usd_krw[d] = float(get_usd_krw_rate_for_date(d))
+                except Exception:
+                    usd_krw[d] = 0.0
+        self.finished.emit(trades, closes, kospi, usd_krw, "")
+
+
 # ---------------------------------------------------------------------------
 # All-market data fetch thread (full load)
 # ---------------------------------------------------------------------------
