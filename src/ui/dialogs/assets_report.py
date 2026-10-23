@@ -12,9 +12,8 @@ from ui.common import create_font, FONT_SMALL, FONT_HEADING
 from ui.colors import QC_PROFIT, QC_LOSS, QC_FLAT
 from ui.widgets import NumericItem
 
-_KIND_LABEL = {"early": "Early", "mid": "Mid"}
-_SUMMARY_HEADERS = ["Date", "Point", "KOSPI", "KOSPI Cum %", "Cost", "Positions",
-                    "Cash", "Total", "Total Cum %", "vs KOSPI (%p)"]
+_SUMMARY_HEADERS = ["Date", "KOSPI", "KOSPI Cum %", "Positions", "Cash", "Total",
+                    "Positions %", "Total Cum %", "vs KOSPI (%p)"]
 _HOLDING_HEADERS = ["Name", "Ticker", "Qty", "Cost", "Close", "Value", "Weight %"]
 _RIGHT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 
@@ -35,6 +34,11 @@ def _num(text, value, color=None):
 
 def _pct(v):
     return _num("-" if v is None else f"{v:+.1f}%", v if v is not None else 0.0, _signed_color(v))
+
+
+def _position_weight(row) -> float:
+    """Positions as a share of Total (%)."""
+    return row["value"] / row["total"] * 100 if row["total"] else 0.0
 
 
 def _make_table(headers):
@@ -116,19 +120,18 @@ class AssetsReportDialog(QDialog):
                 date_it = NumericItem(row["date"], r)
                 date_it.setData(Qt.ItemDataRole.UserRole, r)
                 tbl.setItem(r, 0, date_it)
-                kind_it = NumericItem(_KIND_LABEL.get(row["kind"], row["kind"]), r)
-                tbl.setItem(r, 1, kind_it)
                 k = row["kospi"]
-                tbl.setItem(r, 2, _num(f"{k:,.2f}" if k else "-", k))
-                tbl.setItem(r, 3, _pct(row["kospi_cum_pct"]))
-                tbl.setItem(r, 4, _num(f"{row['cost']:,.0f}", row["cost"]))
+                tbl.setItem(r, 1, _num(f"{k:,.2f}" if k else "-", k))
+                tbl.setItem(r, 2, _pct(row["kospi_cum_pct"]))
                 val_txt = f"{row['value']:,.0f}" + ("" if row["priced"] else " *")
-                tbl.setItem(r, 5, _num(val_txt, row["value"]))
-                tbl.setItem(r, 6, _num(f"{row['cash']:,.0f}", row["cash"]))
-                tbl.setItem(r, 7, _num(f"{row['total']:,.0f}", row["total"]))
-                tbl.setItem(r, 8, _pct(row["total_cum_pct"]))
+                tbl.setItem(r, 3, _num(val_txt, row["value"]))
+                tbl.setItem(r, 4, _num(f"{row['cash']:,.0f}", row["cash"]))
+                tbl.setItem(r, 5, _num(f"{row['total']:,.0f}", row["total"]))
+                w = _position_weight(row)
+                tbl.setItem(r, 6, _num(f"{w:.1f}%", w))
+                tbl.setItem(r, 7, _pct(row["total_cum_pct"]))
                 tc, kc = row["total_cum_pct"], row["kospi_cum_pct"]
-                tbl.setItem(r, 9, _pct(tc - kc if tc is not None and kc is not None else None))
+                tbl.setItem(r, 8, _pct(tc - kc if tc is not None and kc is not None else None))
         finally:
             tbl.setUpdatesEnabled(True)
 
@@ -139,7 +142,7 @@ class AssetsReportDialog(QDialog):
         row = self._rows[self.summary.item(sel[0].row(), 0).data(Qt.ItemDataRole.UserRole)]
         holdings = row["holdings"]
         self._holdings_lbl.setText(
-            f"Holdings on {row['date']} ({_KIND_LABEL.get(row['kind'], row['kind'])}) — "
+            f"Holdings on {row['date']} — "
             f"{len(holdings)} position(s), positions {row['value']:,.0f} / cash {row['cash']:,.0f} KRW"
             + ("" if row["priced"] else "   (* no close found: valued at cost)")
         )
@@ -168,13 +171,14 @@ class AssetsReportDialog(QDialog):
         try:
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
                 w = csv.writer(f)
-                w.writerow(["Date", "Point", "KOSPI", "KOSPI Cum %", "Cost", "Positions", "Cash",
-                            "Total", "Total Cum %", "Holdings"])
+                w.writerow(["Date", "KOSPI", "KOSPI Cum %", "Positions", "Cash", "Total",
+                            "Positions %", "Total Cum %", "Holdings"])
                 for row in self._rows:
                     w.writerow([
-                        row["date"], _KIND_LABEL.get(row["kind"], row["kind"]),
+                        row["date"],
                         f"{row['kospi']:.2f}", "" if row["kospi_cum_pct"] is None else f"{row['kospi_cum_pct']:.2f}",
-                        f"{row['cost']:.0f}", f"{row['value']:.0f}", f"{row['cash']:.0f}", f"{row['total']:.0f}",
+                        f"{row['value']:.0f}", f"{row['cash']:.0f}", f"{row['total']:.0f}",
+                        f"{_position_weight(row):.1f}",
                         "" if row["total_cum_pct"] is None else f"{row['total_cum_pct']:.2f}",
                         "; ".join(f"{h['company']} {h['qty']:.0f} ({h['value']:,.0f})" for h in row["holdings"]),
                     ])

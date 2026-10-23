@@ -92,6 +92,11 @@ class TestReportDialog(unittest.TestCase):
                             closes, [("2026-01-02", 4000.0)], {})
         dlg = AssetsReportDialog(rows)
         self.assertEqual(dlg.summary.rowCount(), 2)
+        headers = [dlg.summary.horizontalHeaderItem(c).text() for c in range(dlg.summary.columnCount())]
+        self.assertNotIn("Point", headers)
+        self.assertNotIn("Cost", headers)
+        # 2026-01-02: positions 10 x 120 = 1,200, cash 9,000 -> 1,200 / 10,200
+        self.assertEqual(dlg.summary.item(0, headers.index("Positions %")).text(), "11.8%")
         dlg.summary.selectRow(0)
         self.assertEqual(dlg.holdings.rowCount(), 1)
         self.assertEqual(dlg.holdings.item(0, 1).text(), "aaa")
