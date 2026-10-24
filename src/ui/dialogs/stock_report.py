@@ -39,7 +39,6 @@ def show_stock_report_result(parent, ticker: str, name: str, result_text: str):
     v.addWidget(disclaimer_lbl)
 
     close_btn = QPushButton("Close")
-    close_btn.setFixedWidth(80)
     close_btn.clicked.connect(result_dlg.accept)
     btn_row = QHBoxLayout()
     btn_row.addStretch()

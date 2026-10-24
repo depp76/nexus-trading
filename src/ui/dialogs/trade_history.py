@@ -268,8 +268,6 @@ class StockTradeHistoryDialog(QDialog):
         layout.addWidget(tbl)
 
         close_btn = QPushButton("Close")
-        close_btn.setFixedHeight(30)
-        close_btn.setFixedWidth(100)
         close_btn.clicked.connect(self.accept)
 
         btn_layout = QHBoxLayout()

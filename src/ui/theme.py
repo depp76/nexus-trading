@@ -60,6 +60,7 @@ def app_qss(font_css: str) -> str:
         background: {SURFACE}; color: {TEXT_SUB};
         border: 1px solid {LINE_STRONG}; border-radius: 6px;
         padding: 5px 12px; font-weight: 400; {font_css}
+        min-height: 16px;   /* 16 + 2x5 padding + 2x1 border = ui.common.BTN_H (28) */
     }}
     QPushButton:hover    {{ background: {HDR_BG}; }}
     QPushButton:pressed  {{ background: {LINE}; }}

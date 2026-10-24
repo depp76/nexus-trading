@@ -12,11 +12,11 @@ from datetime import datetime
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
-    QLineEdit, QPushButton, QLabel, QHeaderView, QComboBox, QMessageBox,
-    QInputDialog, QFileDialog,
+    QLineEdit, QLabel, QHeaderView, QComboBox, QMessageBox,
+    QInputDialog, QFileDialog, QMenu,
 )
 from PyQt6.QtCore import Qt, QTimer, QSettings
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtGui import QColor, QFont, QKeySequence, QShortcut
 
 import matplotlib.dates as mdates
 from matplotlib.figure import Figure
@@ -58,7 +58,7 @@ class _AssetsTable(QTableWidget):
 
 
 from ui.common import (
-    create_font, FONT_FAMILY_CSS, ThreadOwnerMixin,
+    create_font, FONT_FAMILY_CSS, ThreadOwnerMixin, make_button,
 )
 
 
@@ -181,27 +181,12 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self._asset_edit.textEdited.connect(self._fmt_asset_input)
         self._asset_edit.textEdited.connect(self._on_asset_edit_user_typed)
 
-        # Add Record is this tab's one primary action (docs/ui.md 1.6);
-        # Delete is destructive ("danger"); This Week/Graph/Export are
-        # secondary utilities and stay neutral.
-        add_btn = QPushButton("\u2795  Add Record")
-        add_btn.setObjectName("primary")
-        add_btn.setFont(create_font(10, QFont.Weight.Bold))
-        add_btn.setFixedHeight(32)
-        add_btn.clicked.connect(self._add_record)
-
-        del_btn = QPushButton("\U0001f5d1  Delete Selected")
-        del_btn.setObjectName("danger")
-        del_btn.setFont(create_font(10, QFont.Weight.Bold))
-        del_btn.setFixedHeight(32)
-        del_btn.clicked.connect(self._delete_selected)
-
-        today_btn = QPushButton("\U0001f4c5  This Week")
-        today_btn.setFont(create_font(10, QFont.Weight.Bold))
-        today_btn.setFixedHeight(32)
-        def _select_latest():
-            self._date_combo.setCurrentIndex(self._date_combo.count() - 1)
-        today_btn.clicked.connect(_select_latest)
+        # Add Record is this tab's one primary action (docs/ui.md 1.6 / 8.1);
+        # This Week/Graph/Export are secondary utilities and stay neutral.
+        # Delete lives on the table's right-click menu and the Delete key, as
+        # in the other tabs -- never an always-visible button.
+        add_btn = make_button("Add Record", "primary", self._add_record)
+        today_btn = make_button("This Week", on_click=self._select_latest_week)
 
         lbl_date = QLabel("Date:")
         lbl_date.setFont(create_font(10, style_name="Semilight"))
@@ -246,21 +231,14 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         # Graph/Export sit on the header row, right-aligned above the chart
         # they belong to: all on one controls row the tab needed ~1,540px
         # and ran past the screen edge (user report 2026-10-15).
-        graph_btn = QPushButton("\U0001f4c8  Graph")
-        graph_btn.setFont(create_font(10, QFont.Weight.Bold))
-        graph_btn.setFixedHeight(32)
-        graph_btn.clicked.connect(self._show_graph)
+        graph_btn = make_button("Graph", on_click=self._show_graph)
         header_row.addWidget(graph_btn)
 
-        export_btn = QPushButton("\U0001f4e5  Export")
-        export_btn.setFont(create_font(10, QFont.Weight.Bold))
-        export_btn.setFixedHeight(32)
-        export_btn.setToolTip("Export the asset snapshot table to Excel or CSV")
-        export_btn.clicked.connect(self._on_export_clicked)
+        export_btn = make_button("Export", on_click=self._on_export_clicked,
+                                 tooltip="Export the asset snapshot table to Excel or CSV")
         header_row.addWidget(export_btn)
 
         ctrl.addStretch()
-        ctrl.addWidget(del_btn)
         root.addLayout(ctrl)
 
         # ---Table (docs/ui.md 4.2/4.5: one spec -- label/min-width/weight --
@@ -293,7 +271,23 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
             "QTableWidget::item { padding: 1px 3px; }"
         )
         self._table.cellDoubleClicked.connect(self._on_cell_double_clicked)
+        self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._on_table_context_menu)
+        self._delete_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self._table)
+        self._delete_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+        self._delete_shortcut.activated.connect(self._delete_selected)
         root.addWidget(self._table)
+
+    def _select_latest_week(self):
+        self._date_combo.setCurrentIndex(self._date_combo.count() - 1)
+
+    def _on_table_context_menu(self, pos):
+        if not self._table.selectedIndexes():
+            return
+        menu = QMenu(self._table)
+        delete_action = menu.addAction("Delete Record...")
+        if menu.exec(self._table.viewport().mapToGlobal(pos)) is delete_action:
+            self._delete_selected()
 
     def _stretch_columns(self):
         """Distributes column widths from _COLUMNS (min-width + weight),

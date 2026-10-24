@@ -14,7 +14,7 @@ import logging
 import datetime as _dt
 from typing import Any, Callable
 
-from PyQt6.QtWidgets import QLineEdit
+from PyQt6.QtWidgets import QLineEdit, QPushButton
 from PyQt6.QtGui import QFont
 
 logger = logging.getLogger(__name__)
@@ -76,6 +76,37 @@ _FIELD_ERROR_STYLE = "border: 1px solid #e74c3c; background-color: #fdecea;"
 # same three-family fallback list create_font() uses. Splice it into a
 # stylesheet string: "QLabel { " + FONT_FAMILY_CSS + " font-size: 9pt; }"
 FONT_FAMILY_CSS = "font-family: " + ", ".join(f"'{f}'" for f in FONT_FAMILIES) + ";"
+
+
+# ---------------------------------------------------------------------------
+# Buttons (docs/ui.md 1.6 / 8.1)
+# ---------------------------------------------------------------------------
+# One height for every push button in the app; width follows the text unless
+# a caller has a reason to pin it (a toggle whose label changes, a segmented
+# row whose buttons must line up). Labels are plain text: no emoji, no
+# per-button bold, no per-button color. Color comes only from the objectName
+# role ("primary" = the screen's one main action, "danger" = destructive)
+# matched by ui/theme.py's QPushButton#primary/#danger rules.
+BTN_H = 28
+
+
+def make_button(text: str, role: str | None = None, on_click: Callable | None = None, *,
+                width: int | None = None, tooltip: str = "", checkable: bool = False,
+                checked: bool = False) -> QPushButton:
+    btn = QPushButton(text)
+    btn.setFixedHeight(BTN_H)
+    if width:
+        btn.setFixedWidth(width)
+    if role:
+        btn.setObjectName(role)
+    if tooltip:
+        btn.setToolTip(tooltip)
+    if checkable:
+        btn.setCheckable(True)
+        btn.setChecked(checked)
+    if on_click is not None:
+        btn.clicked.connect(on_click)
+    return btn
 
 # Status text colors (roadmap 7-2c) — e.g. a risk-gate PASS/FAIL cell. Reserved
 # for status display only (roadmap 7-4d): an action button must not reuse these,

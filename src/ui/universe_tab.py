@@ -31,7 +31,6 @@ from PyQt6.QtWidgets import (
     QPushButton, QMessageBox,
 )
 from PyQt6.QtCore import pyqtSignal, QTimer
-from PyQt6.QtGui import QFont
 
 from paths import UNIVERSE_CACHE_FILE, CUSTOM_SETTINGS_FILE
 from threads.fetch_threads import (
@@ -54,6 +53,7 @@ from ui.common import (
     atomic_save_json,
     safe_load_json,
     ThreadOwnerMixin,
+    make_button,
 )
 
 class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
@@ -119,10 +119,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.ticker_input.returnPressed.connect(self.add_ticker)
         add_layout.addWidget(self.ticker_input)
 
-        self.add_ticker_btn = QPushButton("+ Add Ticker")
-        self.add_ticker_btn.setFont(create_font(10, QFont.Weight.Bold))
-        self.add_ticker_btn.setFixedWidth(120)
-        self.add_ticker_btn.clicked.connect(self.add_ticker)
+        self.add_ticker_btn = make_button("Add Ticker", on_click=self.add_ticker)
         add_layout.addWidget(self.add_ticker_btn)
 
         add_layout.addSpacing(16)
@@ -167,20 +164,15 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         # (trend_following.md 2-5; scoring.py via TrendScoreThread). Checked
         # while a run's Top/Bottom rows are pinned to the top of the table;
         # clicking it again restores the default order (user direction 2026-09-29).
-        self.trend_score_btn = QPushButton("Trend Score")
-        self.trend_score_btn.setFont(create_font(10, style_name="Semilight"))
-        self.trend_score_btn.setFixedWidth(100)
-        self.trend_score_btn.setCheckable(True)
+        self.trend_score_btn = make_button("Trend Score", checkable=True)
         self.trend_score_btn.setToolTip("Score the KOSPI/KOSDAQ rows with trend_following.md 2-5 and pin the "
                                         "weekly Top 10 / Bottom 10 to the top of the table; click again to "
                                         "restore the default order")
         self.trend_score_btn.clicked.connect(self._on_trend_score_clicked)
         add_layout.addWidget(self.trend_score_btn)
 
-        self.refresh_btn = QPushButton("Refresh")
-        self.refresh_btn.setFont(create_font(10, style_name="Semilight"))
-        self.refresh_btn.setFixedWidth(100)
-        self.refresh_btn.clicked.connect(self.refresh_data)
+        # Refresh is this tab's one primary action (docs/ui.md 1.6 / 8.1).
+        self.refresh_btn = make_button("Refresh", "primary", self.refresh_data)
         add_layout.addWidget(self.refresh_btn)
 
         universe_layout.addLayout(add_layout)
@@ -203,12 +195,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
     @classmethod
     def _filter_button(cls, text: str, checked: bool = False) -> QPushButton:
-        btn = QPushButton(text)
-        btn.setFont(create_font(10, style_name="Semilight"))
-        btn.setCheckable(True)   # checked state: ui/theme.py's QPushButton:checked rule
-        btn.setFixedWidth(cls._FILTER_BTN_W)
-        btn.setChecked(checked)
-        return btn
+        # checked state: ui/theme.py's QPushButton:checked rule
+        return make_button(text, width=cls._FILTER_BTN_W, checkable=True, checked=checked)
 
     def _on_market_filter_changed(self, market):
         self._market_filter = market

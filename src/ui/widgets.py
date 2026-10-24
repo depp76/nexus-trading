@@ -217,12 +217,9 @@ class FilterPopup(QFrame):
         # Buttons
         btn_layout = QHBoxLayout()
         ok_btn = QPushButton("OK")
-        ok_btn.setFont(create_font(9, QFont.Weight.Bold))
-        ok_btn.setFixedHeight(26)
+        ok_btn.setObjectName("primary")
         ok_btn.clicked.connect(self._apply)
         clear_btn = QPushButton("Clear")
-        clear_btn.setFont(create_font(9, QFont.Weight.Bold))
-        clear_btn.setFixedHeight(26)
         clear_btn.clicked.connect(self._clear)
         btn_layout.addWidget(clear_btn)
         btn_layout.addWidget(ok_btn)

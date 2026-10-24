@@ -9,8 +9,7 @@ import datetime as _dt
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
-    QTableWidget, QLineEdit, QPushButton,
-    QLabel, QHeaderView, QComboBox, QMessageBox, QDialog, QFrame,
+    QTableWidget, QLineEdit, QLabel, QHeaderView, QComboBox, QMessageBox, QDialog, QFrame,
     QInputDialog, QMenu,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSettings, QTimer
@@ -38,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 from ui.common import (
     create_font, _fmt_num_edit, FONT_FAMILY_CSS, ThreadOwnerMixin,
-    _STATUS_SUCCESS_COLOR, FONT_KPI, FONT_CAPTION,
+    _STATUS_SUCCESS_COLOR, FONT_KPI, FONT_CAPTION, BTN_H, make_button,
 )
 from ui.colors import PROFIT, LOSS, DANGER
 from ui.theme import ACCENT_TEXT, TEXT_FAINT
@@ -53,26 +52,7 @@ from ui.dialogs.holdings_summary import show_holdings_summary
 # table used to carry their own hardcoded QSS here, fighting whatever the
 # global stylesheet said. They now inherit ui/theme.py's QLineEdit/QComboBox/
 # QFrame#DashboardCard/QTableWidget rules instead -- nothing left to set here.
-_BTN_H = 28
-_FLD_W = 110   # field (label + widget) width per column
-
-
-def _styled_button(text: str, role: str = None, on_click=None, *, width: int = _FLD_W,
-                   height: int = _BTN_H, tooltip: str = "") -> QPushButton:
-    """`role` is an objectName ("primary" | "danger") for ui/theme.py's
-    QPushButton#primary/#danger rules, or None for the default neutral
-    outline button (docs/ui.md 1.6: one accented action per screen, not one
-    hue per button/feature)."""
-    btn = QPushButton(text)
-    btn.setFixedHeight(height)
-    btn.setFixedWidth(width)
-    if role:
-        btn.setObjectName(role)
-    if tooltip:
-        btn.setToolTip(tooltip)
-    if on_click is not None:
-        btn.clicked.connect(on_click)
-    return btn
+_BTN_H = BTN_H   # inputs on the toolbar line up with the buttons
 
 
 def _make_rw_edit(placeholder: str = "") -> QLineEdit:
@@ -244,21 +224,20 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
 
         # Add Trade is this row's one primary action (docs/ui.md 1.6);
         # Fetch/Reload are secondary utilities and stay neutral.
-        self._fetch_dep_btn = _styled_button("🔄 Fetch Deposit", None, self._fetch_account_deposit, width=125)
-        reload_btn = _styled_button("🔄 Reload", None, self._reload_current, width=90)
-        add_btn = _styled_button("➕ Add Trade", "primary", self._show_add_trade_dialog, width=105)
+        self._fetch_dep_btn = make_button("Fetch Deposit", on_click=self._fetch_account_deposit)
+        reload_btn = make_button("Reload", on_click=self._reload_current)
+        add_btn = make_button("Add Trade", "primary", self._show_add_trade_dialog)
         self._deposit_status_lbl = QLabel("")
         self._deposit_status_lbl.setStyleSheet(f"font-size:9pt; color:{_STATUS_SUCCESS_COLOR}; font-weight:bold;")
         self._deposit_status_lbl.setFixedHeight(_BTN_H)
         for w in (self._fetch_dep_btn, reload_btn, add_btn):
             row.addWidget(w)
 
-        row.addWidget(_styled_button("Summary", None, self._show_holdings_summary, width=90))
+        row.addWidget(make_button("Summary", on_click=self._show_holdings_summary))
 
         self._sort_by_date = False
         # Checked state comes from ui/theme.py's QPushButton:checked rule.
-        self._sort_date_btn = _styled_button("📅 Sort: Date", None, width=120)
-        self._sort_date_btn.setCheckable(True)
+        self._sort_date_btn = make_button("Sort: Date", width=120, checkable=True)
         self._sort_date_btn.toggled.connect(self._on_sort_date_toggled)
         row.addWidget(self._sort_date_btn)
 
@@ -277,15 +256,13 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._search_stock_pl_edit.setMaximumWidth(250)
         self._search_stock_pl_edit.returnPressed.connect(self._on_search_stock_pl)
         row.addWidget(self._search_stock_pl_edit)
-        row.addWidget(_styled_button("🔍", None, self._on_search_stock_pl, width=36))
+        row.addWidget(make_button("Search", on_click=self._on_search_stock_pl))
 
         # Period filter (mockup "periods": 1M/3M/YTD/All), by buy date.
         self._period_filter = "All"
         self._period_buttons = {}
         for label in ("1M", "3M", "YTD", "All"):
-            btn = _styled_button(label, None, width=48)
-            btn.setCheckable(True)
-            btn.setChecked(label == "All")
+            btn = make_button(label, width=48, checkable=True, checked=(label == "All"))
             btn.clicked.connect(lambda checked, p=label: self._on_period_filter_changed(p))
             row.addWidget(btn)
             self._period_buttons[label] = btn
@@ -296,11 +273,9 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         # trace of it, so a user seeing a blank current-price cell had no
         # way to know why.
         self._hide_stale_closed = True
-        self._stale_toggle_btn = _styled_button(
-            "Hide stale prices", None, width=130,
-            tooltip="Hide the current price of trades closed more than 30 days ago")
-        self._stale_toggle_btn.setCheckable(True)
-        self._stale_toggle_btn.setChecked(True)
+        self._stale_toggle_btn = make_button(
+            "Hide stale prices", tooltip="Hide the current price of trades closed more than 30 days ago",
+            checkable=True, checked=True)
         self._stale_toggle_btn.toggled.connect(self._on_stale_toggle_changed)
         row.addWidget(self._stale_toggle_btn)
 
@@ -314,7 +289,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
 
     def _on_sort_date_toggled(self, checked: bool):
         self._sort_by_date = checked
-        self._sort_date_btn.setText("🔄 Sort: Position" if checked else "📅 Sort: Date")
+        self._sort_date_btn.setText("Sort: Position" if checked else "Sort: Date")
         self._apply_filter()
 
     def _on_period_filter_changed(self, period: str):

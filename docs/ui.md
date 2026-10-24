@@ -572,3 +572,23 @@ app.setStyleSheet(app_qss(FONT_FAMILY_CSS))
 | 6 | 지수/원자재 분리 · 저장된 뷰 · 행 선택·복사 · 월 요약 그룹 헤더 | `universe_tab.py` · `history_calc.py` · `history_table.py` | 1주+ |
 
 **Phase 0을 먼저 하지 않으면 이후 작업의 결과가 화면에 나타나지 않습니다** — `main.py`의 전역 QSS가 버튼·헤더·탭·표 색을 전부 덮어쓰기 때문입니다. Phase 1–2는 코드 변경량 대비 체감이 가장 크고, Phase 2는 실제 데이터 오염 가능성을 막는 수정이므로 우선순위가 높습니다.
+
+---
+
+## 8. 탭 간 일관성 규칙 (2026-10-25)
+
+같은 역할은 같은 위젯·같은 위치·같은 모양. 네 탭을 비교한 진단(상태 표시 3곳 분산, 버튼 높이 3종·이모지 혼용,
+표 외형 3종, 그룹 헤더 범주색이 손익색과 충돌, 글꼴 크기 숫자 직접 지정, 정보성 알림까지 모달)에서 도출했고
+8.1 → 8.2 → 8.3 → 8.4 → 8.5 순서로 적용했다.
+
+### 8.1 버튼
+
+- 모든 툴바 버튼은 `ui.common.make_button()`으로 만든다. 높이는 `BTN_H`(28px) 하나, 다이얼로그의 일반
+  `QPushButton`도 전역 QSS의 `min-height`로 같은 28px가 된다.
+- 폭은 텍스트에 맞춘다. 고정 폭은 라벨이 바뀌는 토글(Universe 상태 순환, History 정렬)과 세그먼트 줄
+  (ALL/KOSPI/KOSDAQ, 1M/3M/YTD/All, MA 차트 기간)에만 쓴다.
+- 라벨은 텍스트만: 이모지·기호(▶ ■ 🔄 📅 🔍 ➕ 🗑) 없음, 버튼별 굵은 글꼴 없음.
+- 탭마다 primary 하나: Universe **Refresh**, History **Add Trade**, Total Assets **Add Record**,
+  Strategy **Run Research**. Stop은 실행 취소일 뿐 파괴적이지 않으므로 중립.
+- 삭제는 세 탭 모두 **우클릭 메뉴 + Delete 키 + 확인 창**. Total Assets의 상시 노출 `Delete Selected`
+  버튼은 제거.

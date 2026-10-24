@@ -20,7 +20,7 @@ from datetime import date, datetime
 from PyQt6.QtCore import Qt, QDate
 from PyQt6.QtGui import QFont, QBrush, QColor
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QCheckBox, QComboBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QCheckBox, QComboBox,
     QSpinBox, QDateEdit, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QMessageBox,
     QSplitter, QFrame,
 )
@@ -35,7 +35,7 @@ from strategy.trend_following import (
 from strategy.trend_following.research import SUMMARY_COLUMNS
 from strategy.trend_following.event_study import HORIZONS
 from threads.strategy_threads import TrendFollowingResearchThread, CANCELLED_MESSAGE
-from ui.common import create_font, ThreadOwnerMixin, FONT_HEADING, FONT_SMALL, FONT_BODY
+from ui.common import create_font, make_button, ThreadOwnerMixin, FONT_HEADING, FONT_SMALL, FONT_BODY
 from ui.theme import TEXT, TEXT_MUTED, LINE, DANGER
 
 logger = logging.getLogger(__name__)
@@ -160,19 +160,13 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             self.variant_cbs[vid] = cb
             variants_row.addWidget(cb)
         variants_row.addStretch()
-        self.run_btn = QPushButton("▶  Run Research")
-        self.run_btn.setObjectName("primary")
-        self.run_btn.setFont(create_font(FONT_BODY, QFont.Weight.Bold))
-        self.run_btn.clicked.connect(self._on_run_clicked)
-        self.stop_btn = QPushButton("■  Stop")
-        self.stop_btn.setObjectName("danger")
-        self.stop_btn.setFont(create_font(FONT_BODY))
+        # Run is the tab's one primary action; Stop cancels a run, it does not
+        # destroy anything, so it stays neutral (docs/ui.md 8.1).
+        self.run_btn = make_button("Run Research", "primary", self._on_run_clicked)
+        self.stop_btn = make_button("Stop", on_click=self._on_stop_clicked)
         self.stop_btn.setEnabled(False)
-        self.stop_btn.clicked.connect(self._on_stop_clicked)
-        self.save_btn = QPushButton("Save Report")
-        self.save_btn.setFont(create_font(FONT_BODY))
+        self.save_btn = make_button("Save Report", on_click=self._on_save_clicked)
         self.save_btn.setEnabled(False)
-        self.save_btn.clicked.connect(self._on_save_clicked)
         variants_row.addWidget(self.run_btn)
         variants_row.addWidget(self.stop_btn)
         variants_row.addWidget(self.save_btn)

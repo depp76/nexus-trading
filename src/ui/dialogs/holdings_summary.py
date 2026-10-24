@@ -137,7 +137,6 @@ def build_holdings_summary(parent, closed_data: list, open_data: list):
     v.addWidget(subtotal_lbl)
 
     close_btn = QPushButton("Close")
-    close_btn.setFixedWidth(90)
     close_btn.clicked.connect(dlg.accept)
     btn_row = QHBoxLayout()
     btn_row.addStretch()
