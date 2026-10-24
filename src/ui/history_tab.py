@@ -64,6 +64,10 @@ def _make_rw_edit(placeholder: str = "") -> QLineEdit:
     return e
 
 
+# Message boxes are titled with the tab name (docs/ui.md 8.5).
+_TITLE = "Trading History"
+
+
 class TradingHistoryTab(ThreadOwnerMixin, QWidget):
     """Trading History tab - load from Excel and display closed/open positions."""
     total_asset_updated = pyqtSignal(float)
@@ -353,7 +357,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         if len(targets) > 3:
             names += f" and {len(targets) - 3} more"
         reply = QMessageBox.question(
-            self, "Delete Trade",
+            self, _TITLE,
             f"Delete {len(targets)} trade(s)?\n{names}\n\nThis removes them from portfolio.db.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -369,7 +373,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
                     deleted_keys.add(key)
             except Exception as e:
                 logger.error("Failed to delete trade %s: %s", key, e, exc_info=True)
-                QMessageBox.warning(self, "Database Error", f"Failed to delete trade:\n{e}")
+                QMessageBox.warning(self, _TITLE, f"Failed to delete trade:\n{e}")
                 break
         # Filter by orig_key rather than list.remove(rec): dict equality would
         # match a different row with identical field values (e.g. two same-day
@@ -439,7 +443,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         except Exception as e:
             logger.error("Failed to save trade to DB: %s", e, exc_info=True)
             QMessageBox.critical(
-                self, "Database Error",
+                self, _TITLE,
                 f"Failed to save trade to database:\n{e}\n\nThe record was not added."
             )
             return False
@@ -457,7 +461,8 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         return build_monthly_rows(all_rows)
 
     def _show_holdings_summary(self):
-        show_holdings_summary(self, self._closed_data, self._open_data)
+        if not show_holdings_summary(self, self._closed_data, self._open_data):
+            self.status_message.emit("Summary: no trades recorded yet")
 
     def _save_overrides(self, records: list) -> bool:
         """Persist just the given edited records back to the DB in one
@@ -474,7 +479,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         except Exception as e:
             logger.error("Failed to save overrides to DB: %s", e, exc_info=True)
             QMessageBox.warning(
-                self, "Database Warning",
+                self, _TITLE,
                 f"Failed to save modified trades to database:\n{e}"
             )
             return False
@@ -724,7 +729,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._fetch_dep_btn.setEnabled(True)
         if err:
             self.status_message.emit("Account deposit fetch failed")
-            QMessageBox.critical(self, "Error", f"Failed to fetch data:\n{err}")
+            QMessageBox.critical(self, _TITLE, f"Failed to fetch the account deposit:\n{err}")
             return
         self._deposit_edit.setText(f"{int(val):,}")
         self._on_deposit_changed()
@@ -796,7 +801,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
                     matched_company = comp
                 
         if not matches:
-            QMessageBox.information(self, "Search Result", f"No completed trading history found for '{self._search_stock_pl_edit.text()}'.")
+            self.status_message.emit(f"No completed trades found for '{self._search_stock_pl_edit.text()}'")
             return
             
         dlg = StockTradeHistoryDialog(matched_company, matches, total_pl, total_buy, total_sell, self)
@@ -860,7 +865,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
                     matched_company = comp
 
         if not matches:
-            QMessageBox.information(self, "Search Result", f"No trading history found for '{text}'.")
+            self.status_message.emit(f"No trades found for '{text}'")
             self._open_stocks_combo.blockSignals(True)
             self._open_stocks_combo.setCurrentIndex(0)
             self._open_stocks_combo.blockSignals(False)

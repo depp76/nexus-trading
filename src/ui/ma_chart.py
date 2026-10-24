@@ -32,7 +32,7 @@ class StockMaLauncherMixin:
     def _on_stock_ma_loaded(self, ticker, name, df, error, investor_data, market, change_mode):
         self._on_stock_ma_status(f"MA chart loaded for {name} ({ticker}).")
         if error and df is None:
-            QMessageBox.warning(self, "Error", f"Failed to load data for {ticker}:\n{error}")
+            QMessageBox.warning(self, "Trading Universe", f"Failed to load data for {ticker}:\n{error}")
             return
         dlg = StockMaDialog(ticker, name, market, df, investor_data=investor_data, parent=None, change_mode=change_mode)
         dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)

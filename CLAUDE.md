@@ -50,7 +50,7 @@ working directory:
 ### Verification
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest src\tests -q      # ~320 tests, no network, ~10 s
+.\.venv\Scripts\python.exe -m pytest src\tests -q      # ~585 tests, no network, ~30 s
 .\.venv\Scripts\ruff.exe check src                      # pyflakes rules only (ruff.toml)
 ```
 
@@ -114,7 +114,8 @@ Dev tooling is in `requirements-dev.txt`
   to KOSPI), `common.py`
   (`create_font` + the `FONT_*` point-size scale, `FONT_FAMILIES` / `FONT_FAMILY_CSS`,
   `apply_matplotlib_font`, status color constants,
-  input validators, `atomic_save_json` /
+  input validators, `make_button`/`BTN_H` (every push button), `setup_table`/`TABLE_ROW_H` (every data
+  table), `make_footer_label`/`TAB_MARGINS`/`TAB_SPACING` (the tab skeleton; docs/ui.md 8), `atomic_save_json` /
   `safe_load_json`, `retire_thread`, `ThreadOwnerMixin`). Tabs never
   reference each other
   directly; `MainWindow` connects their signals (`status_message`, `refresh_started`,

@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QLabel, QHeaderView, QComboBox, QMessageBox,
     QInputDialog, QFileDialog, QMenu,
 )
-from PyQt6.QtCore import Qt, QTimer, QSettings
+from PyQt6.QtCore import Qt, QTimer, QSettings, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QKeySequence, QShortcut
 
 import matplotlib.dates as mdates
@@ -58,12 +58,18 @@ class _AssetsTable(QTableWidget):
 
 
 from ui.common import (
+    FONT_BODY,
     create_font, ThreadOwnerMixin, make_button, setup_table, TAB_MARGINS, TAB_SPACING,
 )
 
 
+# Message boxes are titled with the tab name (docs/ui.md 8.5).
+_TITLE = "Total Assets"
+
+
 class TradingRecordTab(ThreadOwnerMixin, QWidget):
     """Tab for recording periodic total-asset snapshots with weekly/cumulative return calculations."""
+    status_message = pyqtSignal(str)   # -> MainWindow's status bar (docs/ui.md 8.5)
 
 
     # docs/ui.md 4.2/4.3: KRW-7-col + USD-6-col = 15 columns collapsed to a
@@ -134,11 +140,11 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         # ---Header row: currency toggle + USD/KRW rate (docs/ui.md 4.1/4.3) ---
         header_row = QHBoxLayout()
         lbl_currency = QLabel("Currency:")
-        lbl_currency.setFont(create_font(10, style_name="Semilight"))
+        lbl_currency.setFont(create_font(FONT_BODY, style_name="Semilight"))
         header_row.addWidget(lbl_currency)
 
         self._currency_combo = QComboBox()
-        self._currency_combo.setFont(create_font(10, style_name="Semilight"))
+        self._currency_combo.setFont(create_font(FONT_BODY, style_name="Semilight"))
         self._currency_combo.addItems(["KRW", "USD"])
         self._currency_combo.setFixedWidth(90)
         self._currency_combo.currentTextChanged.connect(self._on_currency_changed)
@@ -146,7 +152,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
 
         header_row.addSpacing(12)
         self._rate_lbl = QLabel("USD/KRW: -")
-        self._rate_lbl.setFont(create_font(10, style_name="Semilight"))
+        self._rate_lbl.setFont(create_font(FONT_BODY, style_name="Semilight"))
         self._rate_lbl.setStyleSheet(f"color: {TEXT_MUTED};")
         header_row.addWidget(self._rate_lbl)
         header_row.addStretch()
@@ -167,14 +173,14 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         ctrl = QHBoxLayout()
 
         self._date_combo = QComboBox()
-        self._date_combo.setFont(create_font(10, style_name="Semilight"))
+        self._date_combo.setFont(create_font(FONT_BODY, style_name="Semilight"))
         self._date_combo.setFixedWidth(150)
         self._date_combo_start_year = None
         self._rebuild_date_combo()
         self._date_combo.currentIndexChanged.connect(self._on_date_combo_changed)
 
         self._asset_edit = QLineEdit()
-        self._asset_edit.setFont(create_font(10, style_name="Semilight"))
+        self._asset_edit.setFont(create_font(FONT_BODY, style_name="Semilight"))
         self._asset_edit.setPlaceholderText("Total Assets (auto-filled)")
         self._asset_edit.setFixedWidth(120)
         self._asset_edit.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -189,28 +195,28 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         today_btn = make_button("This Week", on_click=self._select_latest_week)
 
         lbl_date = QLabel("Date:")
-        lbl_date.setFont(create_font(10, style_name="Semilight"))
+        lbl_date.setFont(create_font(FONT_BODY, style_name="Semilight"))
         lbl_assets = QLabel("Total Assets:")
-        lbl_assets.setFont(create_font(10, style_name="Semilight"))
+        lbl_assets.setFont(create_font(FONT_BODY, style_name="Semilight"))
 
         live_asset_title = QLabel("Current Total Assets:")
-        live_asset_title.setFont(create_font(10, style_name="Semilight"))
+        live_asset_title.setFont(create_font(FONT_BODY, style_name="Semilight"))
 
         # docs/ui.md issue #7 (mockup): these were QLineEdit(readOnly), which
         # look editable (bordered, input-shaped) despite never accepting
         # input -- plain KPI-style labels now, matching History's KPI strip.
         self.live_asset_lbl = QLabel("-")
         self.live_asset_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.live_asset_lbl.setFont(create_font(10, QFont.Weight.Bold))
+        self.live_asset_lbl.setFont(create_font(FONT_BODY, QFont.Weight.Bold))
         self.live_asset_lbl.setStyleSheet(f"color:{TEXT};")
         self.live_asset_lbl.setFixedWidth(120)
 
         live_diff_title = QLabel("Weekly P/L:")
-        live_diff_title.setFont(create_font(10, style_name="Semilight"))
+        live_diff_title.setFont(create_font(FONT_BODY, style_name="Semilight"))
 
         self.live_diff_lbl = QLabel("-")
         self.live_diff_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.live_diff_lbl.setFont(create_font(10, QFont.Weight.Bold))
+        self.live_diff_lbl.setFont(create_font(FONT_BODY, QFont.Weight.Bold))
         self.live_diff_lbl.setStyleSheet(f"color:{TEXT};")
         self.live_diff_lbl.setFixedWidth(150)
 
@@ -450,7 +456,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
             trade_db.save_asset_records(self._records)
         except Exception as e:
             logger.error("[TradingRecord] Save error: %s", e, exc_info=True)
-            QMessageBox.warning(self, "Database Error", f"Failed to save asset records:\n{e}")
+            QMessageBox.warning(self, _TITLE, f"Failed to save asset records:\n{e}")
 
     # ---Background metrics warm-up (roadmap 2026-09-18, review.md 1-2) ---
     def _start_metrics_preload(self):
@@ -483,14 +489,14 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         date_str = self._selected_date()
         raw_amt  = self._asset_edit.text().replace(',', '').strip()
         if not date_str:
-            QMessageBox.warning(self, "Error", "Select a Friday.")
+            QMessageBox.warning(self, _TITLE, "Select a Friday.")
             return
         try:
             total = float(raw_amt)
         except ValueError:
             total = math.nan
         if not math.isfinite(total):  # float() takes "nan"/"inf" (review_codex.md #6)
-            QMessageBox.warning(self, "Error", "Total Assets must be a number.")
+            QMessageBox.warning(self, _TITLE, "Total Assets must be a number.")
             return
 
         # docs/ui.md 4.5: the value was auto-filled from the live position
@@ -528,7 +534,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         if not dates_to_delete:
             return
         reply = QMessageBox.question(
-            self, "Delete", f"Are you sure you want to delete {len(dates_to_delete)} record(s)?",
+            self, _TITLE, f"Delete {len(dates_to_delete)} record(s)?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -559,15 +565,13 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
 
     def _show_graph(self):
         if len(self._records) == 0:
-            QMessageBox.information(self, "Graph", "No data to plot.")
+            self.status_message.emit("Graph: no records to plot yet")
             return
         # Same guard as _refresh_table_impl: until AssetMetricsPreloadThread
         # has warmed the USD/KRW and KOSPI caches, _rate_kospi_for_date()
         # would do its first-call network fetch right here on the UI thread.
         if not self._metrics_ready:
-            QMessageBox.information(
-                self, "Graph", "USD/KRW and KOSPI history are still loading — try again in a moment.",
-            )
+            self.status_message.emit("Graph: USD/KRW and KOSPI history are still loading -- try again in a moment")
             return
 
         dates = []
@@ -650,16 +654,16 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         parent = self._graph_dlg or self
         if self._graph_dlg is not None:
             self._graph_dlg.report_btn.setEnabled(True)
-            self._graph_dlg.report_btn.setText("📋  Report")
+            self._graph_dlg.report_btn.setText("Report")
         if error or not kospi:
-            QMessageBox.warning(parent, "Report", f"Could not load the report data.\n{error or 'No KOSPI history.'}")
+            QMessageBox.warning(parent, _TITLE, f"Could not load the report data.\n{error or 'No KOSPI history.'}")
             return
         settings = QSettings(*self._SETTINGS_SCOPE)
         end_cash = self._settings_amount(settings, "deposit") + self._settings_amount(settings, "withdrawal")
         points = report_dates([d for d, _ in kospi], self._report_start, datetime.now().strftime("%Y-%m-%d"))
         rows = build_report(trades, end_cash, points, closes, kospi, usd_krw)
         if not rows:
-            QMessageBox.information(parent, "Report", "No trading days in the recorded period.")
+            QMessageBox.information(parent, _TITLE, "No trading days in the recorded period.")
             return
         AssetsReportDialog(rows, parent).exec()
 
@@ -684,7 +688,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
     def _on_export_clicked(self):
         metrics = self._compute_records_metrics()
         if not metrics:
-            QMessageBox.information(self, "Export", "No data to export.")
+            self.status_message.emit("Export: no records to export yet")
             return
 
         default_name = f"total_assets_{datetime.now().strftime('%Y%m%d')}.xlsx"
@@ -742,10 +746,10 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
                 wb.save(path)
         except Exception as e:
             logger.warning("Total assets export failed: %s", e, exc_info=True)
-            QMessageBox.warning(self, "Export Error", f"Failed to export:\n{e}")
+            QMessageBox.warning(self, _TITLE, f"Failed to export:\n{e}")
             return
 
-        QMessageBox.information(self, "Export", f"Exported {len(rows)} row(s) to {path}")
+        self.status_message.emit(f"Exported {len(rows)} row(s) to {path}")
 
     def _on_cell_double_clicked(self, row, col):
         # COL_TOTAL_ASSETS is "Total Assets" (docs/ui.md 4.2) in both the old
@@ -779,7 +783,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
                     self._save_records()
                     self._refresh_table()
                 except ValueError:
-                    QMessageBox.warning(self, "Error", "Invalid number format.")
+                    QMessageBox.warning(self, _TITLE, "Invalid number format.")
 
     # ---Table rendering ---
     # docs/ui.md issue #9 (mockup): "정렬이 꺼져 있다" -- sorting is enabled

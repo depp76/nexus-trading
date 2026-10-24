@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QRect, QTimer
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPolygon, QKeySequence
 
-from ui.common import create_font, FONT_SMALL, TABLE_ROW_H, _EmptyHint
+from ui.common import create_font, FONT_SMALL, TABLE_ROW_H, _EmptyHint, FONT_CAPTION
 from ui.delegates import IdentityDelegate, RangeBarDelegate, TrendDelegate
 from ui.colors import fg_for, heatmap_bg, PROFIT, LOSS, FLAT, OK, WARN
 from ui.theme import ACCENT, TEXT, TEXT_FAINT, TEXT_EMPTY, TEXT_SUB, TEXT_MUTED, LINE_GROUP, SURFACE, GRP_BG
@@ -177,14 +177,14 @@ class FilterPopup(QFrame):
 
         # Search inside popup
         self._search = QLineEdit()
-        self._search.setFont(create_font(9, style_name="Semilight"))
+        self._search.setFont(create_font(FONT_SMALL, style_name="Semilight"))
         self._search.setPlaceholderText("Search...")
         self._search.textChanged.connect(self._on_search)
         layout.addWidget(self._search)
 
         # Select All
         self._all_cb = QCheckBox("(Select All)")
-        self._all_cb.setFont(create_font(9, style_name="Semilight"))
+        self._all_cb.setFont(create_font(FONT_SMALL, style_name="Semilight"))
         self._all_cb.setTristate(True)
         layout.addWidget(self._all_cb)
 
@@ -205,7 +205,7 @@ class FilterPopup(QFrame):
         self._checkboxes = {}
         for val in sorted(unique_vals, key=lambda v: (v != "Index", v)):
             cb = QCheckBox(str(val))
-            cb.setFont(create_font(9, style_name="Semilight"))
+            cb.setFont(create_font(FONT_SMALL, style_name="Semilight"))
             cb.setChecked(current_filter is None or val in current_filter)
             inner_layout.addWidget(cb)
             self._checkboxes[val] = cb
@@ -384,7 +384,7 @@ class StockTable(QTableWidget):
         self.setColumnCount(len(COLUMNS))
         self.setHorizontalHeaderLabels([c.label for c in COLUMNS])
         # Table font: Malgun Gothic Semilight 9pt (set appropriate size to prevent text cutoff)
-        self.setFont(create_font(9, style_name="Semilight"))
+        self.setFont(create_font(FONT_SMALL, style_name="Semilight"))
         # Same family as text cells (one app font); built once per table
         # instance rather than per cell.
         self._numeric_font = create_font(FONT_SMALL, style_name="Semilight")
@@ -404,7 +404,7 @@ class StockTable(QTableWidget):
         self._filter_header = FilterableHeader(Qt.Orientation.Horizontal, self)
         self._filter_header.divider_cols = GROUP_START_COLS
         self._filter_header.right_edge = True
-        self._filter_header.setFont(create_font(9, QFont.Weight.Bold))
+        self._filter_header.setFont(create_font(FONT_SMALL, QFont.Weight.Bold))
         self._filter_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self._filter_header.filter_requested.connect(self._show_filter_popup)
         self.setHorizontalHeader(self._filter_header)
@@ -623,8 +623,8 @@ class StockTable(QTableWidget):
         status = data.get("status", "-")
         toggle_label = {"On": "Set as Target", "Tg": "Clear Held/Target"}.get(status, "Mark as Held")
         toggle_action = menu.addAction(toggle_label)
-        ma_action = menu.addAction("📈 View MA Chart")
-        report_action = menu.addAction("🤖 AI Stock Report")
+        ma_action = menu.addAction("View MA Chart")
+        report_action = menu.addAction("AI Stock Report")
         menu.addSeparator()
         delete_action = menu.addAction("Remove from Universe...")
 
@@ -1179,7 +1179,7 @@ class GroupedHeaderView(QHeaderView):
         # Draw sub-label text with group colour
         painter.setPen(QColor(col_color))
         f = painter.font()
-        f.setPointSize(8)
+        f.setPointSize(FONT_CAPTION)
         f.setBold(True)
         painter.setFont(f)
         label = self._sub_labels[logical_index] if logical_index < len(self._sub_labels) else ""
@@ -1224,7 +1224,7 @@ class GroupedHeaderView(QHeaderView):
             # Label only (vertical borders are drawn per-column in paintSection)
             painter.setPen(QPen(QColor(TEXT_SUB)))
             f = painter.font()
-            f.setPointSize(9)
+            f.setPointSize(FONT_SMALL)
             f.setBold(True)
             painter.setFont(f)
             painter.drawText(group_rect, Qt.AlignmentFlag.AlignCenter, label)

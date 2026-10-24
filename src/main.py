@@ -141,6 +141,7 @@ class MainWindow(QMainWindow):
 
         self.trading_history_tab.total_asset_updated.connect(self.trading_record_tab.update_live_asset)
         self.trading_history_tab.status_message.connect(self._on_thread_status_message)
+        self.trading_record_tab.status_message.connect(self._on_thread_status_message)
 
         # Native status bar: the one place for short-lived progress and result
         # text from every tab (e.g. "Fetching KOSPI quotes... (3/5)"). Each tab's

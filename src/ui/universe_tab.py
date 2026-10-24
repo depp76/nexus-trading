@@ -57,6 +57,10 @@ from ui.common import (
     TAB_SPACING,
 )
 
+# Message boxes are titled with the tab name (docs/ui.md 8.5).
+_TITLE = "Trading Universe"
+
+
 class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     """Trading Universe tab: watchlist table + ticker add/search controls."""
 
@@ -247,8 +251,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
     def delete_stock(self, ticker):
         reply = QMessageBox.question(
-            self, 'Confirm Delete',
-            f"Are you sure you want to delete '{ticker}'?",
+            self, _TITLE,
+            f"Remove '{ticker}' from the universe?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
@@ -433,10 +437,10 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     def _on_ai_report_requested(self, ticker: str):
         item = next((d for d in self.all_data if d.get('ticker') == ticker), None)
         if item is None:
-            QMessageBox.warning(self, "AI Stock Report", f"No data found for {ticker}.")
+            QMessageBox.warning(self, _TITLE, f"AI Stock Report: no data found for {ticker}.")
             return
         name = item.get('name', ticker)
-        self.status_text_changed.emit(f"🤖 Generating AI report for {name} ({ticker})...")
+        self.status_text_changed.emit(f"Generating AI report for {name} ({ticker})...")
         thread = self._track_thread(GeminiStockReportThread(item))
         thread.finished.connect(self._on_stock_report_ready)
         thread.start()
@@ -444,7 +448,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     def _on_stock_report_ready(self, ticker: str, name: str, result_text: str, error: str):
         if error:
             self.status_text_changed.emit(f"AI report failed for {name} ({ticker}).")
-            QMessageBox.warning(self, "AI Stock Report", f"Failed to generate report:\n{error}")
+            QMessageBox.warning(self, _TITLE, f"AI Stock Report failed:\n{error}")
             return
         self.status_text_changed.emit(f"AI report ready for {name} ({ticker}).")
         show_stock_report_result(self, ticker, name, result_text)
@@ -469,7 +473,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.trend_score_btn.setChecked(False)   # the click toggled it on; checked means "pinned"
         items = self._trend_score_items()
         if not items:
-            QMessageBox.information(self, "Trend Score", "No KOSPI/KOSDAQ rows to score. Refresh the universe first.")
+            self.status_text_changed.emit("Trend Score: no KOSPI/KOSDAQ rows to score -- Refresh the universe first")
             return
         self.trend_score_btn.setEnabled(False)
         self.status_text_changed.emit(f"Scoring {len(items)} names (trend + pullback)...")
@@ -486,7 +490,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         if rec is None:
             self.trend_score_btn.setChecked(False)
             if error != CANCELLED_MESSAGE:
-                QMessageBox.warning(self, "Trend Score", f"Scoring failed:\n{error}")
+                QMessageBox.warning(self, _TITLE, f"Trend Score failed:\n{error}")
             self.status_text_changed.emit(f"Trend Score: {error}")
             return
         order = {}

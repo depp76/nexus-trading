@@ -629,3 +629,15 @@ app.setStyleSheet(app_qss(FONT_FAMILY_CSS))
   Universe는 종목 추가(시장·코드·Add Ticker)를 오른쪽 동작 묶음으로, "Market:/Ticker:/Search:" 라벨 대신 placeholder.
   Total Assets 입력 줄도 This Week·Add Record를 오른쪽 끝으로.
 - Strategy: 탭 안 제목·부제 제거(다른 탭에 없음, 설명은 Run 버튼 툴팁), 서브탭이 하나일 때 서브탭 바 숨김(`setTabBarAutoHide`).
+
+### 8.5 글꼴·메시지·다이얼로그
+
+- 글꼴 크기는 `ui.common`의 `FONT_*` 상수로만 지정한다(`create_font(9)` 같은 숫자 직접 지정 금지).
+  툴바 위젯은 앱 기본 글꼴을 그대로 쓰고 위젯별 `setFont`를 하지 않는다.
+- 탭 안에 제목·부제를 두지 않는다(탭 라벨이 이름).
+- 메시지 박스 제목은 그 탭 이름 하나(`Trading Universe` / `Trading History` / `Total Assets` / `Strategy`).
+  "Error", "Input Error", "Database Error", "Search Result" 같은 제목을 쓰지 않는다.
+- 모달은 **오류와 확인**에만. 정보성 결과(검색 결과 없음, 내보내기 완료, 데이터 없음, 아직 로딩 중)는 상태바나
+  탭 푸터로. 예외: 모달 다이얼로그 안에서 시작된 동작의 결과(그래프 창의 Report)는 상태바가 가려지므로 메시지 박스로 남긴다.
+- 다이얼로그: 크기 조절 가능(고정 크기 금지), 닫기 버튼 폭 미지정, 창 제목·메뉴 항목에 이모지 없음.
+- 검증: `tests/test_ux_consistency.py`(버튼 팩토리·표 기본값·빈 상태 안내·탭별 primary 1개·정보 메시지의 상태바 전달).

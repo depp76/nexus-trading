@@ -259,10 +259,10 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
 
     def _on_run_clicked(self):
         if self.start_edit.date() >= self.end_edit.date():
-            QMessageBox.warning(self, "Trend Following", "Start must be before End.")
+            QMessageBox.warning(self, "Strategy", "Start must be before End.")
             return
         if not self._selected_variants() and not self.event_cb.isChecked():
-            QMessageBox.warning(self, "Trend Following", "Select at least one variant or the event study.")
+            QMessageBox.warning(self, "Strategy", "Select at least one variant or the event study.")
             return
         req = self.build_request()
         thread = TrendFollowingResearchThread(req)

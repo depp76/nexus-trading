@@ -275,17 +275,8 @@ class StockTradeHistoryDialog(QDialog):
         btn_layout.addWidget(close_btn)
         layout.addLayout(btn_layout)
 
-        # ---Determine scroll bar visibility based on content height ---
-        # Compare total content height against the available table viewport height.
-        hdr_h = tbl.horizontalHeader().height()
-        row_h = tbl.verticalHeader().defaultSectionSize()
-        n_rows = tbl.rowCount()
-        content_h = hdr_h + row_h * n_rows + 4  # +4 for border
-        CLOSE_BTN_H = 44  # close button row + margins
-        PADDING = 20      # dialog layout margins
-        available_tbl_h = 600 - CLOSE_BTN_H - PADDING
-        if content_h <= available_tbl_h:
-            tbl.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        else:
-            tbl.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.setFixedSize(1000, 600)
+        # Resizable like every other dialog (docs/ui.md 8.5); it used to be
+        # pinned at 1000x600 with the scroll bar switched on or off by a
+        # height estimate for that fixed size.
+        tbl.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.resize(1000, 600)

@@ -2,7 +2,7 @@
 History tab (split out of TradingHistoryTab on 2026-09-17)."""
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView,
-    QMessageBox, QLabel, QPushButton,
+    QLabel, QPushButton,
 )
 from PyQt6.QtCore import Qt
 
@@ -145,10 +145,12 @@ def build_holdings_summary(parent, closed_data: list, open_data: list):
     return dlg
 
 
-def show_holdings_summary(parent, closed_data: list, open_data: list):
-    """Modal wrapper around build_holdings_summary()."""
+def show_holdings_summary(parent, closed_data: list, open_data: list) -> bool:
+    """Modal wrapper around build_holdings_summary(). Returns False when there
+    is nothing to show; the caller reports that on the status bar (docs/ui.md
+    8.5: no modal box for information)."""
     dlg = build_holdings_summary(parent, closed_data, open_data)
     if dlg is None:
-        QMessageBox.information(parent, "Summary", "No trading data available.")
-        return
+        return False
     dlg.exec()
+    return True
