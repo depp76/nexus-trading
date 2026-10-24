@@ -18,7 +18,7 @@ from matplotlib.dates import date2num, num2date
 from datetime import date, datetime
 
 from PyQt6.QtCore import Qt, QDate
-from PyQt6.QtGui import QFont, QBrush, QColor
+from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QCheckBox, QComboBox,
     QSpinBox, QDateEdit, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QMessageBox,
@@ -35,7 +35,7 @@ from strategy.trend_following import (
 from strategy.trend_following.research import SUMMARY_COLUMNS
 from strategy.trend_following.event_study import HORIZONS
 from threads.strategy_threads import TrendFollowingResearchThread, CANCELLED_MESSAGE
-from ui.common import create_font, make_button, setup_table, ThreadOwnerMixin, FONT_HEADING, FONT_SMALL, FONT_BODY
+from ui.common import create_font, make_button, setup_table, ThreadOwnerMixin, TAB_MARGINS, TAB_SPACING, FONT_SMALL, FONT_BODY
 from ui.theme import TEXT, TEXT_SUB, TEXT_MUTED, TEXT_FAINT, TEXT_EMPTY, LINE
 
 logger = logging.getLogger(__name__)
@@ -69,18 +69,12 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setSpacing(8)
-        root.setContentsMargins(12, 10, 12, 10)
-
-        title = QLabel("Trend Following")
-        title.setFont(create_font(FONT_HEADING, QFont.Weight.Bold))
-        subtitle = QLabel(f"Research backtest per trend_following.md {SPEC_VERSION}: variants A0–A5 and B "
-                          f"against BM1–BM4 with the 0x/1x/2x cost scenarios and the 6-1 event study.")
-        subtitle.setObjectName("muted")
-        subtitle.setFont(create_font(FONT_SMALL))
-        subtitle.setWordWrap(True)
-        root.addWidget(title)
-        root.addWidget(subtitle)
+        root.setSpacing(TAB_SPACING)
+        root.setContentsMargins(*TAB_MARGINS)
+        # No in-tab title (docs/ui.md 8.4): no other tab has one and the tab
+        # label already names it. What a run does is on the Run button's tooltip.
+        self._run_tooltip = (f"Research backtest per trend_following.md {SPEC_VERSION}: variants A0–A5 and B "
+                             f"against BM1–BM4 with the 0x/1x/2x cost scenarios and the 6-1 event study.")
 
         form = QGridLayout()
         form.setHorizontalSpacing(10)
@@ -162,7 +156,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         variants_row.addStretch()
         # Run is the tab's one primary action; Stop cancels a run, it does not
         # destroy anything, so it stays neutral (docs/ui.md 8.1).
-        self.run_btn = make_button("Run Research", "primary", self._on_run_clicked)
+        self.run_btn = make_button("Run Research", "primary", self._on_run_clicked, tooltip=self._run_tooltip)
         self.stop_btn = make_button("Stop", on_click=self._on_stop_clicked)
         self.stop_btn.setEnabled(False)
         self.save_btn = make_button("Save Report", on_click=self._on_save_clicked)

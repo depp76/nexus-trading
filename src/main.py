@@ -1,5 +1,6 @@
 import sys
 import os
+from datetime import datetime
 from dotenv import load_dotenv
 import trade_db
 from PyQt6.QtWidgets import (
@@ -16,9 +17,11 @@ from ui.common import (
     apply_matplotlib_font,
     FONT_FAMILY_CSS,
     FONT_TITLE,
+    FONT_SMALL,
     cancel_thread,
 )
-from ui.theme import app_qss, ACCENT_TEXT
+from ui.theme import app_qss, TEXT_EMPTY
+from ui.colors import OK, WARN
 
 load_dotenv(ENV_FILE)
 
@@ -79,16 +82,32 @@ class MainWindow(QMainWindow):
 
         # Global Auto Timer
         self.global_auto_timer = QTimer(self)
-        self.global_auto_timer.setInterval(60000)
+        self.global_auto_timer.setInterval(self.AUTO_REFRESH_MS)
         self.global_auto_timer.timeout.connect(self._on_global_auto_timer)
 
-        # Add Auto Refresh Checkbox
-        self.auto_refresh_cb = QCheckBox("Auto-refresh (1 min)")
-        self.auto_refresh_cb.setFont(create_font(10, QFont.Weight.Bold))
-        self.auto_refresh_cb.setStyleSheet(f"QCheckBox {{ color: {ACCENT_TEXT}; margin-right: 15px; }}")
+        # Refresh status, all in one place on the header (docs/ui.md 1.10 /
+        # 8.4): state dot . toggle with its interval . last update time. The
+        # dot is OK while updates arrive, WARN once the last one is older than
+        # two intervals, faint while auto-refresh is off. The time used to sit
+        # in a footer row, apart from the toggle.
+        self._last_sync_at = None
+        self._refresh_dot = QLabel("●")
+        self._refresh_dot.setFont(create_font(FONT_SMALL))
+        header_layout.addWidget(self._refresh_dot)
+        self.auto_refresh_cb = QCheckBox(f"Auto-refresh · {self.AUTO_REFRESH_MS // 1000}s")
         self.auto_refresh_cb.toggled.connect(self._toggle_global_auto_timer)
         header_layout.addWidget(self.auto_refresh_cb)
-        
+        self.update_time_label = QLabel("last -")
+        self.update_time_label.setObjectName("faint")
+        self.update_time_label.setFont(create_font(FONT_SMALL, style_name="Semilight"))
+        header_layout.addSpacing(6)
+        header_layout.addWidget(self.update_time_label)
+        # Re-evaluates "late" between updates.
+        self._indicator_timer = QTimer(self)
+        self._indicator_timer.setInterval(15000)
+        self._indicator_timer.timeout.connect(self._update_refresh_indicator)
+        self._indicator_timer.start()
+
         # Check by default (this will trigger the toggled signal and start the timer)
         self.auto_refresh_cb.setChecked(True)
 
@@ -123,31 +142,17 @@ class MainWindow(QMainWindow):
         self.trading_history_tab.total_asset_updated.connect(self.trading_record_tab.update_live_asset)
         self.trading_history_tab.status_message.connect(self._on_thread_status_message)
 
-        # Native status bar: shows short-lived progress text from background fetch threads
-        # (e.g. "Fetching KOSPI quotes... (3/5)", "Waiting for Yahoo Finance response...").
+        # Native status bar: the one place for short-lived progress and result
+        # text from every tab (e.g. "Fetching KOSPI quotes... (3/5)"). Each tab's
+        # own lasting status line sits in that tab's footer (docs/ui.md 8.4).
         self.statusBar().showMessage("Ready")
 
         # Load Trading History from the database (primary source).
         self.trading_history_tab.load_from_db()
 
-        # Status Bar (Common)
-        status_layout = QHBoxLayout()
-        status_layout.setContentsMargins(0, 0, 0, 0)
-        self.status_label = QLabel("Ready")
-        status_layout.addWidget(self.status_label)
-        status_layout.addStretch()
-
-        self.update_time_label = QLabel("Last updated: -")
-        self.update_time_label.setFont(create_font(9, style_name="Semilight"))
-        self.update_time_label.setStyleSheet("color: #7f8c8d;")
-        status_layout.addWidget(self.update_time_label)
-
-        main_layout.addLayout(status_layout)
-
-        # Wire Trading Universe tab -> shared footer / native status bar / cross-tab triggers
-        # (mirrors the total_asset_updated/status_message wiring above for TradingHistoryTab).
-        self.universe_tab.status_text_changed.connect(self.status_label.setText)
-        self.universe_tab.sync_time_changed.connect(self.update_time_label.setText)
+        # Wire Trading Universe tab -> header refresh status / native status bar /
+        # cross-tab triggers (its status_text_changed goes to its own footer).
+        self.universe_tab.sync_time_changed.connect(self._on_sync_time)
         self.universe_tab.status_message.connect(self._on_thread_status_message)
         self.universe_tab.refresh_started.connect(self.trading_history_tab._reload_current)
         self.universe_tab.auto_lightweight_tick.connect(self.trading_history_tab._start_realtime_price_update)
@@ -182,13 +187,33 @@ class MainWindow(QMainWindow):
         if count > 1:
             self.tabs.setCurrentIndex((self.tabs.currentIndex() - 1) % count)
 
+    AUTO_REFRESH_MS = 60000
+
     def _toggle_global_auto_timer(self, checked):
         if checked:
+            # The first tick comes one interval later, so toggling back and
+            # forth does not fire a burst of fetches.
             self.global_auto_timer.start()
-            # Optionally trigger immediately when turned on if desired, 
-            # but let's just wait 1 minute for the first tick to avoid spamming if user clicks back and forth.
         else:
             self.global_auto_timer.stop()
+        self._update_refresh_indicator()
+
+    def _on_sync_time(self, _text: str):
+        self._last_sync_at = datetime.now()
+        self.update_time_label.setText(f"last {self._last_sync_at:%H:%M:%S}")
+        self._update_refresh_indicator()
+
+    def _update_refresh_indicator(self):
+        if not self.auto_refresh_cb.isChecked():
+            color, tip = TEXT_EMPTY, "Auto-refresh is off"
+        elif self._last_sync_at is None:
+            color, tip = TEXT_EMPTY, "Waiting for the first update"
+        elif (datetime.now() - self._last_sync_at).total_seconds() * 1000 > 2 * self.AUTO_REFRESH_MS:
+            color, tip = WARN, "Late: no update for more than two intervals"
+        else:
+            color, tip = OK, "Updating"
+        self._refresh_dot.setStyleSheet(f"color: {color};")
+        self._refresh_dot.setToolTip(tip)
 
     def _on_global_auto_timer(self):
         self.universe_tab.auto_update_tick()

@@ -120,7 +120,7 @@ def update_changed_rows(self, data, changed_rows, highlights=None):
 
 ### 1.10 갱신 상태 표시
 
-자동갱신 토글·주기·마지막 갱신 시각·실패 경고를 **헤더 한 곳에** 모은다. 현재는 토글이 우상단, 상태 라벨이 창 하단으로 갈라져 있다.
+자동갱신 토글·주기·마지막 갱신 시각·실패 경고를 **헤더 한 곳에** 모은다. (2026-10-25 구현, 8.4)
 
 ```
 ● Auto update · 60s   last 09:41:22
@@ -615,3 +615,17 @@ app.setStyleSheet(app_qss(FONT_FAMILY_CSS))
   헤더가 손실·이익처럼 읽히던 문제를 없앰. History 본문의 색 구분선도 제거(모든 선은 `#d0d0d0` 1px).
 - 면책 고지는 정보이므로 `DANGER`가 아니라 `#muted`.
 - `ui/theme.py`·`ui/colors.py` 밖에 hex 색을 쓰지 않는다.
+
+### 8.4 셸과 탭 골격
+
+- **헤더 한 줄의 갱신 상태**(1.10 구현): `● Auto-refresh · 60s  last 09:41:22`. 점은 갱신이 오면 `OK`, 마지막 갱신이
+  주기의 2배를 넘으면 `WARN`, 꺼짐·첫 갱신 전은 흐린 색. 별도 실패 신호가 없어 실패는 "지연"으로 드러난다.
+- **창 하단 공용 상태 행 제거**: 일시적 진행·결과 문구는 네이티브 상태바 하나(`status_message`), 탭 고유의 지속 상태는
+  그 탭 표 아래 푸터(`ui.common.make_footer_label`). Universe 상태 문구는 Universe 푸터, History 데이터 출처는 History 푸터,
+  History 예수금 조회 결과는 상태바(툴바 끝의 색 굵은 글씨 라벨 제거).
+- **탭 골격**: 툴바 1행 → (KPI 띠 또는 차트) → 표 → 푸터, 여백 `TAB_MARGINS`(12·10)·간격 `TAB_SPACING`(8).
+  History는 KPI 띠 아래에 있던 툴바를 맨 위로.
+- **툴바 배치**: 왼쪽은 표를 거르는 것(검색·시장·상태·기간·묶음·30일 규칙), `addStretch`, 오른쪽은 동작이며 primary가 맨 끝.
+  Universe는 종목 추가(시장·코드·Add Ticker)를 오른쪽 동작 묶음으로, "Market:/Ticker:/Search:" 라벨 대신 placeholder.
+  Total Assets 입력 줄도 This Week·Add Record를 오른쪽 끝으로.
+- Strategy: 탭 안 제목·부제 제거(다른 탭에 없음, 설명은 Run 버튼 툴팁), 서브탭이 하나일 때 서브탭 바 숨김(`setTabBarAutoHide`).

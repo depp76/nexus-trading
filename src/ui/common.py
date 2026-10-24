@@ -15,7 +15,7 @@ import datetime as _dt
 from typing import Any, Callable
 
 from PyQt6.QtCore import QObject, QEvent, Qt
-from PyQt6.QtWidgets import QLineEdit, QPushButton, QTableWidget, QHeaderView
+from PyQt6.QtWidgets import QLineEdit, QPushButton, QTableWidget, QHeaderView, QLabel
 from PyQt6.QtGui import QFont, QPainter, QColor
 
 from ui.theme import TEXT_FAINT
@@ -111,6 +111,25 @@ def make_button(text: str, role: str | None = None, on_click: Callable | None = 
     if on_click is not None:
         btn.clicked.connect(on_click)
     return btn
+
+
+# ---------------------------------------------------------------------------
+# Tab skeleton (docs/ui.md 8.4)
+# ---------------------------------------------------------------------------
+# Every top-level tab: [toolbar row] -> [optional KPI strip or chart] ->
+# [table] -> [footer line], with these margins and gaps.
+TAB_MARGINS = (12, 10, 12, 10)
+TAB_SPACING = 8
+
+
+def make_footer_label(text: str = "") -> QLabel:
+    """A tab's lasting status line under its table: small, muted, elided by
+    word wrap rather than stretching the window."""
+    lbl = QLabel(text)
+    lbl.setObjectName("muted")
+    lbl.setFont(create_font(FONT_SMALL, style_name="Semilight"))
+    lbl.setWordWrap(True)
+    return lbl
 
 
 # ---------------------------------------------------------------------------

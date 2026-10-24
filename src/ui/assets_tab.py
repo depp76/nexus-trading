@@ -58,7 +58,7 @@ class _AssetsTable(QTableWidget):
 
 
 from ui.common import (
-    create_font, ThreadOwnerMixin, make_button, setup_table,
+    create_font, ThreadOwnerMixin, make_button, setup_table, TAB_MARGINS, TAB_SPACING,
 )
 
 
@@ -128,8 +128,8 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
     # ---UI ---
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setSpacing(8)
-        root.setContentsMargins(12, 10, 12, 10)
+        root.setSpacing(TAB_SPACING)
+        root.setContentsMargins(*TAB_MARGINS)
 
         # ---Header row: currency toggle + USD/KRW rate (docs/ui.md 4.1/4.3) ---
         header_row = QHBoxLayout()
@@ -225,8 +225,6 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         ctrl.addSpacing(12)
         ctrl.addWidget(live_diff_title)
         ctrl.addWidget(self.live_diff_lbl)
-        ctrl.addWidget(today_btn)
-        ctrl.addWidget(add_btn)
 
         # Graph/Export sit on the header row, right-aligned above the chart
         # they belong to: all on one controls row the tab needed ~1,540px
@@ -238,7 +236,10 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
                                  tooltip="Export the asset snapshot table to Excel or CSV")
         header_row.addWidget(export_btn)
 
+        # Actions on the right, the primary last (docs/ui.md 8.4).
         ctrl.addStretch()
+        ctrl.addWidget(today_btn)
+        ctrl.addWidget(add_btn)
         root.addLayout(ctrl)
 
         # ---Table (docs/ui.md 4.2/4.5: one spec -- label/min-width/weight --

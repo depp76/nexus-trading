@@ -7,10 +7,9 @@ Contains:
   live directly on MainWindow.
 
 Cross-tab communication (mirrors the TradingHistoryTab pattern from Phase 4):
-  status_text_changed / sync_time_changed — MainWindow forwards these to the
-    shared footer labels (status_label / update_time_label) it owns, so the
-    footer's on-screen position (below the tab widget, visible regardless of
-    which tab is active) is unchanged from before this split.
+  status_text_changed — this tab's own footer line (footer_lbl) under the
+    table (docs/ui.md 8.4; it used to be MainWindow's shared footer row).
+  sync_time_changed — MainWindow's header refresh status (dot + last time).
   status_message — short-lived progress text, forwarded to MainWindow's
     native status bar via _on_thread_status_message (same as
     TradingHistoryTab.status_message).
@@ -27,7 +26,7 @@ from collections import Counter
 from datetime import datetime
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QLineEdit,
+    QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLineEdit,
     QPushButton, QMessageBox,
 )
 from PyQt6.QtCore import pyqtSignal, QTimer
@@ -48,19 +47,21 @@ logger = logging.getLogger(__name__)
 
 
 from ui.common import (
-    create_font,
     _MARKET_ORDER,
     atomic_save_json,
     safe_load_json,
     ThreadOwnerMixin,
     make_button,
+    make_footer_label,
+    TAB_MARGINS,
+    TAB_SPACING,
 )
 
 class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     """Trading Universe tab: watchlist table + ticker add/search controls."""
 
-    status_text_changed = pyqtSignal(str)  # -> MainWindow's shared status_label
-    sync_time_changed = pyqtSignal(str)    # -> MainWindow's shared update_time_label
+    status_text_changed = pyqtSignal(str)  # -> this tab's footer_lbl
+    sync_time_changed = pyqtSignal(str)    # -> MainWindow's header refresh status
     status_message = pyqtSignal(str)       # -> MainWindow's native status bar (roadmap 2-3)
     refresh_started = pyqtSignal()         # -> MainWindow also reloads Trading History tab
     auto_lightweight_tick = pyqtSignal()   # -> MainWindow also triggers Trading History realtime update
@@ -94,71 +95,59 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
     def _build_ui(self):
         universe_layout = QVBoxLayout(self)
+        universe_layout.setContentsMargins(*TAB_MARGINS)
+        universe_layout.setSpacing(TAB_SPACING)
 
-        # Add Ticker + Search panel
-        add_layout = QHBoxLayout()
-
-        lbl_market = QLabel("Market:")
-        lbl_market.setFont(create_font(10, style_name="Semilight"))
-        add_layout.addWidget(lbl_market)
-
-        self.market_combo = QComboBox()
-        self.market_combo.setFont(create_font(10, style_name="Semilight"))
-        self.market_combo.addItems(["KOSPI", "KOSDAQ"]) #, "NASDAQ 100", "S&P500"])
-        self.market_combo.setFixedWidth(100)
-        add_layout.addWidget(self.market_combo)
-
-        lbl_ticker = QLabel("Ticker:")
-        lbl_ticker.setFont(create_font(10, style_name="Semilight"))
-        add_layout.addWidget(lbl_ticker)
-
-        self.ticker_input = QLineEdit()
-        self.ticker_input.setFont(create_font(10, style_name="Semilight"))
-        self.ticker_input.setPlaceholderText("e.g. AAPL or 005930")
-        self.ticker_input.setFixedWidth(140)
-        self.ticker_input.returnPressed.connect(self.add_ticker)
-        add_layout.addWidget(self.ticker_input)
-
-        self.add_ticker_btn = make_button("Add Ticker", on_click=self.add_ticker)
-        add_layout.addWidget(self.add_ticker_btn)
-
-        add_layout.addSpacing(16)
-
-        lbl_search = QLabel("Search:")
-        lbl_search.setFont(create_font(10, style_name="Semilight"))
-        add_layout.addWidget(lbl_search)
+        # Toolbar (docs/ui.md 8.4): filters and search on the left, actions on
+        # the right, the primary action last. Widgets take the app font and
+        # the theme's input/button heights; no per-widget font.
+        bar = QHBoxLayout()
 
         self.search_input = QLineEdit()
-        self.search_input.setFont(create_font(10, style_name="Semilight"))
-        self.search_input.setPlaceholderText("Search by name or ticker...")
+        self.search_input.setPlaceholderText("Search name or ticker")
         self.search_input.setMinimumWidth(160)
         self.search_input.setMaximumWidth(260)
         self.search_input.textChanged.connect(self.filter_table)
-        add_layout.addWidget(self.search_input)
+        bar.addWidget(self.search_input)
 
         # Market filter (docs/ui.md 2.1): ALL/KOSPI/KOSDAQ toolbar buttons,
         # replacing the old Excel-style dropdown on a Market table column
         # (Market isn't a column anymore -- see the identity cell's meta text).
         # The four filter toggles (ALL/KOSPI/KOSDAQ and the status cycle)
-        # share one size, the former Target List button's, and one gap --
-        # the layout's default spacing, with no extra spacer before the
-        # status button (user direction 2026-09-19).
-        add_layout.addSpacing(8)
+        # share one size and one gap (user direction 2026-09-19).
+        bar.addSpacing(8)
         self._market_buttons = {}
         for m in ("ALL", "KOSPI", "KOSDAQ"):
             btn = self._filter_button(m, checked=(m == "ALL"))
             btn.clicked.connect(lambda checked, mk=m: self._on_market_filter_changed(mk))
-            add_layout.addWidget(btn)
+            bar.addWidget(btn)
             self._market_buttons[m] = btn
 
         # Status filter: one button cycling blank (no filter) -> Held -> Target
         # (user direction 2026-09-29); fixed width so the label change never
         # resizes it. Blank = unchecked, Held/Target = checked.
         self.tg_filter_btn = self._filter_button(self._STATUS_FILTER_STATES[0][1])
+        self.tg_filter_btn.setToolTip("Status filter: none / Held / Target")
         self.tg_filter_btn.clicked.connect(self._on_status_filter_clicked)
-        add_layout.addWidget(self.tg_filter_btn)
+        bar.addWidget(self.tg_filter_btn)
 
-        add_layout.addStretch()
+        bar.addStretch()
+
+        # Add a ticker: market + code + button, one action group.
+        self.market_combo = QComboBox()
+        self.market_combo.addItems(["KOSPI", "KOSDAQ"]) #, "NASDAQ 100", "S&P500"])
+        self.market_combo.setFixedWidth(100)
+        bar.addWidget(self.market_combo)
+
+        self.ticker_input = QLineEdit()
+        self.ticker_input.setPlaceholderText("Ticker, e.g. 005930")
+        self.ticker_input.setFixedWidth(140)
+        self.ticker_input.returnPressed.connect(self.add_ticker)
+        bar.addWidget(self.ticker_input)
+
+        self.add_ticker_btn = make_button("Add Ticker", on_click=self.add_ticker)
+        bar.addWidget(self.add_ticker_btn)
+        bar.addSpacing(8)
 
         # Weekly "trend + pullback" Top/Bottom recommendation
         # (trend_following.md 2-5; scoring.py via TrendScoreThread). Checked
@@ -169,13 +158,13 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
                                         "weekly Top 10 / Bottom 10 to the top of the table; click again to "
                                         "restore the default order")
         self.trend_score_btn.clicked.connect(self._on_trend_score_clicked)
-        add_layout.addWidget(self.trend_score_btn)
+        bar.addWidget(self.trend_score_btn)
 
         # Refresh is this tab's one primary action (docs/ui.md 1.6 / 8.1).
         self.refresh_btn = make_button("Refresh", "primary", self.refresh_data)
-        add_layout.addWidget(self.refresh_btn)
+        bar.addWidget(self.refresh_btn)
 
-        universe_layout.addLayout(add_layout)
+        universe_layout.addLayout(bar)
 
         self.table = StockTable()
         self.table.col_filter_changed.connect(self.filter_table)
@@ -185,7 +174,14 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.table.user_sorted.connect(self._on_user_sorted)
         self.table.toggle_requested.connect(self.toggle_stock)
 
-        universe_layout.addWidget(self.table)
+        universe_layout.addWidget(self.table, 1)
+
+        # Footer: this tab's lasting status line (load/progress/Trend Score
+        # results). It used to be MainWindow's shared footer row, visible on
+        # every tab though only this tab wrote to it (docs/ui.md 8.4).
+        self.footer_lbl = make_footer_label()
+        self.status_text_changed.connect(self.footer_lbl.setText)
+        universe_layout.addWidget(self.footer_lbl)
 
     _FILTER_BTN_W = 80
     # (highlight status to show, button label): "" = no status filter. The
