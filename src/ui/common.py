@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import QLineEdit, QPushButton, QTableWidget, QHeaderView
 from PyQt6.QtGui import QFont, QPainter, QColor
 
 from ui.theme import TEXT_FAINT
+from ui.colors import OK, DANGER, DANGER_BG
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ def apply_matplotlib_font() -> None:
 # ---------------------------------------------------------------------------
 _HIST_KEYS = ["3d", "5d", "10d", "20d", "60d", "120d"]
 _MARKET_ORDER = {"KOSPI": 0, "KOSDAQ": 1, "NASDAQ 100": 2, "S&P500": 3}
-_FIELD_ERROR_STYLE = "border: 1px solid #e74c3c; background-color: #fdecea;"
+_FIELD_ERROR_STYLE = f"border: 1px solid {DANGER}; background-color: {DANGER_BG};"
 
 # Shared font-family declaration for inline stylesheets (roadmap 6-2e); the
 # same three-family fallback list create_font() uses. Splice it into a
@@ -167,8 +168,8 @@ def setup_table(table: QTableWidget, *, zebra: bool = True, empty_text: str = ""
 # #primary/#danger objectName roles; the per-role solid-fill helpers that used
 # to live here -- action_button_style(), _ACTION_*_COLOR, _SECONDARY_BUTTON_STYLE
 # -- are gone with docs/ui.md 1.6.)
-_STATUS_SUCCESS_COLOR = "#107c10"
-_STATUS_FAIL_COLOR = "#c0392b"
+_STATUS_SUCCESS_COLOR = OK
+_STATUS_FAIL_COLOR = DANGER
 
 
 # ---------------------------------------------------------------------------

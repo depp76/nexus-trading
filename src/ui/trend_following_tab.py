@@ -36,13 +36,13 @@ from strategy.trend_following.research import SUMMARY_COLUMNS
 from strategy.trend_following.event_study import HORIZONS
 from threads.strategy_threads import TrendFollowingResearchThread, CANCELLED_MESSAGE
 from ui.common import create_font, make_button, setup_table, ThreadOwnerMixin, FONT_HEADING, FONT_SMALL, FONT_BODY
-from ui.theme import TEXT, TEXT_MUTED, TEXT_FAINT, LINE, DANGER
+from ui.theme import TEXT, TEXT_SUB, TEXT_MUTED, TEXT_FAINT, TEXT_EMPTY, LINE
 
 logger = logging.getLogger(__name__)
 
 _WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"]
 _COST_CHOICES = [("0x / 1x / 2x (4-1 sensitivity)", COST_MULTIPLIERS), ("1x only", (1.0,))]
-_BENCHMARK_STYLE = {"BM1": ("#595d6c", "--"), "BM2": ("#9397ab", ":"), "BM3": ("#1c1e2c", "-."), "BM4": ("#c3c6d4", ":")}
+_BENCHMARK_STYLE = {"BM1": (TEXT_SUB, "--"), "BM2": (TEXT_FAINT, ":"), "BM3": (TEXT, "-."), "BM4": (TEXT_EMPTY, ":")}
 
 
 def _fmt_event(value, pct=True, digits=1) -> str:
@@ -237,8 +237,9 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
                         "KOSPI constituents (survivorship bias) and the cost assumptions of trend_following.md 4-1; "
                         "nothing here places orders.")
         notice.setWordWrap(True)
-        notice.setFont(create_font(FONT_BODY))
-        notice.setStyleSheet(f"color: {DANGER};")
+        notice.setFont(create_font(FONT_SMALL))
+        # Information, not an error: muted text on the card, not DANGER red (docs/ui.md 8.3).
+        notice.setObjectName("muted")
         banner_layout.addWidget(notice)
         root.addWidget(banner)
 
@@ -342,7 +343,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             if len(r.nav) == 0:
                 continue
             if r.kind == "benchmark":
-                color, style = _BENCHMARK_STYLE.get(r.id, ("#9397ab", ":"))
+                color, style = _BENCHMARK_STYLE.get(r.id, (TEXT_FAINT, ":"))
                 line, = ax.plot(r.dates, r.nav * 100.0, linestyle=style, linewidth=1.2, color=color, label=r.id)
             else:
                 line, = ax.plot(r.dates, r.nav * 100.0, linewidth=1.5, label=r.id)

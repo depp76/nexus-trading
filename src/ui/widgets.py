@@ -18,8 +18,8 @@ from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPolygon, QKeySequence
 
 from ui.common import create_font, FONT_SMALL, TABLE_ROW_H, _EmptyHint
 from ui.delegates import IdentityDelegate, RangeBarDelegate, TrendDelegate
-from ui.colors import fg_for, heatmap_bg, PROFIT, LOSS, FLAT
-from ui.theme import ACCENT, TEXT, TEXT_FAINT, TEXT_EMPTY, TEXT_SUB, LINE_GROUP, SURFACE
+from ui.colors import fg_for, heatmap_bg, PROFIT, LOSS, FLAT, OK, WARN
+from ui.theme import ACCENT, TEXT, TEXT_FAINT, TEXT_EMPTY, TEXT_SUB, TEXT_MUTED, LINE_GROUP, SURFACE, GRP_BG
 
 
 # ---------------------------------------------------------------------------
@@ -973,7 +973,7 @@ class StockTable(QTableWidget):
                 cell.setTextAlignment(right)
                 cell.setFont(numeric_font)
                 if col == COL_TPER:
-                    color = "#2e7d5b" if val < 12 else "#a32f26" if val > 60 else TEXT
+                    color = OK if val < 12 else WARN if val > 60 else TEXT
                     cell.setForeground(QColor(color))
             else:
                 cell = NumericItem("-", float('-inf'))
@@ -1165,12 +1165,11 @@ class GroupedHeaderView(QHeaderView):
         sub_rect = rect.adjusted(0, self._GROUP_H, 0, 0)
         opt = self._style_option(logical_index)
 
-        # Find this column's group colour and section boundary flags
-        col_color = TEXT_SUB
-        for _, start, span, color in self._sections:
-            if start <= logical_index < start + span:
-                col_color = color
-                break
+        # Group headers are neutral (docs/ui.md 8.3): blue/red mean
+        # up/down and accent means selection everywhere else, so a "Sell"
+        # header in red or a "Cumulative P/L" header in blue read as a
+        # loss/gain. The sections' color field is ignored.
+        col_color = TEXT_MUTED
 
         # Draw frame
         self.style().drawControl(
@@ -1212,12 +1211,10 @@ class GroupedHeaderView(QHeaderView):
             group_rect = QRect(gx, 0, gw, self._GROUP_H)
 
             # Background
-            bg = QColor(color)
-            bg.setAlpha(30)
-            painter.fillRect(group_rect, bg)
+            painter.fillRect(group_rect, QColor(GRP_BG))
 
             # Thin top/bottom border for the group row
-            pen_thin = QPen(QColor(color))
+            pen_thin = QPen(QColor(LINE_GROUP))
             pen_thin.setWidth(1)
             pen_thin.setCosmetic(True)
             painter.setPen(pen_thin)
@@ -1225,8 +1222,7 @@ class GroupedHeaderView(QHeaderView):
             painter.drawLine(gx, self._GROUP_H - 1, gx + gw - 1, self._GROUP_H - 1) # bottom
 
             # Label only (vertical borders are drawn per-column in paintSection)
-            pen2 = QPen(QColor(color))
-            painter.setPen(pen2)
+            painter.setPen(QPen(QColor(TEXT_SUB)))
             f = painter.font()
             f.setPointSize(9)
             f.setBold(True)
@@ -1242,7 +1238,7 @@ class GroupedHeaderView(QHeaderView):
             if start >= self.count():
                 continue
             end_col = min(start + span - 1, self.count() - 1)
-            pen_sec.setColor(QColor(color))
+            pen_sec.setColor(QColor(LINE_GROUP))
             painter.setPen(pen_sec)
             # Left border of this section
             xl = self.sectionViewportPosition(start)

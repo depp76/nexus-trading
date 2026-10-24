@@ -604,3 +604,14 @@ app.setStyleSheet(app_qss(FONT_FAMILY_CSS))
   실행 전에는 빈 0~1 축 대신 안내 문구.
 - 열 정렬은 행이 단순 레코드인 표(Universe, Total Assets)에서 헤더 클릭. History는 월 요약 행이 있어 열 정렬과
   공존할 수 없으므로 "Sort: Date" 토글(라벨이 반대 모드를 가리키던) 대신 보기 모드 세그먼트 **By Status | By Month**.
+
+### 8.3 색 의미 — 세 채널
+
+- **방향**: `PROFIT`(파랑)/`LOSS`(빨강)은 수치의 상승·하락·손익에만.
+- **강조**: accent(보라)는 선택·체크·primary에만.
+- **상태·판정**: `colors.OK`(초록, 양호·완료)와 `colors.WARN`(주황, 주의 — 빨강이 아니라 LOSS로 읽히지 않음),
+  실패는 `DANGER`. tPER 저평가/고평가, 입력 오류, 상태 문구가 이 토큰을 쓴다(`DANGER_BG`/`DANGER_LINE` 포함).
+- 그룹 헤더는 범주색을 쓰지 않는다: `GRP_BG` 바탕 + `TEXT_SUB` 라벨 + `LINE_GROUP` 선. 빨간 Sell·파란 Cumulative P/L
+  헤더가 손실·이익처럼 읽히던 문제를 없앰. History 본문의 색 구분선도 제거(모든 선은 `#d0d0d0` 1px).
+- 면책 고지는 정보이므로 `DANGER`가 아니라 `#muted`.
+- `ui/theme.py`·`ui/colors.py` 밖에 hex 색을 쓰지 않는다.

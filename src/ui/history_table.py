@@ -1,12 +1,12 @@
 """ui/history_table.py — Cell factories and row rendering for the Trading History
 table (split out of TradingHistoryTab on 2026-09-17)."""
 from PyQt6.QtWidgets import QTableWidget, QTableWidgetItem, QLabel
-from PyQt6.QtCore import Qt, QEvent
-from PyQt6.QtGui import QColor, QPainter, QPen
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
 
-from ui.colors import PROFIT, LOSS, FLAT, DANGER, QC_PROFIT, QC_LOSS
+from ui.colors import PROFIT, LOSS, FLAT, QC_PROFIT, QC_LOSS
 from ui.common import create_font, FONT_SMALL
-from ui.theme import ACCENT, ACCENT_TEXT, SURFACE, ZEBRA, GRP_BG, TEXT, TEXT_MUTED, TEXT_FAINT, TEXT_EMPTY
+from ui.theme import LINE_GROUP, ACCENT_TEXT, SURFACE, ZEBRA, GRP_BG, TEXT, TEXT_MUTED, TEXT_FAINT, TEXT_EMPTY
 from ui.widgets import ColSpec, NumericItem
 
 # Numeric cells use the one app font too (right-aligned; see ui.common), built once.
@@ -33,13 +33,6 @@ _DASH_COLOR = TEXT_EMPTY
 # genuinely fixed-content widths, unlike Universe's flex/weighted columns).
 # scale is unused here (no heatmap-background columns in this table).
 # ---------------------------------------------------------------------------
-_SECTION_COLOR = {
-    "Trading":  ("#75798c", "#595d6c"),
-    "Buy":      ("#2e7d5b", "#2e7d5b"),
-    "Sell":     (DANGER, "#a32f26"),
-    "Position": (ACCENT, ACCENT_TEXT),
-    "Past":     ("#cfd3e5", "#75798c"),
-}
 
 COLUMNS = [
     ColSpec("company",    "Company", 140, None, "Trading",  None),  # flex-absorbing, see _fit_columns
@@ -75,7 +68,7 @@ def _derive_sections(columns):
     for i in range(1, len(columns) + 1):
         g = columns[i].group if i < len(columns) else None
         if g != cur:
-            sections.append((cur, start, i - start, _SECTION_COLOR[cur][0]))
+            sections.append((cur, start, i - start, LINE_GROUP))
             start = i
             cur = g
     return sections
@@ -87,40 +80,15 @@ SECTIONS = _derive_sections(COLUMNS)
 
 
 class SectionTable(QTableWidget):
-    """QTableWidget that paints a coloured vertical rule at the left edge of
-    every column group (and the right edge of the last one) after the cells."""
+    """The history grid. It used to paint a colored vertical rule (green Buy,
+    red Sell, accent Position) at each column group's edge; since docs/ui.md
+    8.3 every table line is the one LINE_GROUP gray, which is what the grid
+    line at that edge already is, so the group boundary lives in the
+    two-row header only (as in Trading Universe)."""
 
     def __init__(self, sections=SECTIONS, parent=None):
         super().__init__(parent)
         self._secs = sections
-        self._last_col = max(start + span - 1 for _, start, span, _ in sections)
-
-    def viewportEvent(self, event):
-        result = super().viewportEvent(event)
-        if event.type() == QEvent.Type.Paint:
-            self._draw_section_lines()
-        return result
-
-    def _draw_section_lines(self):
-        vp = self.viewport()
-        painter = QPainter(vp)
-        if not painter.isActive():
-            return
-        painter.save()
-        h = vp.height()
-        pen = QPen()
-        pen.setWidth(1)
-        pen.setCosmetic(True)
-        for _, start, span, color in self._secs:
-            end_col = start + span - 1
-            pen.setColor(QColor(color))
-            painter.setPen(pen)
-            xl = self.columnViewportPosition(start)
-            painter.drawLine(xl, 0, xl, h - 1)
-            if end_col == self._last_col:
-                xr = self.columnViewportPosition(end_col) + self.columnWidth(end_col) - 1
-                painter.drawLine(xr, 0, xr, h - 1)
-        painter.restore()
 
 
 def si(text, align=Qt.AlignmentFlag.AlignCenter):

@@ -75,9 +75,9 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         ("Date", 0, 1, TEXT_SUB),
         ("KOSPI", 1, 3, TEXT_SUB),
         ("Total Assets", 4, 1, TEXT_SUB),
-        ("Weekly P/L", 5, 2, "#1a6b3c"),
-        ("Cumulative P/L", 7, 2, "#0078d4"),
-        ("vs KOSPI", 9, 1, "#6d28d9"),
+        ("Weekly P/L", 5, 2, TEXT_SUB),
+        ("Cumulative P/L", 7, 2, TEXT_SUB),
+        ("vs KOSPI", 9, 1, TEXT_SUB),
     ]
     # Sub-labels are English to match the rest of the app's UI (docs/ui.md's
     # own table uses Korean sub-labels -- 종가/주간 %/누적 % -- but every

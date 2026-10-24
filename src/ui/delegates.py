@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import QStyledItemDelegate, QStyle
 from PyQt6.QtCore import Qt, QRect, QSize
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPen
 
-from ui.theme import ACCENT, ACCENT_TEXT, ACCENT_BG, TEXT, TEXT_FAINT, LINE, LINE_SOFT
+from ui.theme import ACCENT, ACCENT_TEXT, ACCENT_BG, TEXT, TEXT_FAINT, LINE, LINE_SOFT, SURFACE
 
 
 class CellDelegate(QStyledItemDelegate):
@@ -121,7 +121,7 @@ class CellDelegate(QStyledItemDelegate):
 STATUS_BUTTON = {
     "-": ("", TEXT_FAINT, LINE, None),
     "On": ("Held", ACCENT_TEXT, ACCENT, ACCENT_BG),
-    "Tg": ("Target", "#ffffff", ACCENT, ACCENT),
+    "Tg": ("Target", SURFACE, ACCENT, ACCENT),
 }
 STATUS_MARKER = {"On": ACCENT, "Tg": ACCENT}
 
