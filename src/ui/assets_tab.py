@@ -58,7 +58,7 @@ class _AssetsTable(QTableWidget):
 
 
 from ui.common import (
-    create_font, FONT_FAMILY_CSS, ThreadOwnerMixin, make_button,
+    create_font, ThreadOwnerMixin, make_button, setup_table,
 )
 
 
@@ -244,17 +244,14 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         # ---Table (docs/ui.md 4.2/4.5: one spec -- label/min-width/weight --
         # instead of a separate _COLS_SUB list and a flat widths=[...] list) ---
         self._table = _AssetsTable(self._stretch_columns)
-        self._table.setFont(create_font(9, style_name="Semilight"))
+        setup_table(self._table, empty_text="No weekly records yet -- pick a week and Add Record")
         self._table.setColumnCount(len(self._COLUMNS))
 
         self._grouped_hdr = GroupedHeaderView(
             self._GROUPS, self._current_sub_labels(), self._table, group_h=22, sub_h=18, sortable=True,
         )
         self._table.setHorizontalHeader(self._grouped_hdr)
-        self._table.verticalHeader().setVisible(False)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self._table.setAlternatingRowColors(True)
         # docs/ui.md issue #9 (mockup): "정렬이 꺼져 있다" -- every column is
         # sortable now (a superset of the doc's minimum ask, Weekly P/L and
         # vs KOSPI). Default stays chronological (most recent first, matching
@@ -266,10 +263,6 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         for col_idx, spec in enumerate(self._COLUMNS):
             self._table.horizontalHeader().setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
             self._table.setColumnWidth(col_idx, spec.min_width)
-        self._table.setStyleSheet(
-            "QTableWidget { gridline-color: #d0d0d0; " + FONT_FAMILY_CSS + " font-size: 9pt; }"
-            "QTableWidget::item { padding: 1px 3px; }"
-        )
         self._table.cellDoubleClicked.connect(self._on_cell_double_clicked)
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._on_table_context_menu)

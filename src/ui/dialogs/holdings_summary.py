@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
-from ui.common import create_font, FONT_SMALL
+from ui.common import create_font, FONT_SMALL, TABLE_ROW_H
 from ui.colors import PROFIT, LOSS, QC_PROFIT, QC_LOSS, QC_FLAT
 from ui.widgets import NumericItem
 
@@ -84,7 +84,7 @@ def build_holdings_summary(parent, closed_data: list, open_data: list):
     tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
     for c in range(1, 5):
         tbl.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
-    tbl.verticalHeader().setDefaultSectionSize(26)
+    tbl.verticalHeader().setDefaultSectionSize(TABLE_ROW_H)
     dlg.table = tbl
 
     right = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter

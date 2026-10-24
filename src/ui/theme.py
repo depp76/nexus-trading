@@ -75,22 +75,27 @@ def app_qss(font_css: str) -> str:
     QPushButton#danger  {{ color: {DANGER}; border-color: #f0c4c1; }}
     QPushButton#danger:hover {{ background: #fdf0ef; }}
 
+    /* Tables (docs/ui.md 8.2): every table in the app has the same frame --
+       one 1px gray line for the outer border, the grid and the header
+       borders, square corners (the look Trading Universe got on 2026-10-02,
+       now the rule everywhere). Row height / zebra / selection come from
+       ui.common.setup_table(). */
     QTableWidget, QTableView {{
         background-color: {SURFACE};
         alternate-background-color: {ZEBRA};
-        gridline-color: {LINE_SOFT};
+        gridline-color: {LINE_GROUP};
         selection-background-color: {ACCENT_BG};
         selection-color: {TEXT};
-        border: 1px solid {LINE}; border-radius: 8px;
+        border: 1px solid {LINE_GROUP}; border-radius: 0px;
         {font_css}
     }}
-    QTableWidget::item, QTableView::item {{ padding: 2px 8px; }}
+    QTableWidget::item, QTableView::item {{ padding: 1px 3px; }}
     QTableWidget::item:hover {{ background: {ACCENT_BG}; }}
 
     QHeaderView::section {{
         background-color: {HDR_BG}; color: {TEXT_MUTED};
-        border: none; border-bottom: 1px solid {LINE_STRONG};
-        border-right: 1px solid {LINE};
+        border: none; border-bottom: 1px solid {LINE_GROUP};
+        border-right: 1px solid {LINE_GROUP};
         padding: 5px 8px; font-weight: 600; {font_css}
     }}
 

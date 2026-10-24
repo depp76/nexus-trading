@@ -16,10 +16,10 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QRect, QTimer
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPolygon, QKeySequence
 
-from ui.common import create_font, FONT_FAMILY_CSS, FONT_SMALL
+from ui.common import create_font, FONT_SMALL, TABLE_ROW_H, _EmptyHint
 from ui.delegates import IdentityDelegate, RangeBarDelegate, TrendDelegate
 from ui.colors import fg_for, heatmap_bg, PROFIT, LOSS, FLAT
-from ui.theme import ACCENT, TEXT, TEXT_FAINT, TEXT_EMPTY, TEXT_SUB, LINE_GROUP
+from ui.theme import ACCENT, TEXT, TEXT_FAINT, TEXT_EMPTY, TEXT_SUB, LINE_GROUP, SURFACE
 
 
 # ---------------------------------------------------------------------------
@@ -169,9 +169,7 @@ class FilterPopup(QFrame):
         super().__init__(parent, Qt.WindowType.Popup)
         self.col = col
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setStyleSheet(
-            "QFrame { background: white; border: 1px solid #aaa; border-radius: 4px; }"
-        )
+        self.setStyleSheet(f"QFrame {{ background: {SURFACE}; border: 1px solid {LINE_GROUP}; border-radius: 4px; }}")
 
         layout = QVBoxLayout(self)
         layout.setSpacing(3)
@@ -378,9 +376,8 @@ class StockTable(QTableWidget):
     delete_requested = pyqtSignal(str)     # emitted with the row's ticker
     toggle_requested = pyqtSignal(str)     # emitted with the row's ticker
 
-    # One row height (the old "compact" density; the Normal/Spacious toggle
-    # was removed on 2026-09-19 by user direction).
-    ROW_HEIGHT = 28
+    # The app-wide table row height (docs/ui.md 8.2; 28 px until 2026-10-25).
+    ROW_HEIGHT = TABLE_ROW_H
 
     def __init__(self):
         super().__init__()
@@ -391,19 +388,12 @@ class StockTable(QTableWidget):
         # Same family as text cells (one app font); built once per table
         # instance rather than per cell.
         self._numeric_font = create_font(FONT_SMALL, style_name="Semilight")
-        self.setStyleSheet(
-            # Outer frame: one thin (1px) gray line, square corners (user
-            # direction 2026-10-02; same gray as the grid lines). The right
-            # side is painted in paintEvent instead: the last column's own
-            # grid line already sits on the viewport's last pixel, so a frame
-            # border there would make a 2 px line.
-            "QTableWidget { gridline-color: #d0d0d0; border: 1px solid #d0d0d0; border-right: none; border-radius: 0px; "
-            + FONT_FAMILY_CSS + " font-size: 9pt; }"
-            "QTableWidget::item { padding: 1px 3px; }"
-            # Header borders in the same gray (the global rule uses two other,
-            # lighter tints, so the header lines read differently from the body's).
-            "QHeaderView::section { border-bottom: 1px solid #d0d0d0; border-right: 1px solid #d0d0d0; }"
-        )
+        # Frame, grid and header lines come from ui/theme.py's table rules
+        # (docs/ui.md 8.2). Only the right side differs: paintEvent draws it,
+        # because the last column's own grid line already sits on the
+        # viewport's last pixel and a frame border there would make 2 px.
+        self.setStyleSheet("QTableWidget { border-right: none; }")
+        self._empty_hint = _EmptyHint(self, "No stocks loaded yet -- Refresh fetches the universe")
         self._identity_delegate = IdentityDelegate(self)
         self._range_delegate = RangeBarDelegate(self)
         self._trend_delegate = TrendDelegate(self)
@@ -498,11 +488,7 @@ class StockTable(QTableWidget):
         self._frozen.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._frozen.setFont(self.font())
         self._frozen.setFrameShape(QFrame.Shape.NoFrame)
-        self._frozen.setStyleSheet(
-            "QTableWidget { gridline-color: #d0d0d0; border: none; border-right: 1px solid #d0d0d0; "
-            + FONT_FAMILY_CSS + " font-size: 9pt; }"
-            "QTableWidget::item { padding: 1px 3px; }"
-        )
+        self._frozen.setStyleSheet(f"QTableWidget {{ border: none; border-right: 1px solid {LINE_GROUP}; }}")
         # Purely a visual mirror -- never the target of a click/hover, so
         # every real interaction (row selection, context menu, sort) still
         # reaches the main table underneath it.

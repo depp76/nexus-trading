@@ -35,8 +35,8 @@ from strategy.trend_following import (
 from strategy.trend_following.research import SUMMARY_COLUMNS
 from strategy.trend_following.event_study import HORIZONS
 from threads.strategy_threads import TrendFollowingResearchThread, CANCELLED_MESSAGE
-from ui.common import create_font, make_button, ThreadOwnerMixin, FONT_HEADING, FONT_SMALL, FONT_BODY
-from ui.theme import TEXT, TEXT_MUTED, LINE, DANGER
+from ui.common import create_font, make_button, setup_table, ThreadOwnerMixin, FONT_HEADING, FONT_SMALL, FONT_BODY
+from ui.theme import TEXT, TEXT_MUTED, TEXT_FAINT, LINE, DANGER
 
 logger = logging.getLogger(__name__)
 
@@ -181,12 +181,8 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
 
         splitter = QSplitter(Qt.Orientation.Vertical)
 
-        self.table = QTableWidget()
-        self.table.setFont(create_font(FONT_SMALL))
+        self.table = setup_table(QTableWidget(), empty_text="Run Research to fill the scorecard")
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setVisible(False)
         headers = ["ID", "Cost"] + [h for h, _ in SUMMARY_COLUMNS[1:]]
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
@@ -198,6 +194,11 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
 
         self.fig = Figure(figsize=(6, 2.6), constrained_layout=True)
         self.ax = self.fig.add_subplot(111)
+        # Empty state (docs/ui.md 8.2): a hint instead of a bare 0-1 axis.
+        self.ax.text(0.5, 0.5, "Run Research to plot the rebased NAV of each variant and benchmark",
+                     ha="center", va="center", transform=self.ax.transAxes, color=TEXT_FAINT,
+                     fontsize=FONT_SMALL)
+        self.ax.set_axis_off()
         self.canvas = FigureCanvas(self.fig)
         self.canvas.setMinimumHeight(180)
         self.canvas.mpl_connect("motion_notify_event", self._on_chart_motion)
@@ -216,11 +217,8 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         chart_layout.addWidget(self.canvas, 1)
         splitter.addWidget(chart_box)
 
-        self.event_table = QTableWidget()
-        self.event_table.setFont(create_font(FONT_SMALL))
+        self.event_table = setup_table(QTableWidget(), empty_text="The 6-1 event study appears here after a run")
         self.event_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.event_table.setAlternatingRowColors(True)
-        self.event_table.verticalHeader().setVisible(False)
         ev_headers = ["Breakout group", "n"] + [f"{s} {h}d" for h in HORIZONS for s in ("mean", "hit", "vs KOSPI")]
         self.event_table.setColumnCount(len(ev_headers))
         self.event_table.setHorizontalHeaderLabels(ev_headers)
@@ -336,6 +334,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
     def _draw_chart(self, result: ResearchResult):
         ax = self.ax
         ax.clear()
+        ax.set_axis_on()
         self._chart_series = []
         self._crosshair = None
         base_mult = 1.0 if result.runs_at(1.0) else (result.request.cost_multipliers[0] if result.runs else 1.0)

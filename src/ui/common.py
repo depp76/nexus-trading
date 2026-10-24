@@ -14,8 +14,11 @@ import logging
 import datetime as _dt
 from typing import Any, Callable
 
-from PyQt6.QtWidgets import QLineEdit, QPushButton
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import QObject, QEvent, Qt
+from PyQt6.QtWidgets import QLineEdit, QPushButton, QTableWidget, QHeaderView
+from PyQt6.QtGui import QFont, QPainter, QColor
+
+from ui.theme import TEXT_FAINT
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +110,54 @@ def make_button(text: str, role: str | None = None, on_click: Callable | None = 
     if on_click is not None:
         btn.clicked.connect(on_click)
     return btn
+
+
+# ---------------------------------------------------------------------------
+# Tables (docs/ui.md 8.2)
+# ---------------------------------------------------------------------------
+# One row height, one font size and one selection model for every data table;
+# the frame/grid/header lines come from ui/theme.py's table rules. Sorting is
+# left to the caller (header-click sort where the rows are plain records).
+TABLE_ROW_H = 24
+
+
+class _EmptyHint(QObject):
+    """Paints a one-line hint in the middle of a table's viewport while the
+    table has no rows, so an empty table says why it is empty instead of
+    showing a blank grid."""
+
+    def __init__(self, table: QTableWidget, text: str):
+        super().__init__(table)
+        self._table = table
+        self.text = text
+        table.viewport().installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Paint and self._table.rowCount() == 0 and self.text:
+            self._table.viewportEvent(event)   # the view paints its (empty) grid/background first
+            painter = QPainter(obj)
+            painter.setPen(QColor(TEXT_FAINT))
+            painter.drawText(obj.rect(), Qt.AlignmentFlag.AlignCenter, self.text)
+            painter.end()
+            return True
+        return False
+
+
+def setup_table(table: QTableWidget, *, zebra: bool = True, empty_text: str = "",
+                row_height: int = TABLE_ROW_H) -> QTableWidget:
+    """Apply the app-wide table defaults: hidden row numbers, fixed row
+    height, whole-row selection, zebra rows (off for a table that paints its
+    own stripes), the table font and an optional empty-state hint."""
+    table.setFont(create_font(FONT_SMALL, style_name="Semilight"))
+    vh = table.verticalHeader()
+    vh.setVisible(False)
+    vh.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+    vh.setDefaultSectionSize(row_height)
+    table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+    table.setAlternatingRowColors(zebra)
+    if empty_text:
+        table._empty_hint = _EmptyHint(table, empty_text)
+    return table
 
 # Status text colors (roadmap 7-2c) — e.g. a risk-gate PASS/FAIL cell. Reserved
 # for status display only (roadmap 7-4d): an action button must not reuse these,

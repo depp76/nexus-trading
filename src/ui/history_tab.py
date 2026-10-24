@@ -36,8 +36,8 @@ logger = logging.getLogger(__name__)
 
 
 from ui.common import (
-    create_font, _fmt_num_edit, FONT_FAMILY_CSS, ThreadOwnerMixin,
-    _STATUS_SUCCESS_COLOR, FONT_KPI, FONT_CAPTION, BTN_H, make_button,
+    create_font, _fmt_num_edit, ThreadOwnerMixin,
+    _STATUS_SUCCESS_COLOR, FONT_KPI, FONT_CAPTION, BTN_H, make_button, setup_table,
 )
 from ui.colors import PROFIT, LOSS, DANGER
 from ui.theme import ACCENT_TEXT, TEXT_FAINT
@@ -235,11 +235,19 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
 
         row.addWidget(make_button("Summary", on_click=self._show_holdings_summary))
 
+        # Row grouping: by status (closed, then open) or by month (all trades
+        # newest first with a month summary row after each month). A view
+        # mode, not a column sort -- the month summary rows cannot take part
+        # in a header-click sort -- so it is a two-button segment like the
+        # period filter (docs/ui.md 8.2; it was a "Sort: Date" toggle whose
+        # label named the other mode).
         self._sort_by_date = False
-        # Checked state comes from ui/theme.py's QPushButton:checked rule.
-        self._sort_date_btn = make_button("Sort: Date", width=120, checkable=True)
-        self._sort_date_btn.toggled.connect(self._on_sort_date_toggled)
-        row.addWidget(self._sort_date_btn)
+        self._group_buttons = {}
+        for key, label in (("status", "By Status"), ("month", "By Month")):
+            btn = make_button(label, width=84, checkable=True, checked=(key == "status"))
+            btn.clicked.connect(lambda _c, k=key: self._on_grouping_changed(k))
+            row.addWidget(btn)
+            self._group_buttons[key] = btn
 
         self._open_stocks_combo = QComboBox()
         self._open_stocks_combo.addItem("Current Holdings...")
@@ -287,9 +295,10 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
 
         return row
 
-    def _on_sort_date_toggled(self, checked: bool):
-        self._sort_by_date = checked
-        self._sort_date_btn.setText("Sort: Position" if checked else "Sort: Date")
+    def _on_grouping_changed(self, key: str):
+        self._sort_by_date = key == "month"
+        for k, btn in self._group_buttons.items():
+            btn.setChecked(k == key)
         self._apply_filter()
 
     def _on_period_filter_changed(self, period: str):
@@ -306,23 +315,15 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         """The unified closed/open/monthly trade grid with the two-row grouped header."""
         tbl = self._table = SectionTable(SECTIONS)
         tbl.setColumnCount(len(self._COLS))
-        tbl.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        tbl.setAlternatingRowColors(False)
+        # Zebra off: fill_table_rows paints its own stripes per item.
+        setup_table(tbl, zebra=False, empty_text="No trades yet -- Add Trade records one")
         tbl.setSortingEnabled(False)
         tbl.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        tbl.setFont(create_font(9, style_name="Semilight"))
-        tbl.verticalHeader().setDefaultSectionSize(22)   # fixed 22px rows: margin against the font
-        tbl.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
-        tbl.verticalHeader().setVisible(False)
 
         grouped_hdr = GroupedHeaderView(SECTIONS, self._COLS, tbl)
         grouped_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         grouped_hdr.setMinimumSectionSize(40)
         tbl.setHorizontalHeader(grouped_hdr)
-        tbl.setStyleSheet(
-            "QTableWidget { gridline-color: #d0d0d0; " + FONT_FAMILY_CSS + " font-size: 9pt; }"
-            "QTableWidget::item { padding: 1px 3px; }"
-        )
         tbl.setItemDelegateForColumn(0, TradeStateDelegate(tbl))
         tbl.cellDoubleClicked.connect(self._on_cell_double_clicked)
         # Delete: right-click menu or the Delete key on the selected rows.
