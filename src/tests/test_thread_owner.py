@@ -126,7 +126,8 @@ class TestSignalSlotArity(unittest.TestCase):
         Total Asset silently included withdrawals despite its "Valuation +
         cash" subtext, and Total Invest showed NAV under a "Cost basis"
         subtext (review_agy.md #1). Pin the corrected values and confirm
-        total_asset_updated emits live NAV, not the cumulative figure."""
+        total_asset_updated emits valuation + withdrawals (the cumulative
+        figure; user direction 2026-10-25, it was live NAV before)."""
         from ui.history_tab import TradingHistoryTab
         tab = TradingHistoryTab()
         rec = {"company": "A", "market": "KOSPI", "buy_date": "2026-01-01", "orig_key": "k1",
@@ -147,7 +148,7 @@ class TestSignalSlotArity(unittest.TestCase):
         self.assertEqual(tab._kpi_labels["cumulative_asset"][0].text(), "1,800")  # nav + withdrawal
         self.assertEqual(tab._kpi_labels["cost_basis"][0].text(), "1,000")        # cost_total, not NAV
         self.assertEqual(tab._kpi_labels["total_pl"][0].text(), "-1,200")         # cumulative - principal
-        self.assertEqual(emitted, [1700.0])
+        self.assertEqual(emitted, [1800.0])                                       # nav + withdrawal
         tab._settings_save_timer.stop()
 
     def test_history_tab_deletes_selected_trades(self):

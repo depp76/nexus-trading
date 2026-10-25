@@ -730,10 +730,12 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             deposit=deposit, withdrawal=withdrawal, principal=principal,
         )
         nav, cumulative_asset, total_pl = agg["nav"], agg["cumulative_asset"], agg["total_pl"]
-        # Live NAV, not the cumulative (withdrawals-included) figure: this
-        # feeds TradingRecordTab's "Current Total Asset" autofill, which
-        # represents what's actually in the account today.
-        self.total_asset_updated.emit(nav)
+        # Account valuation + cumulative withdrawals (user direction
+        # 2026-10-25): this feeds Total Assets' "Current Total Assets" and its
+        # weekly-record autofill, which track the account's value as if
+        # nothing had been withdrawn, so a withdrawal is not a weekly loss.
+        # (2026-09-20 to 2026-10-25 this sent live NAV without withdrawals.)
+        self.total_asset_updated.emit(cumulative_asset)
 
         def _pos_color(v): return LOSS if v < 0 else PROFIT
 

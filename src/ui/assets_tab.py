@@ -201,6 +201,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         lbl_assets.setFont(create_font(FONT_BODY, style_name="Semilight"))
 
         live_asset_title = QLabel("Current Total Assets:")
+        live_asset_title.setToolTip("Account valuation + cumulative withdrawals, from Trading History")
         live_asset_title.setFont(create_font(FONT_BODY, style_name="Semilight"))
 
         # docs/ui.md issue #7 (mockup): these were QLineEdit(readOnly), which
