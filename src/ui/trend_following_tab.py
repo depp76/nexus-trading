@@ -35,13 +35,13 @@ from strategy.trend_following import (
 from strategy.trend_following.research import SUMMARY_COLUMNS
 from strategy.trend_following.event_study import HORIZONS
 from threads.strategy_threads import TrendFollowingResearchThread, CANCELLED_MESSAGE
-from ui.common import create_font, make_button, setup_table, ThreadOwnerMixin, TAB_MARGINS, TAB_SPACING, FONT_SMALL, FONT_BODY
+from ui.common import create_font, make_button, setup_table, make_footer_label, ThreadOwnerMixin, TAB_MARGINS, TAB_SPACING, FONT_SMALL
 from ui.theme import TEXT, TEXT_SUB, TEXT_MUTED, TEXT_FAINT, TEXT_EMPTY, LINE
 
 logger = logging.getLogger(__name__)
 
 _WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"]
-_COST_CHOICES = [("0x / 1x / 2x (4-1 sensitivity)", COST_MULTIPLIERS), ("1x only", (1.0,))]
+_COST_CHOICES = [("0x / 1x / 2x", COST_MULTIPLIERS), ("1x only", (1.0,))]
 _BENCHMARK_STYLE = {"BM1": (TEXT_SUB, "--"), "BM2": (TEXT_FAINT, ":"), "BM3": (TEXT, "-."), "BM4": (TEXT_EMPTY, ":")}
 
 
@@ -86,7 +86,6 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             de.setCalendarPopup(True)
             de.setDisplayFormat("yyyy-MM-dd")
             de.setMaximumDate(QDate(DEV_END.year, DEV_END.month, DEV_END.day))
-            de.setFont(create_font(FONT_BODY))
 
         self.universe_spin = QSpinBox()
         self.universe_spin.setRange(20, 300)
@@ -111,36 +110,37 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         for label, _ in _COST_CHOICES:
             self.cost_combo.addItem(label)
 
-        self.flows_cb = QCheckBox("Investor flows (F/FX; Naver, slow on first run)")
-        self.event_cb = QCheckBox("Event study (6-1)")
+        self.flows_cb = QCheckBox("Investor flows")
+        self.flows_cb.setToolTip("F/FX signals from Naver investor flows; slow on the first run")
+        self.event_cb = QCheckBox("Event study")
+        self.event_cb.setToolTip("trend_following.md 6-1 breakout event study")
         self.event_cb.setChecked(True)
 
-        for w in (self.universe_spin, self.liquidity_spin, self.positions_spin, self.weekday_combo,
-                  self.cost_combo, self.flows_cb, self.event_cb):
-            w.setFont(create_font(FONT_BODY))
-
-        def _lbl(text):
+        def _lbl(text, tip=""):
             lbl = QLabel(text)
-            lbl.setFont(create_font(FONT_BODY))
+            if tip:
+                lbl.setToolTip(tip)
             return lbl
 
-        form.addWidget(_lbl("Start"), 0, 0)
-        form.addWidget(self.start_edit, 0, 1)
-        form.addWidget(_lbl("End"), 0, 2)
-        form.addWidget(self.end_edit, 0, 3)
-        form.addWidget(_lbl("Universe (KOSPI top N)"), 0, 4)
-        form.addWidget(self.universe_spin, 0, 5)
-        form.addWidget(_lbl("Liquidity floor (20d avg value)"), 0, 6)
-        form.addWidget(self.liquidity_spin, 0, 7)
-        form.addWidget(_lbl("Max positions"), 1, 0)
-        form.addWidget(self.positions_spin, 1, 1)
-        form.addWidget(_lbl("Weekly check day"), 1, 2)
-        form.addWidget(self.weekday_combo, 1, 3)
-        form.addWidget(_lbl("Cost scenarios"), 1, 4)
-        form.addWidget(self.cost_combo, 1, 5)
-        form.addWidget(self.flows_cb, 1, 6)
-        form.addWidget(self.event_cb, 1, 7)
-        form.setColumnStretch(8, 1)
+        # Three label/field pairs per row (docs/ui.md 8.6): the old 8-column
+        # grid with long labels made this the widest tab by far. Long
+        # explanations moved to tooltips.
+        fields = [
+            (_lbl("Start"), self.start_edit),
+            (_lbl("End"), self.end_edit),
+            (_lbl("Universe", "KOSPI top N by market cap"), self.universe_spin),
+            (_lbl("Liquidity floor", "20-day average trading value"), self.liquidity_spin),
+            (_lbl("Max positions"), self.positions_spin),
+            (_lbl("Check day", "Weekly signal check day"), self.weekday_combo),
+            (_lbl("Cost scenarios", "trend_following.md 4-1 cost sensitivity"), self.cost_combo),
+        ]
+        for i, (lbl, w) in enumerate(fields):
+            row, pair = divmod(i, 3)
+            form.addWidget(lbl, row, pair * 2)
+            form.addWidget(w, row, pair * 2 + 1)
+        form.addWidget(self.flows_cb, 2, 2, 1, 2)
+        form.addWidget(self.event_cb, 2, 4, 1, 2)
+        form.setColumnStretch(6, 1)
         root.addLayout(form)
 
         variants_row = QHBoxLayout()
@@ -150,7 +150,6 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             cb = QCheckBox(vid)
             cb.setChecked(True)
             cb.setToolTip(v.label)
-            cb.setFont(create_font(FONT_BODY))
             self.variant_cbs[vid] = cb
             variants_row.addWidget(cb)
         variants_row.addStretch()
@@ -165,13 +164,6 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         variants_row.addWidget(self.stop_btn)
         variants_row.addWidget(self.save_btn)
         root.addLayout(variants_row)
-
-        # Status and errors live in their own line, never over the results (docs/ui.md 5.2).
-        self.status_lbl = QLabel("Ready")
-        self.status_lbl.setObjectName("muted")
-        self.status_lbl.setFont(create_font(FONT_SMALL))
-        self.status_lbl.setWordWrap(True)
-        root.addWidget(self.status_lbl)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
 
@@ -222,6 +214,11 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         splitter.setStretchFactor(1, 2)
         splitter.setStretchFactor(2, 2)
         root.addWidget(splitter, 1)
+
+        # Footer: status and errors in their own line, never over the results
+        # (docs/ui.md 5.2), under the results like every tab's footer (8.4).
+        self.status_lbl = make_footer_label("Ready")
+        root.addWidget(self.status_lbl)
 
         banner = QFrame()
         banner.setObjectName("DashboardCard")

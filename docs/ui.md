@@ -641,3 +641,15 @@ app.setStyleSheet(app_qss(FONT_FAMILY_CSS))
   탭 푸터로. 예외: 모달 다이얼로그 안에서 시작된 동작의 결과(그래프 창의 Report)는 상태바가 가려지므로 메시지 박스로 남긴다.
 - 다이얼로그: 크기 조절 가능(고정 크기 금지), 닫기 버튼 폭 미지정, 창 제목·메뉴 항목에 이모지 없음.
 - 검증: `tests/test_ux_consistency.py`(버튼 팩토리·표 기본값·빈 상태 안내·탭별 primary 1개·정보 메시지의 상태바 전달).
+
+### 8.6 마무리 (2026-10-25)
+
+- **표 키 동작**: 모든 데이터 표에 `ui.common.install_table_keys()` — Ctrl+C는 선택 행을 TSV로 복사(보이는 열, 화면 순서),
+  Enter는 현재 셀 더블클릭과 같은 동작(History는 매수/매도 편집, Total Assets는 총자산 편집). History의 월 요약 행은 제외.
+  Universe는 기존 자체 구현(이름 셀이 델리게이트라 텍스트를 따로 조립)을 유지.
+- **KPI 띠 공용화**: `ui.common.KpiStrip`. History의 띠를 이 클래스로 옮기고, Total Assets에 같은 띠를 추가(명세 4.1):
+  Current Total Assets · Since Last Record · Cumulative P/L · vs KOSPI · Records. 입력 줄에 섞여 있던
+  "Current Total Assets:/Weekly P/L:" 라벨 쌍은 제거("Weekly P/L"은 실제로는 마지막 기록 대비 값이라 이름도 바로잡음).
+- **Strategy 탭**: 파라미터 폼을 한 줄 4쌍(8열)에서 3쌍씩 3줄로, 긴 라벨 설명은 툴팁으로. 상태 문구는 결과 아래 푸터로.
+- **다이얼로그 표**: MA 차트의 투자자/선물 표와 종목별 거래 이력 창도 `setup_table` 사용. 거래 이력 창의 행 번호 열 제거,
+  직접 그리는 격자선도 `LINE_GROUP`.

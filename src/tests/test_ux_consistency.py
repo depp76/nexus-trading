@@ -7,7 +7,10 @@
 import unittest
 from unittest.mock import patch
 
-from PyQt6.QtWidgets import QApplication, QTableWidget, QPushButton
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QKeySequence
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QTableWidget, QTableWidgetItem, QPushButton
 
 from ui.common import make_button, setup_table, BTN_H, TABLE_ROW_H, make_footer_label
 
@@ -106,5 +109,82 @@ class TestTabButtons(unittest.TestCase):
             self.assertEqual(len(messages), 2, messages)
 
 
+
+
+class TestTableKeys(unittest.TestCase):
+    """docs/ui.md 8.6: Ctrl+C copies selected rows as TSV and Enter acts like
+    a double-click, on every data table (install_table_keys)."""
+
+    def _table(self):
+        tbl = setup_table(QTableWidget(3, 2))
+        for r in range(3):
+            for c in range(2):
+                tbl.setItem(r, c, QTableWidgetItem(f"r{r}c{c}"))
+        return tbl
+
+    def test_copy_selected_rows_skipping_summary_rows(self):
+        from ui.common import install_table_keys
+        tbl = self._table()
+        install_table_keys(tbl, skip_row=lambda r: r == 1)
+        tbl.selectAll()
+        QTest.keySequence(tbl, QKeySequence(QKeySequence.StandardKey.Copy))
+        self.assertEqual(QApplication.clipboard().text(), "r0c0\tr0c1\nr2c0\tr2c1")
+
+    def test_enter_calls_activate_with_current_cell(self):
+        from ui.common import install_table_keys
+        tbl = self._table()
+        hits = []
+        install_table_keys(tbl, on_activate=lambda r, c: hits.append((r, c)), skip_row=lambda r: r == 1)
+        tbl.setCurrentCell(2, 1)
+        QTest.keyClick(tbl, Qt.Key.Key_Return)
+        tbl.setCurrentCell(1, 0)          # a summary row: ignored
+        QTest.keyClick(tbl, Qt.Key.Key_Enter)
+        self.assertEqual(hits, [(2, 1)])
+
+
+class TestKpiStrip(unittest.TestCase):
+    def test_cells_values_and_colors(self):
+        from ui.common import KpiStrip
+        from ui.theme import TEXT
+        strip = KpiStrip()
+        strip.add("a", "Alpha", "sub")
+        strip.set_value("a", "+1", "#3b6fc4", tooltip="t")
+        value, sub = strip.cells["a"]
+        self.assertEqual((value.text(), value.toolTip(), sub.text()), ("+1", "t", "sub"))
+        self.assertIn("#3b6fc4", value.styleSheet())
+        strip.set_value("a", "0")          # no color: back to the text color, not the stale one
+        self.assertIn(TEXT, value.styleSheet())
+
+
+class TestAssetsKpis(unittest.TestCase):
+    def test_kpis_from_records_and_live_value(self):
+        records = [{"date": "2026-01-02", "total": 1000.0}, {"date": "2026-01-09", "total": 1100.0}]
+        with patch("ui.assets_tab.trade_db.load_asset_records", return_value=records), \
+             patch("ui.assets_tab.trade_db.save_asset_records"), \
+             patch("ui.assets_tab.TradingRecordTab._start_metrics_preload"), \
+             patch("ui.assets_tab.TradingRecordTab._schedule_daily_sync"):
+            from ui.assets_tab import TradingRecordTab
+            tab = TradingRecordTab()
+            tab._refresh_table()
+            tab.update_live_asset(1210.0)
+            cells = tab._kpis.cells
+            self.assertEqual(cells["records"][0].text(), "2")
+            self.assertEqual(cells["cumulative"][0].text(), "+100")
+            self.assertEqual(cells["current"][0].text(), "1,210")
+            self.assertEqual(cells["since_last"][0].text(), "+110")
+            self.assertIn("+10.00% vs 2026-01-09", cells["since_last"][1].text())
+
+
+class TestDialogTables(unittest.TestCase):
+    def test_trade_history_dialog_uses_table_defaults(self):
+        from ui.dialogs.trade_history import StockTradeHistoryDialog
+        rec = {"buy_date": "2026-01-02", "buy_price": 100, "qty": 10, "buy_amount": 1000,
+               "sell_date": "2026-02-02", "sell_price": 110, "sell_qty": 10, "sell_amount": 1100,
+               "pl": 100, "pl_pct": 10.0, "days_held": 31}
+        dlg = StockTradeHistoryDialog("ACME", [rec], 100, 1000, 1100)
+        tbl = dlg.findChild(QTableWidget)
+        self.assertEqual(tbl.verticalHeader().defaultSectionSize(), TABLE_ROW_H)
+        self.assertFalse(tbl.verticalHeader().isVisibleTo(tbl))
+        self.assertEqual(dlg.minimumSize().width(), 0)   # resizable, not pinned
 if __name__ == "__main__":
     unittest.main()

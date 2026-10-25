@@ -9,8 +9,7 @@ import datetime as _dt
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
-    QTableWidget, QLineEdit, QLabel, QHeaderView, QComboBox, QMessageBox, QDialog, QFrame,
-    QInputDialog, QMenu,
+    QTableWidget, QLineEdit, QHeaderView, QComboBox, QMessageBox, QDialog, QInputDialog, QMenu,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSettings, QTimer
 from PyQt6.QtGui import QKeySequence, QShortcut
@@ -36,11 +35,11 @@ logger = logging.getLogger(__name__)
 
 
 from ui.common import (
-    create_font, _fmt_num_edit, ThreadOwnerMixin,
-    FONT_KPI, FONT_CAPTION, BTN_H, make_button, setup_table, make_footer_label, TAB_MARGINS, TAB_SPACING,
+    _fmt_num_edit, ThreadOwnerMixin,
+    BTN_H, make_button, setup_table, make_footer_label, TAB_MARGINS, TAB_SPACING,
+    KpiStrip, install_table_keys,
 )
 from ui.colors import PROFIT, LOSS
-from ui.theme import TEXT_FAINT
 from ui.history_calc import compute_pl_fields, build_monthly_rows, summarize_positions
 from ui.history_table import fill_table_rows, SectionTable, SECTIONS, COLUMNS
 from ui.delegates import TradeStateDelegate
@@ -153,45 +152,18 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._path_label = make_footer_label()
         root.addWidget(self._path_label)
 
-    def _build_kpi_strip(self) -> QFrame:
+    def _build_kpi_strip(self) -> KpiStrip:
         """Read-only KPI strip (docs/ui.md 3.6, issue #7): Total Asset/Total
         P/L/Total P/L(%)/Total Invest render as plain KPI text now instead
         of QLineEdit(readOnly) fields styled like inputs you could type
         into. Principal/Deposit/Withdrawal are the tab's only input-able
         values (issue #7's fix: "입력 가능한 항목만 실제 필드로 남긴다"), so
         each keeps a real editable field, just styled to sit in the strip."""
-        card = QFrame()
-        card.setObjectName("DashboardCard")
-        layout = QHBoxLayout(card)
-        layout.setContentsMargins(16, 8, 16, 8)
-        layout.setSpacing(0)
-
-        self._kpi_labels = {}  # key -> (value QLabel | None, sub QLabel)
-
-        def cell(key, label, sub_text="", editable_widget=None):
-            box = QVBoxLayout()
-            box.setSpacing(2)
-            lbl = QLabel(label.upper())
-            lbl.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
-            lbl.setStyleSheet(f"color:{TEXT_FAINT}; letter-spacing:.05em;")
-            box.addWidget(lbl)
-            value_lbl = None
-            if editable_widget is not None:
-                editable_widget.setFont(create_font(FONT_KPI, style_name="Semilight"))
-                editable_widget.setStyleSheet("border:none; padding:0px; background:transparent;")
-                box.addWidget(editable_widget)
-            else:
-                value_lbl = QLabel("-")
-                value_lbl.setFont(create_font(FONT_KPI, style_name="Semilight"))
-                box.addWidget(value_lbl)
-            sub_lbl = QLabel(sub_text)
-            sub_lbl.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
-            sub_lbl.setStyleSheet(f"color:{TEXT_FAINT};")
-            box.addWidget(sub_lbl)
-            self._kpi_labels[key] = (value_lbl, sub_lbl)
-            cell_widget = QWidget()
-            cell_widget.setLayout(box)
-            layout.addWidget(cell_widget, 1)
+        # The cell layout is ui.common.KpiStrip, shared with Total Assets
+        # (docs/ui.md 8.6).
+        card = KpiStrip()
+        self._kpi_labels = card.cells  # key -> (value QLabel | None, sub QLabel)
+        cell = card.add
 
         cell("total_asset", "Total Assets", "Valuation + cash")
         cell("cumulative_asset", "Cumulative Assets", "Live NAV + withdrawals")
@@ -324,6 +296,9 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         grouped_hdr.setMinimumSectionSize(40)
         tbl.setHorizontalHeader(grouped_hdr)
         tbl.setItemDelegateForColumn(0, TradeStateDelegate(tbl))
+        # Ctrl+C copies the selected trades, Enter edits like a double-click
+        # (docs/ui.md 1.8 / 8.6); month summary rows are not trades.
+        install_table_keys(tbl, on_activate=self._on_cell_double_clicked, skip_row=self._is_summary_row)
         tbl.cellDoubleClicked.connect(self._on_cell_double_clicked)
         # Delete: right-click menu or the Delete key on the selected rows.
         # trade_db.delete_trade() existed for a long time with no UI path to
@@ -334,6 +309,9 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._delete_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
         self._delete_shortcut.activated.connect(self._delete_selected_trades)
         return tbl
+
+    def _is_summary_row(self, row: int) -> bool:
+        return row < len(self._row_data) and self._row_data[row][0] == "monthly"
 
     def _selected_trade_records(self) -> list:
         """(kind, rec) for every selected row that is a real trade (month

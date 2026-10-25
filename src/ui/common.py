@@ -15,10 +15,13 @@ import datetime as _dt
 from typing import Any, Callable
 
 from PyQt6.QtCore import QObject, QEvent, Qt
-from PyQt6.QtWidgets import QLineEdit, QPushButton, QTableWidget, QHeaderView, QLabel
-from PyQt6.QtGui import QFont, QPainter, QColor
+from PyQt6.QtWidgets import (
+    QLineEdit, QPushButton, QTableWidget, QHeaderView, QLabel, QFrame, QHBoxLayout, QVBoxLayout,
+    QWidget, QApplication,
+)
+from PyQt6.QtGui import QFont, QPainter, QColor, QKeySequence
 
-from ui.theme import TEXT_FAINT
+from ui.theme import TEXT, TEXT_FAINT
 from ui.colors import OK, DANGER, DANGER_BG
 
 logger = logging.getLogger(__name__)
@@ -178,6 +181,116 @@ def setup_table(table: QTableWidget, *, zebra: bool = True, empty_text: str = ""
     if empty_text:
         table._empty_hint = _EmptyHint(table, empty_text)
     return table
+
+
+class _TableKeys(QObject):
+    """Ctrl+C / Enter for a data table (docs/ui.md 1.8 / 8.6)."""
+
+    def __init__(self, table: QTableWidget, on_activate, skip_row):
+        super().__init__(table)
+        self._table = table
+        self._on_activate = on_activate
+        self._skip_row = skip_row
+        table.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if event.type() != QEvent.Type.KeyPress:
+            return False
+        if event.matches(QKeySequence.StandardKey.Copy):
+            copy_rows_tsv(self._table, self._skip_row)
+            return True
+        if self._on_activate is not None and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            row, col = self._table.currentRow(), self._table.currentColumn()
+            if row >= 0 and not (self._skip_row and self._skip_row(row)):
+                self._on_activate(row, max(col, 0))
+                return True
+        return False
+
+
+def copy_rows_tsv(table: QTableWidget, skip_row=None) -> str:
+    """Copy the selected rows to the clipboard as tab-separated text, one line
+    per row, visible columns in on-screen order; returns the text."""
+    rows = sorted({idx.row() for idx in table.selectedIndexes()})
+    header = table.horizontalHeader()
+    cols = [header.logicalIndex(v) for v in range(header.count())]
+    cols = [c for c in cols if not table.isColumnHidden(c)]
+    lines = []
+    for row in rows:
+        if skip_row and skip_row(row):
+            continue
+        cells = []
+        for col in cols:
+            item = table.item(row, col)
+            cells.append(item.text() if item else "")
+        lines.append("\t".join(cells))
+    text = "\n".join(lines)
+    if text:
+        QApplication.clipboard().setText(text)
+    return text
+
+
+def install_table_keys(table: QTableWidget, on_activate=None, skip_row=None) -> None:
+    """Give a table the app-wide keyboard behaviour: Ctrl+C copies the
+    selected rows as TSV; Enter does what a double-click on the current cell
+    does (`on_activate(row, col)`). `skip_row(row)` excludes rows that are
+    not records (History's month summary rows)."""
+    table._table_keys = _TableKeys(table, on_activate, skip_row)
+
+
+# ---------------------------------------------------------------------------
+# KPI strip (docs/ui.md 3.6 / 8.6)
+# ---------------------------------------------------------------------------
+class KpiStrip(QFrame):
+    """The row of KPI cells under a tab's toolbar: a small caps label, a
+    large value and a faint sub-label per cell, equal stretch per cell.
+    Shared by Trading History and Total Assets so both look the same.
+    `cells[key]` is `(value QLabel | None, sub QLabel)`; a cell built with an
+    input widget has no value label."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("DashboardCard")
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(16, 8, 16, 8)
+        self._layout.setSpacing(0)
+        self.cells: dict = {}
+
+    def add(self, key: str, label: str, sub: str = "", widget: QWidget | None = None):
+        box = QVBoxLayout()
+        box.setSpacing(2)
+        lbl = QLabel(label.upper())
+        lbl.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
+        lbl.setStyleSheet(f"color:{TEXT_FAINT}; letter-spacing:.05em;")
+        box.addWidget(lbl)
+        value_lbl = None
+        if widget is not None:
+            widget.setFont(create_font(FONT_KPI, style_name="Semilight"))
+            widget.setStyleSheet("border:none; padding:0px; background:transparent;")
+            box.addWidget(widget)
+        else:
+            value_lbl = QLabel("-")
+            value_lbl.setFont(create_font(FONT_KPI, style_name="Semilight"))
+            box.addWidget(value_lbl)
+        sub_lbl = QLabel(sub)
+        sub_lbl.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
+        sub_lbl.setStyleSheet(f"color:{TEXT_FAINT};")
+        box.addWidget(sub_lbl)
+        self.cells[key] = (value_lbl, sub_lbl)
+        cell_widget = QWidget()
+        cell_widget.setLayout(box)
+        self._layout.addWidget(cell_widget, 1)
+
+    def set_value(self, key: str, text: str, color: str | None = None, tooltip: str | None = None):
+        value_lbl, _ = self.cells[key]
+        if value_lbl is None:
+            return
+        value_lbl.setText(text)
+        value_lbl.setStyleSheet(f"color:{color or TEXT};")
+        if tooltip is not None:
+            value_lbl.setToolTip(tooltip)
+
+    def set_sub(self, key: str, text: str):
+        self.cells[key][1].setText(text)
 
 # Status text colors (roadmap 7-2c) — e.g. a risk-gate PASS/FAIL cell. Reserved
 # for status display only (roadmap 7-4d): an action button must not reuse these,

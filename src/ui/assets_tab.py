@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QInputDialog, QFileDialog, QMenu,
 )
 from PyQt6.QtCore import Qt, QTimer, QSettings, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QKeySequence, QShortcut
+from PyQt6.QtGui import QColor, QKeySequence, QShortcut
 
 import matplotlib.dates as mdates
 from matplotlib.figure import Figure
@@ -28,7 +28,7 @@ from ui.widgets import GroupedHeaderView, ColSpec, NumericItem
 from ui.dialogs import TotalAssetsGraphDialog, AssetsReportDialog
 from ui.assets_report import report_dates, build_report
 from ui.colors import PROFIT, LOSS
-from ui.theme import ACCENT, TEXT, TEXT_SUB, TEXT_MUTED
+from ui.theme import ACCENT, TEXT_SUB, TEXT_MUTED
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,7 @@ class _AssetsTable(QTableWidget):
 from ui.common import (
     FONT_BODY,
     create_font, ThreadOwnerMixin, make_button, setup_table, TAB_MARGINS, TAB_SPACING,
+    KpiStrip, install_table_keys,
 )
 
 
@@ -158,6 +159,17 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         header_row.addStretch()
         root.addLayout(header_row)
 
+        # ---KPI strip (docs/ui.md 4.1 / 8.6): the same component as Trading
+        # History's. The live figures used to be "Current Total Assets:" /
+        # "Weekly P/L:" label pairs squeezed into the record-entry row. ---
+        self._kpis = KpiStrip()
+        self._kpis.add("current", "Current Total Assets", "Live, from Trading History (KRW)")
+        self._kpis.add("since_last", "Since Last Record", "No record yet")
+        self._kpis.add("cumulative", "Cumulative P/L", "Since the first record")
+        self._kpis.add("excess", "vs KOSPI", "Cumulative, %p")
+        self._kpis.add("records", "Records", "Weekly snapshots")
+        root.addWidget(self._kpis)
+
         # ---Inline chart (docs/ui.md 4.4): always-visible weekly trend,
         # asset vs KOSPI rebased to first week = 100. The _show_graph modal
         # stays available for a zoomed/detailed view. ---
@@ -199,38 +211,11 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         lbl_assets = QLabel("Total Assets:")
         lbl_assets.setFont(create_font(FONT_BODY, style_name="Semilight"))
 
-        live_asset_title = QLabel("Current Total Assets:")
-        live_asset_title.setFont(create_font(FONT_BODY, style_name="Semilight"))
-
-        # docs/ui.md issue #7 (mockup): these were QLineEdit(readOnly), which
-        # look editable (bordered, input-shaped) despite never accepting
-        # input -- plain KPI-style labels now, matching History's KPI strip.
-        self.live_asset_lbl = QLabel("-")
-        self.live_asset_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.live_asset_lbl.setFont(create_font(FONT_BODY, QFont.Weight.Bold))
-        self.live_asset_lbl.setStyleSheet(f"color:{TEXT};")
-        self.live_asset_lbl.setFixedWidth(120)
-
-        live_diff_title = QLabel("Weekly P/L:")
-        live_diff_title.setFont(create_font(FONT_BODY, style_name="Semilight"))
-
-        self.live_diff_lbl = QLabel("-")
-        self.live_diff_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.live_diff_lbl.setFont(create_font(FONT_BODY, QFont.Weight.Bold))
-        self.live_diff_lbl.setStyleSheet(f"color:{TEXT};")
-        self.live_diff_lbl.setFixedWidth(150)
-
         ctrl.addWidget(lbl_date)
         ctrl.addWidget(self._date_combo)
         ctrl.addSpacing(12)
         ctrl.addWidget(lbl_assets)
         ctrl.addWidget(self._asset_edit)
-        ctrl.addSpacing(12)
-        ctrl.addWidget(live_asset_title)
-        ctrl.addWidget(self.live_asset_lbl)
-        ctrl.addSpacing(12)
-        ctrl.addWidget(live_diff_title)
-        ctrl.addWidget(self.live_diff_lbl)
 
         # Graph/Export sit on the header row, right-aligned above the chart
         # they belong to: all on one controls row the tab needed ~1,540px
@@ -271,6 +256,9 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
             self._table.horizontalHeader().setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
             self._table.setColumnWidth(col_idx, spec.min_width)
         self._table.cellDoubleClicked.connect(self._on_cell_double_clicked)
+        # Ctrl+C copies the selected weeks, Enter edits like a double-click
+        # (docs/ui.md 1.8 / 8.6).
+        install_table_keys(self._table, on_activate=self._on_cell_double_clicked)
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._on_table_context_menu)
         self._delete_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self._table)
@@ -1026,7 +1014,36 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
 
         self._stretch_columns()
         self._update_live_asset_labels()
+        self._update_record_kpis(metrics)
         self._update_chart(metrics)
+
+    def _update_record_kpis(self, metrics: list):
+        """Cumulative P/L, vs KOSPI and Records cells from the latest record
+        (in the active currency, like the table)."""
+        k = self._kpis
+        if not metrics:
+            for key in ("cumulative", "excess", "records"):
+                k.set_value(key, "-")
+            k.set_sub("records", "Weekly snapshots")
+            return
+        usd = self._currency == "USD"
+        last = metrics[-1]
+        amt = last["cum_amt_usd" if usd else "cum_amt_krw"]
+        pct = last["cum_pct_usd" if usd else "cum_pct_krw"]
+        excess = last["excess_pct_usd" if usd else "excess_pct_krw"]
+        unit = "$ " if usd else ""
+        if amt is None:
+            k.set_value("cumulative", "-")
+        else:
+            k.set_value("cumulative", f"{unit}{amt:+,.0f}", PROFIT if amt > 0 else LOSS if amt < 0 else None)
+        k.set_sub("cumulative", f"{pct:+.1f}% since {metrics[0]['date']}" if pct is not None
+                  else f"Since {metrics[0]['date']}")
+        if excess is None:
+            k.set_value("excess", "-")
+        else:
+            k.set_value("excess", f"{excess:+.1f}%p", PROFIT if excess > 0 else LOSS if excess < 0 else None)
+        k.set_value("records", f"{len(metrics)}")
+        k.set_sub("records", f"{metrics[0]['date']} - {last['date']}")
 
     def _update_chart(self, metrics=None):
         """Inline weekly-trend chart (docs/ui.md 4.4): Total Assets (in the
@@ -1071,26 +1088,19 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self._maybe_autofill_asset_edit()
 
     def _update_live_asset_labels(self):
-        
+        """Current Total Assets and Since Last Record KPI cells (live NAV from
+        Trading History vs the latest saved record; KRW)."""
+        k = self._kpis
         curr_val = getattr(self, '_current_live_asset', 0.0)
-        if curr_val > 0:
-            self.live_asset_lbl.setText(f"{curr_val:,.0f}")
+        k.set_value("current", f"{curr_val:,.0f}" if curr_val > 0 else "-")
+
+        last_total = self._records[-1].get('total', 0.0) if self._records else 0.0
+        if curr_val > 0 and last_total > 0:
+            diff = curr_val - last_total
+            ratio = (diff / last_total) * 100
+            color = PROFIT if diff > 0 else (LOSS if diff < 0 else None)
+            k.set_value("since_last", f"{diff:+,.0f}", color)
+            k.set_sub("since_last", f"{ratio:+.2f}% vs {self._records[-1].get('date', '')}")
         else:
-            self.live_asset_lbl.setText("-")
-            
-        if curr_val > 0 and self._records:
-            last_record = self._records[-1]
-            last_total = last_record.get('total', 0.0)
-            if last_total > 0:
-                diff = curr_val - last_total
-                ratio = (diff / last_total) * 100
-                color = PROFIT if diff > 0 else (LOSS if diff < 0 else TEXT)
-                sign = "+" if diff > 0 else ""
-                self.live_diff_lbl.setText(f"{sign}{diff:,.0f} ({sign}{ratio:.2f}%)")
-                self.live_diff_lbl.setStyleSheet(f"color: {color};")
-            else:
-                self.live_diff_lbl.setText("-")
-                self.live_diff_lbl.setStyleSheet(f"color:{TEXT};")
-        else:
-            self.live_diff_lbl.setText("-")
-            self.live_diff_lbl.setStyleSheet(f"color:{TEXT};")
+            k.set_value("since_last", "-")
+            k.set_sub("since_last", f"vs {self._records[-1].get('date', '')}" if self._records else "No record yet")
