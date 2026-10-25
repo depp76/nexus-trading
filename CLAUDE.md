@@ -11,24 +11,26 @@ the US market code paths still exist but are commented out in the UI), "Trading 
 KOSPI and USD) and "Strategy" (research backtests; one sub-tab per strategy package, currently
 only Trend Following). Nothing places orders.
 
-**Strategy layer: reset on 2026-09-28 and rebuilt the same day from
-`src/strategy/trend_following/trend_following.md` (spec v03).** The old packages (rebalance,
-ma_cross, the first trend_following, shared base/metrics/costs, dialogs, five `QThread`s,
-`tools/kr_trend_backtest.py`) were deleted (git `070f639` and earlier) and nothing of them was
-reused. The new `strategy.trend_following` package implements spec sections 2-4 and 6 (cost
-model 4-1, signals L1-L4 + exits, t+1-open portfolio engine with annual reset, BM1-BM4 on the
-same engine, 6-4 metrics, 6-1 event study, the A0-A5/B matrix runner and its markdown report);
-its section 9 lists the module <-> spec mapping and every implementation decision that
-deviates from the text (current-constituent universe, year-end trim at the close, no weekly
-re-weighting, no sector cap, KODEX 200TR as BM1 data, CD91 from ECOS/CSV/constant). Real-data
-results have not been recorded in the spec yet: run the tab, save the report, then paste the
-table under section 9 with the version number. Spec v04 (2026-09-29) added the 2-5 "trend +
-pullback" scoring mode: `scoring.py` implements its indicators, gate and percentile scores and
-the weekly Top 10 / Bottom 10 list that the Trading Universe tab's "Trend Score" button pins to
-the top of its table (`TrendScoreThread`; Top rows, then Bottom rows, then the rest in the
-default order, with a `Top n (score)` / `Bottom n (score)` tag in the identity cell; the
-checkable button unpins on the second click; decisions in spec section 9-4). The C1-C3
-backtest policies and the 6-1-2 IC analysis are still unimplemented.
+**Strategy layer: reset on 2026-09-28 and rebuilt from
+`src/strategy/trend_following/trend_following.md`; the spec is now at v06 (2026-10-14).** The old
+packages (rebalance, ma_cross, the first trend_following, shared base/metrics/costs, dialogs, five
+`QThread`s, `tools/kr_trend_backtest.py`) were deleted (git `070f639` and earlier) and nothing of
+them was reused. The `strategy.trend_following` package implements spec sections 2-4 and 6: cost
+model 4-1, signals L1-L4 + exits, a t+1-open portfolio engine with annual reset, BM1-BM4 on the
+same engine, 6-4 metrics, the 6-1 event study, the A0-A5/B matrix and its markdown report, the
+2-5 "trend + pullback" scoring mode (v04; R10 dropped from the timing score in v06) with its
+C1-C3 backtest policies (9-16), the 6-1-2 factor IC / quintile analysis (9-13), and the
+robustness runner with the checklist-form report (6-4/6-5, 9-17). Section 9 of the spec maps
+modules to spec sections and records every implementation decision that deviates from the text
+(current-constituent universe, year-end trim at the close, no weekly re-weighting, no sector
+cap, KODEX 200TR as BM1 data, CD91 from ECOS/CSV/constant). **Real-data results are recorded in
+spec 9-19** (development window 2021-2024): the J1 verdict is that no variant is adoptable, all
+ten were discarded, and the 2025 hold-out has not been opened. The scoring mode also feeds the
+Trading Universe tab's "Trend Score" button, which pins the weekly Top 10 / Bottom 10 to the top
+of its table (`TrendScoreThread`; Top rows, then Bottom rows, then the rest in the default
+order, with a `Top n (score)` / `Bottom n (score)` tag in the identity cell; the checkable
+button unpins on the second click; decisions in spec 9-4). Validation reruns use saved dataset
+snapshots and the headless runner (`python -m strategy.trend_following.run`), not the UI.
 
 The repo is a git repository (branch `master`). Commit or branch as usual; the old
 `archive/backup_<timestamp>/` copy-before-editing convention is no longer needed.
@@ -50,7 +52,7 @@ working directory:
 ### Verification
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest src\tests -q      # ~585 tests, no network, ~30 s
+.\.venv\Scripts\python.exe -m pytest src\tests -q      # ~620 tests, no network, ~30 s
 .\.venv\Scripts\ruff.exe check src                      # pyflakes rules only (ruff.toml)
 ```
 
@@ -70,9 +72,9 @@ Dev tooling is in `requirements-dev.txt`
 
 ## Architecture
 
-- **`src/strategy/trend_following/`** (spec `trend_following.md` v03 in the same folder,
-  facade `strategy.trend_following`): `config.py` (`StrategyParams`, `VARIANTS` A0-A5/B,
-  `COST_MULTIPLIERS`, `PERIODS`, benchmark ETF codes), `costs.py` (`CostModel`/`TradeCost`,
+- **`src/strategy/trend_following/`** (spec `trend_following.md` v06 in the same folder,
+  facade `strategy.trend_following`): `config.py` (`SPEC_VERSION`, `StrategyParams`, `VARIANTS`
+  A0-A5/B and C1-C3, `COST_MULTIPLIERS`, `PERIODS`, `E2_NEIGHBORS`, benchmark ETF codes), `costs.py` (`CostModel`/`TradeCost`,
   year-keyed tax table, 2023-01-25 tick-ladder reform, `scaled()`/`for_etf()`), `signals.py`
   (date x ticker arrays for L1-L4 and the exits; `regime_state` is the weekly-held L1 state),
   `dataset.py` (`PriceBook`/`Dataset`; `build_dataset` is pure and what tests feed,
@@ -83,7 +85,17 @@ Dev tooling is in `requirements-dev.txt`
   `research.py` (`ResearchRequest` -> `run_research` -> `ResearchResult.to_markdown()`),
   `scoring.py` (2-5: `compute_scores` -> `ScoreBook`, `weekly_recommendation` ->
   `Recommendation`, `load_score_inputs` / `run_universe_scoring` for the Universe button; the
-  loader uses `data.cache.start_date()` so a fresh Universe refresh means no network calls).
+  loader uses `data.cache.start_date()` so a fresh Universe refresh means no network calls),
+  `scoring_policy.py` (`ScoringPolicy`: the C1-C3 orders from `compute_scores`' ranks, 9-16),
+  `factor_ic.py` (6-1-2: `run_factor_ic` -> `FactorICResult`, `render_markdown`; 9-13),
+  `robustness.py` (`RobustnessRequest` -> `run_robustness` -> `render_robustness_markdown`:
+  E1 weekdays, E2 pre-registered neighbours, E4 top-trade share, E5 trial counter; 9-17),
+  `snapshot.py` (`save_snapshot`/`load_snapshot` of a `Dataset` under `cache/snapshots/` with a
+  SHA-256 manifest, for byte-identical reruns), `run.py` (headless CLI: `--build-snapshot`,
+  `--snapshot`, `--factor-ic`, `--robustness`, `--variants`, ...), `raw_check.py` (A5 sample check
+  of split-adjusted vs unadjusted prices). The Strategy tab runs the research matrix (one
+  checkbox per `VARIANTS` entry, C1-C3 included); factor IC and robustness reports come from
+  `run.py` only.
   Strategy code imports `data.*` directly (never `data_fetcher`); `data/` never imports it.
   Tests live in `src/tests/strategy/trend_following/` on synthetic price paths
   (`helpers.synthetic_dataset`).
