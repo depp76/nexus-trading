@@ -598,7 +598,9 @@ app.setStyleSheet(app_qss(FONT_FAMILY_CSS))
 - 외형은 `ui/theme.py`의 표 규칙 한 곳에서 정한다: 외곽선·격자선·헤더 선 모두 `LINE_GROUP`(`#d0d0d0`) 1px,
   직각 모서리, 셀 패딩 `1px 3px`(2026-10-02 Universe에 임시 적용했던 모양을 전 탭 규칙으로 승격).
   탭별 인라인 표 스타일시트는 제거. Universe만 오른쪽 가장자리를 `paintEvent`가 그리므로 `border-right: none` 한 줄을 남긴다.
-- 행 높이·글꼴·행 선택·지브라는 `ui.common.setup_table()`: 행 24px(`TABLE_ROW_H`; Universe 28·History 22에서 통일),
+- 행 높이·글꼴·행 선택·지브라는 `ui.common.setup_table()`: 행 24px(`TABLE_ROW_H`; History 22에서 통일).
+  **예외: Trading Universe는 28px** — 52W Range 셀이 막대와 그 아래 저가·위치%·고가 라벨 두 줄을 그려 24px에 들어가지 않음
+  (2026-10-25 사용자 보고 후 복원; `RangeBarDelegate.content_height()`가 행 높이 이하인지 테스트로 확인).
   행 단위 선택, 지브라 켜짐(History는 셀 배경으로 직접 줄무늬를 칠하므로 끔).
 - 빈 표는 가운데에 이유와 다음 동작을 한 줄로 표시한다(`setup_table(empty_text=...)`). Strategy의 NAV 차트도
   실행 전에는 빈 0~1 축 대신 안내 문구.

@@ -110,7 +110,6 @@ class TestTabButtons(unittest.TestCase):
 
 
 
-
 class TestTableKeys(unittest.TestCase):
     """docs/ui.md 8.6: Ctrl+C copies selected rows as TSV and Enter acts like
     a double-click, on every data table (install_table_keys)."""
@@ -167,5 +166,18 @@ class TestDialogTables(unittest.TestCase):
         self.assertEqual(tbl.verticalHeader().defaultSectionSize(), TABLE_ROW_H)
         self.assertFalse(tbl.verticalHeader().isVisibleTo(tbl))
         self.assertEqual(dlg.minimumSize().width(), 0)   # resizable, not pinned
+
+
+class TestUniverseRowFitsRangeBar(unittest.TestCase):
+    def test_52w_range_cell_fits_the_universe_row(self):
+        """The 52W Range cell's bar + label line must fit the Universe row
+        (user report 2026-10-25: at the app-wide 24 px the labels were cut)."""
+        from ui.widgets import StockTable
+        from ui.delegates import RangeBarDelegate
+        tbl = StockTable()
+        self.assertGreaterEqual(tbl.verticalHeader().defaultSectionSize(),
+                                RangeBarDelegate.content_height(tbl.font()))
+
+
 if __name__ == "__main__":
     unittest.main()

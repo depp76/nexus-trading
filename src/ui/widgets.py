@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QRect, QTimer
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPolygon, QKeySequence
 
-from ui.common import create_font, FONT_SMALL, TABLE_ROW_H, _EmptyHint, FONT_CAPTION
+from ui.common import create_font, FONT_SMALL, _EmptyHint, FONT_CAPTION
 from ui.delegates import IdentityDelegate, RangeBarDelegate, TrendDelegate
 from ui.colors import fg_for, heatmap_bg, PROFIT, LOSS, FLAT, OK, WARN
 from ui.theme import ACCENT, TEXT, TEXT_FAINT, TEXT_EMPTY, TEXT_SUB, TEXT_MUTED, LINE_GROUP, SURFACE, GRP_BG
@@ -376,8 +376,10 @@ class StockTable(QTableWidget):
     delete_requested = pyqtSignal(str)     # emitted with the row's ticker
     toggle_requested = pyqtSignal(str)     # emitted with the row's ticker
 
-    # The app-wide table row height (docs/ui.md 8.2; 28 px until 2026-10-25).
-    ROW_HEIGHT = TABLE_ROW_H
+    # 28 px, not the app-wide TABLE_ROW_H (24): the 52W Range cell draws two
+    # lines -- the bar, then the low / % / high labels under it -- which do
+    # not fit in 24 px (user report 2026-10-25; docs/ui.md 8.2 exception).
+    ROW_HEIGHT = 28
 
     def __init__(self):
         super().__init__()
