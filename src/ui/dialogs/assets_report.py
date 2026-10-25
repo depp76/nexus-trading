@@ -228,6 +228,7 @@ class AssetsReportDialog(QDialog):
             for r, row in enumerate(self._rows):
                 date_it = NumericItem(row["date"], r)
                 date_it.setData(Qt.ItemDataRole.UserRole, r)
+                date_it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 tbl.setItem(r, 0, date_it)
                 k = row["kospi"]
                 tbl.setItem(r, 1, _num(f"{k:,.2f}" if k else "-", k))

@@ -11,13 +11,14 @@ from PyQt6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLineEdit, QCheckBox, QScrollArea,
     QWidget, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
     QStyleOptionHeader, QMenu, QApplication,
-    QAbstractItemView,
+    QAbstractItemView, QGridLayout, QLabel,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QRect, QTimer, QSize
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPolygon, QKeySequence
 
-from ui.common import create_font, FONT_SMALL, _EmptyHint, FONT_CAPTION
+from ui.common import create_font, FONT_SMALL, _EmptyHint, FONT_CAPTION, make_button, _set_field_error
 from ui.delegates import IdentityDelegate, RangeBarDelegate, TrendDelegate
+from ui.universe_views import RANGE_FIELDS, matches as view_matches
 from ui.colors import fg_for, heatmap_bg, PROFIT, LOSS, FLAT, OK, WARN
 from ui.theme import ACCENT, TEXT, TEXT_FAINT, TEXT_EMPTY, TEXT_SUB, TEXT_MUTED, LINE_GROUP, SURFACE, GRP_BG
 
@@ -102,6 +103,9 @@ assert [c.key for c in COLUMNS] == [
 # covers the left of Cap and the right of 120D (= the left of Trend).
 GROUP_START_COLS = (COL_CAP, COL_PRICE, COL_RANGE52W, COL_D3, COL_TREND)
 GROUP_LINE_W = 1
+
+# Columns that take a range filter (ui.universe_views.RANGE_FIELDS) -> column index.
+_RANGE_FILTER_COLS = {f.key: next(i for i, c in enumerate(COLUMNS) if c.key == f.key) for f in RANGE_FIELDS}
 
 # Momentum columns paired with the changes{} dict key each one reads.
 _MOMENTUM_COLS = [(COL_D3, "3d"), (COL_D10, "10d"), (COL_D20, "20d"), (COL_D60, "60d"), (COL_D120, "120d")]
@@ -324,6 +328,109 @@ class FilterPopup(QFrame):
 
 
 # ---------------------------------------------------------------------------
+# RangeFilterPopup  — numeric range filters for Trading Universe (docs/ui.md 8.9)
+# ---------------------------------------------------------------------------
+class RangeFilterPopup(QFrame):
+    """Min/max inputs for every range-filterable column (ui.universe_views.
+    RANGE_FIELDS). Apply emits the ranges dict; Clear empties every field
+    and applies. A blank field means "no bound"; an unparsable one is
+    outlined in red and blocks Apply."""
+    applied = pyqtSignal(dict)
+
+    def __init__(self, ranges: dict, parent=None):
+        super().__init__(parent, Qt.WindowType.Popup)
+        self.setObjectName("DashboardCard")
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(12, 10, 12, 10)
+        v.setSpacing(6)
+        title = QLabel("Range filters")
+        title.setFont(create_font(FONT_SMALL, QFont.Weight.Bold))
+        v.addWidget(title)
+        hint = QLabel("Blank = no limit. Rows with no value in a filtered column are hidden.")
+        hint.setObjectName("muted")
+        hint.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
+        hint.setWordWrap(True)
+        v.addWidget(hint)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(4)
+        self._edits = {}
+        for r, f in enumerate(RANGE_FIELDS):
+            lo, hi = (list(ranges.get(f.key) or []) + [None, None])[:2]
+            lbl = QLabel(f.label)
+            unit = QLabel(f.unit)
+            unit.setObjectName("faint")
+            lo_e, hi_e = QLineEdit(), QLineEdit()
+            for e, val, ph in ((lo_e, lo, "min"), (hi_e, hi, "max")):
+                e.setPlaceholderText(ph)
+                e.setFixedWidth(80)
+                e.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                if val is not None:
+                    e.setText(f"{val:g}")
+                e.returnPressed.connect(self._apply)
+            grid.addWidget(lbl, r, 0)
+            grid.addWidget(lo_e, r, 1)
+            grid.addWidget(QLabel("\u2013"), r, 2)
+            grid.addWidget(hi_e, r, 3)
+            grid.addWidget(unit, r, 4)
+            self._edits[f.key] = (lo_e, hi_e)
+        grid.setColumnStretch(5, 1)   # spare width goes past the unit column, not between the inputs
+        v.addLayout(grid)
+
+        btns = QHBoxLayout()
+        btns.addStretch()
+        clear_btn = make_button("Clear", on_click=self._clear)
+        apply_btn = make_button("Apply", "primary", self._apply)
+        btns.addWidget(clear_btn)
+        btns.addWidget(apply_btn)
+        v.addLayout(btns)
+
+    @staticmethod
+    def _parse(edit: QLineEdit):
+        text = edit.text().replace(",", "").strip()
+        if not text:
+            _set_field_error(edit, "")
+            return None, True
+        try:
+            value = float(text)
+            if value != value or value in (float("inf"), float("-inf")):
+                raise ValueError
+        except ValueError:
+            _set_field_error(edit, "Enter a number")
+            return None, False
+        _set_field_error(edit, "")
+        return value, True
+
+    def values(self):
+        """(ranges dict, all fields valid)."""
+        out, ok = {}, True
+        for key, (lo_e, hi_e) in self._edits.items():
+            lo, ok_lo = self._parse(lo_e)
+            hi, ok_hi = self._parse(hi_e)
+            ok = ok and ok_lo and ok_hi
+            if lo is not None and hi is not None and lo > hi:
+                lo, hi = hi, lo
+            if lo is not None or hi is not None:
+                out[key] = [lo, hi]
+        return out, ok
+
+    def _apply(self):
+        ranges, ok = self.values()
+        if not ok:
+            return
+        self.applied.emit(ranges)
+        self.close()
+
+    def _clear(self):
+        for lo_e, hi_e in self._edits.values():
+            lo_e.clear()
+            hi_e.clear()
+        self._apply()
+
+
+# ---------------------------------------------------------------------------
 # FilterableHeader  — draws ▼ icon per filter column
 # ---------------------------------------------------------------------------
 class FilterableHeader(QHeaderView):
@@ -364,7 +471,9 @@ class FilterableHeader(QHeaderView):
             w = GROUP_LINE_W - GROUP_LINE_W // 2
             painter.fillRect(rect.right() - w + 1, rect.top(), w, rect.height(), QColor(LINE_GROUP))
             painter.restore()
-        if logicalIndex in self.FILTER_COLS:
+        # Columns with an active range filter (docs/ui.md 8.9) get the same
+        # accent mark the old per-column dropdown filter used.
+        if logicalIndex in self.FILTER_COLS or logicalIndex in self._active_filter_cols:
             is_active = logicalIndex in self._active_filter_cols
             icon_w, icon_h = 10, 6
             ix = rect.right() - icon_w - 4
@@ -957,6 +1066,7 @@ class StockTable(QTableWidget):
             "meta": f"{ticker} · {item.get('market', '')}"
                     + (f" · {item['trend_rank']}" if item.get('trend_rank') else ""),
             "status": status,
+            "mode": mode,
         })
         self.setItem(row, COL_IDENTITY, identity_item)
 
@@ -1123,15 +1233,40 @@ class StockTable(QTableWidget):
         self._filter_header.set_active_filter_cols(set(self._col_filters.keys()))
         self.col_filter_changed.emit()
 
-    def apply_col_filters(self, text_filter="", status="", market="ALL"):
-        """Apply the toolbar's market filter, status filter and text
-        search. Called by UniverseTab.filter_table(). `market` is one of
-        "ALL"/"KOSPI"/"KOSDAQ" (docs/ui.md 2.1: replaced the old Market
-        column's Excel-style dropdown with plain toolbar buttons, since
-        Market is no longer a table column at all -- see the identity cell's
-        "ticker · market" meta text instead). `status` is "" (no filter),
-        "On" (Port) or "Tg" (Target): the toolbar's cycling status button."""
-        text_lower = text_filter.lower()
+    def row_values(self, row) -> dict:
+        """One view row as the plain dict ui.universe_views.matches() takes:
+        identity fields plus each range-filterable column's stored value
+        (None where the cell has no value: "-" cells, no 52W range yet)."""
+        data = self._row_identity(row) or {}
+        values = {}
+        for key, col in _RANGE_FILTER_COLS.items():
+            item = self.item(row, col)
+            v = getattr(item, "_sort_key", None) if item is not None else None
+            if v is None or v == float('-inf') or (col == COL_RANGE52W and v < 0):
+                v = None
+            values[key] = v
+        return {
+            "market": data.get("market", ""), "status": data.get("status", ""),
+            "name": data.get("name", ""), "ticker": data.get("ticker", ""),
+            "mode": data.get("mode", "pct"), "values": values,
+        }
+
+    def all_row_values(self) -> list:
+        return [self.row_values(r) for r in range(self.rowCount())]
+
+    def apply_col_filters(self, text_filter="", status="", market="ALL", ranges=None):
+        """Apply the toolbar's market filter, status filter, text search and
+        the Filters panel's numeric ranges (docs/ui.md 2.6 / 8.9). Called by
+        UniverseTab.filter_table(). `market` is one of "ALL"/"KOSPI"/"KOSDAQ"
+        (docs/ui.md 2.1: toolbar buttons, Market is not a column); `status`
+        is "" (no filter), "On" (Held) or "Tg" (Target); `ranges` is
+        {column key: [lo, hi]} in the units the panel shows. Every row goes
+        through ui.universe_views.matches(), the same test the saved views'
+        counts use."""
+        state = {"market": market, "status": status, "search": text_filter, "ranges": ranges or {}}
+        self._filter_header.set_active_filter_cols(
+            {_RANGE_FILTER_COLS[k] for k, b in state["ranges"].items()
+             if k in _RANGE_FILTER_COLS and b and any(x is not None for x in b)})
 
         hdr = self._filter_header
         sort_col = hdr.sortIndicatorSection()
@@ -1140,22 +1275,7 @@ class StockTable(QTableWidget):
         self.setSortingEnabled(False)
 
         for row in range(self.rowCount()):
-            hidden = False
-            data = self._row_identity(row) or {}
-
-            if market != "ALL" and data.get("market") != market:
-                hidden = True
-
-            if not hidden and status and data.get("status") != status:
-                hidden = True
-
-            if not hidden and text_lower:
-                name = data.get("name", "").lower()
-                ticker = data.get("ticker", "").lower()
-                if text_lower not in name and text_lower not in ticker:
-                    hidden = True
-
-            self.setRowHidden(row, hidden)
+            self.setRowHidden(row, not view_matches(self.row_values(row), state))
 
         # Re-enable sorting and restore the exact same sort indicator so Qt
         # does not apply a different sort order.
