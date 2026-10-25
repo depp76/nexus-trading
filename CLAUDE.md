@@ -100,6 +100,8 @@ Dev tooling is in `requirements-dev.txt`
   (every custom-painted table cell: `CellDelegate` base + the Universe/History delegates),
   `ma_chart.py` (`StockMaLauncherMixin`, the MA-chart dialog launcher; `UniverseTab` is its
   only user now),
+  `universe_views.py` (Trading Universe range filters + saved views, pure: `matches()` drives both the
+  table's row hiding and the Views counts; docs/ui.md 8.9),
   `colors.py` / `theme.py` (PROFIT/LOSS color rule, design tokens and the global QSS —
   buttons get their look from the `#primary`/`#danger` objectName roles, secondary labels
   from `#muted`/`#faint`; never a hardcoded hex for something `theme.py` has a rule for; the

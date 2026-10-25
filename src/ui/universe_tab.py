@@ -27,7 +27,7 @@ from datetime import datetime
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLineEdit,
-    QPushButton, QMessageBox,
+    QPushButton, QMessageBox, QInputDialog,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
@@ -39,7 +39,11 @@ from threads.fetch_threads import (
     GeminiStockReportThread,
 )
 from threads.strategy_threads import TrendScoreThread, CANCELLED_MESSAGE
-from ui.widgets import StockTable, HeatLegend
+from ui.widgets import StockTable, HeatLegend, RangeFilterPopup
+from ui.universe_views import (
+    BUILTIN_VIEWS, count_matches, describe_ranges, describe_view, empty_state as empty_view,
+    normalize as normalize_view, same_state as same_view,
+)
 from ui.dialogs.stock_report import show_stock_report_result
 from ui.ma_chart import StockMaLauncherMixin
 
@@ -77,6 +81,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.market_status = {}
         self._market_filter = "ALL"
         self._status_filter_idx = 0      # index into _STATUS_FILTER_STATES
+        self._ranges = {}                # Filters panel: column key -> [lo, hi] (docs/ui.md 8.9)
         # ticker -> (group 0=Top/1=Bottom, rank, label) of the pinned Trend
         # Score run; empty = default order (see _sort_all_data).
         self._trend_score_order = {}
@@ -89,6 +94,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._startup_render_timer.timeout.connect(self._render_startup_batch)
         self._build_ui()
         self.load_custom_settings()
+        self._update_filters_button()
+        self._refresh_views_combo()   # filled even before any data arrives
 
         # Try to load cached universe data to make startup instant, but always refresh to latest afterwards.
         cached = safe_load_json(UNIVERSE_CACHE_FILE, default=None)
@@ -135,6 +142,17 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.tg_filter_btn.setToolTip("Status filter: none / Held / Target")
         self.tg_filter_btn.clicked.connect(self._on_status_filter_clicked)
         bar.addWidget(self.tg_filter_btn)
+
+        # Numeric range filters and saved views (docs/ui.md 2.6 / 8.9).
+        bar.addSpacing(8)
+        self.filters_btn = make_button("Filters", checkable=True, on_click=self._open_range_filters)
+        bar.addWidget(self.filters_btn)
+        self.views_combo = QComboBox()
+        self.views_combo.setMinimumWidth(170)
+        self.views_combo.setToolTip("Saved views: a market / status / search / range-filter combination, "
+                                    "with the number of rows it shows")
+        self.views_combo.activated.connect(self._on_view_activated)
+        bar.addWidget(self.views_combo)
 
         bar.addStretch()
 
@@ -427,7 +445,143 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     def filter_table(self, text=None):
         if text is None:
             text = self.search_input.text()
-        self.table.apply_col_filters(text, status=self._status_filter, market=self._market_filter)
+        self.table.apply_col_filters(text, status=self._status_filter, market=self._market_filter,
+                                     ranges=self._ranges)
+        self._update_filters_button()
+        self._refresh_views_combo()
+
+    # ---Range filters and saved views (docs/ui.md 2.6 / 8.9) ---
+    def current_view_state(self) -> dict:
+        return normalize_view({"market": self._market_filter, "status": self._status_filter,
+                               "search": self.search_input.text(), "ranges": self._ranges})
+
+    def apply_view_state(self, state: dict):
+        """Set every filter control from a view state and re-filter once."""
+        state = normalize_view(state)
+        self._market_filter = state["market"]
+        for m, btn in self._market_buttons.items():
+            btn.setChecked(m == self._market_filter)
+        self._status_filter_idx = next(
+            (i for i, (s, _) in enumerate(self._STATUS_FILTER_STATES) if s == state["status"]), 0)
+        status, label = self._STATUS_FILTER_STATES[self._status_filter_idx]
+        self.tg_filter_btn.setText(label)
+        self.tg_filter_btn.setChecked(bool(status))
+        self.search_input.blockSignals(True)
+        self.search_input.setText(state["search"])
+        self.search_input.blockSignals(False)
+        self._ranges = state["ranges"]
+        self.filter_table()
+
+    def _update_filters_button(self):
+        n = len(self._ranges)
+        self.filters_btn.setText(f"Filters ({n})" if n else "Filters")
+        self.filters_btn.setChecked(bool(n))
+        self.filters_btn.setToolTip(describe_ranges(self._ranges) if n else
+                                    "Numeric range filters: Cap, PER, change, 52W position, MA Div, momentum")
+
+    def _open_range_filters(self):
+        self._update_filters_button()          # undo the click's own toggle
+        popup = RangeFilterPopup(self._ranges)
+        popup.applied.connect(self._on_ranges_applied)
+        popup.move(self.filters_btn.mapToGlobal(self.filters_btn.rect().bottomLeft()))
+        popup.show()
+        self._range_popup = popup              # keep a reference while it is open
+
+    def _on_ranges_applied(self, ranges: dict):
+        self._ranges = normalize_view({"ranges": ranges})["ranges"]
+        self.filter_table()
+
+    def _user_views(self) -> list:
+        return self.custom_settings.setdefault("views", [])
+
+    def _all_views(self) -> list:
+        return [dict(v, builtin=True) for v in BUILTIN_VIEWS] + [dict(v, builtin=False) for v in self._user_views()]
+
+    def _refresh_views_combo(self):
+        """Rebuild the Views list with each view's live row count; select the
+        view that matches the current filters, if any."""
+        rows = self.table.all_row_values()
+        current = self.current_view_state()
+        is_filtered = not same_view(current, empty_view())
+        combo = self.views_combo
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("Views", None)
+        active = 0
+        for v in self._all_views():
+            combo.addItem(f"{v['name']}  ({count_matches(rows, v)})", ("view", v["name"]))
+            tip = describe_view(v)
+            combo.setItemData(combo.count() - 1, tip, Qt.ItemDataRole.ToolTipRole)
+            if is_filtered and active == 0 and same_view(v, current):
+                active = combo.count() - 1
+        combo.insertSeparator(combo.count())
+        if is_filtered:
+            combo.addItem("Show all (clear filters)", ("clear",))
+            combo.addItem("Save current filters as a view...", ("save",))
+        if self._user_views():
+            combo.addItem("Delete a saved view...", ("delete",))
+        combo.setCurrentIndex(active)
+        combo.blockSignals(False)
+
+    def _on_view_activated(self, index: int):
+        data = self.views_combo.itemData(index)
+        if data is None:
+            self._refresh_views_combo()
+            return
+        kind = data[0]
+        if kind == "view":
+            view = next((v for v in self._all_views() if v["name"] == data[1]), None)
+            if view is not None:
+                self.apply_view_state(view)
+                return
+        elif kind == "clear":
+            self.apply_view_state(empty_view())
+            return
+        elif kind == "save":
+            self._save_current_view()
+        elif kind == "delete":
+            self._delete_view()
+        self._refresh_views_combo()
+
+    def _save_current_view(self):
+        name, ok = QInputDialog.getText(self, _TITLE, "Name for this view:")
+        name = (name or "").strip()
+        if not ok or not name:
+            return
+        if any(v["name"] == name for v in BUILTIN_VIEWS):
+            QMessageBox.warning(self, _TITLE, f"'{name}' is a built-in view. Choose another name.")
+            return
+        views = self._user_views()
+        existing = next((i for i, v in enumerate(views) if v["name"] == name), None)
+        if existing is not None:
+            reply = QMessageBox.question(self, _TITLE, f"Replace the saved view '{name}'?",
+                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                         QMessageBox.StandardButton.No)
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        view = dict(self.current_view_state(), name=name)
+        if existing is None:
+            views.append(view)
+        else:
+            views[existing] = view
+        self.save_custom_settings()
+        self.status_message.emit(f"Saved view '{name}'")
+
+    def _delete_view(self):
+        names = [v["name"] for v in self._user_views()]
+        if not names:
+            return
+        name, ok = QInputDialog.getItem(self, _TITLE, "Delete which saved view?", names, 0, False)
+        if not ok or not name:
+            return
+        reply = QMessageBox.question(self, _TITLE, f"Delete the saved view '{name}'?",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                     QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self.custom_settings["views"] = [v for v in self._user_views() if v["name"] != name]
+        self.save_custom_settings()
+        self.status_message.emit(f"Deleted view '{name}'")
 
     # ---Per-stock MA (20 + 60) ---
     def _on_ma_chart_requested(self, ticker: str):
