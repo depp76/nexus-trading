@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QStyleOptionHeader, QMenu, QApplication,
     QAbstractItemView,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QRect, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QRect, QTimer, QSize
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPolygon, QKeySequence
 
 from ui.common import create_font, FONT_SMALL, _EmptyHint, FONT_CAPTION
@@ -111,6 +111,58 @@ _MOMENTUM_COLS = [(COL_D3, "3d"), (COL_D10, "10d"), (COL_D20, "20d"), (COL_D60, 
 # their price and change rates read alongside stocks. Their change_mode sets
 # the unit: 'pct' (stocks, indices), 'bp' (yields), 'abs' (VIX/WTI levels).
 _BP_HEAT_SCALE = 25.0   # 25 bp is "full" heat, in place of a pct column's scale
+
+
+class HeatLegend(QWidget):
+    """Footer legend for the change/momentum heatmap (docs/ui.md 1.2 / 8.7):
+    a LOSS -> 0 -> PROFIT color bar drawn with heatmap_bg() itself, and the
+    distance at which each column group reaches full color, read from
+    COLUMNS' scale values so the legend cannot drift from the cells."""
+
+    BAR_W, BAR_H = 96, 8
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
+        self.text = self.scale_text()
+        self.setToolTip("Cell tint grows with the size of the move and is full at these values; "
+                        "blue = up, red = down. Yields use +-25 bp.")
+
+    @staticmethod
+    def scale_text() -> str:
+        def scale(key):
+            return next(c.scale for c in COLUMNS if c.key == key)
+        return (f"full at  Chg \u00b1{scale('chg'):g}%  \u00b7  3D\u2013120D \u00b1{scale('d3'):g}%  "
+                f"\u00b7  MA Div \u00b1{scale('ma20div'):g} from 100")
+
+    def sizeHint(self):
+        fm = self.fontMetrics()
+        return QSize(fm.horizontalAdvance("-") * 2 + self.BAR_W + fm.horizontalAdvance(self.text) + 40,
+                     max(fm.height(), self.BAR_H) + 4)
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        fm = self.fontMetrics()
+        mid = self.height() // 2
+        x = 0
+        p.setPen(QColor(TEXT_FAINT))
+        p.drawText(x, mid + fm.ascent() // 2 - 1, "\u2212")
+        x += fm.horizontalAdvance("\u2212") + 4
+        top = mid - self.BAR_H // 2
+        for i in range(self.BAR_W):
+            v = (i / (self.BAR_W - 1)) * 2 - 1        # -1 .. +1 of full scale
+            bg = heatmap_bg(v, 1.0)
+            if bg is not None:
+                p.fillRect(x + i, top, 1, self.BAR_H, bg)
+        p.setPen(QColor(LINE_GROUP))
+        p.drawRect(x, top, self.BAR_W - 1, self.BAR_H - 1)
+        p.drawLine(x + self.BAR_W // 2, top, x + self.BAR_W // 2, top + self.BAR_H - 1)
+        x += self.BAR_W + 4
+        p.setPen(QColor(TEXT_FAINT))
+        p.drawText(x, mid + fm.ascent() // 2 - 1, "+")
+        x += fm.horizontalAdvance("+") + 10
+        p.drawText(x, mid + fm.ascent() // 2 - 1, self.text)
+        p.end()
 
 
 def _fmt_change(v: float, mode: str) -> str:

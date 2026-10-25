@@ -29,7 +29,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLineEdit,
     QPushButton, QMessageBox,
 )
-from PyQt6.QtCore import pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
 from paths import UNIVERSE_CACHE_FILE, CUSTOM_SETTINGS_FILE
 from threads.fetch_threads import (
@@ -39,7 +39,7 @@ from threads.fetch_threads import (
     GeminiStockReportThread,
 )
 from threads.strategy_threads import TrendScoreThread, CANCELLED_MESSAGE
-from ui.widgets import StockTable
+from ui.widgets import StockTable, HeatLegend
 from ui.dialogs.stock_report import show_stock_report_result
 from ui.ma_chart import StockMaLauncherMixin
 
@@ -66,6 +66,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
     status_text_changed = pyqtSignal(str)  # -> this tab's footer_lbl
     sync_time_changed = pyqtSignal(str)    # -> MainWindow's header refresh status
+    refresh_failed = pyqtSignal(str)       # -> MainWindow's header refresh status (reason)
     status_message = pyqtSignal(str)       # -> MainWindow's native status bar (roadmap 2-3)
     refresh_started = pyqtSignal()         # -> MainWindow also reloads Trading History tab
     auto_lightweight_tick = pyqtSignal()   # -> MainWindow also triggers Trading History realtime update
@@ -185,7 +186,12 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         # every tab though only this tab wrote to it (docs/ui.md 8.4).
         self.footer_lbl = make_footer_label()
         self.status_text_changed.connect(self.footer_lbl.setText)
-        universe_layout.addWidget(self.footer_lbl)
+        footer = QHBoxLayout()
+        footer.addWidget(self.footer_lbl, 1)
+        # Heatmap legend, always visible under the table (docs/ui.md 1.2).
+        self.heat_legend = HeatLegend()
+        footer.addWidget(self.heat_legend, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        universe_layout.addLayout(footer)
 
     _FILTER_BTN_W = 80
     # (highlight status to show, button label): "" = no status filter. The
@@ -379,6 +385,10 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         the user-added tickers. on_finished_all() wrote the cache before those
         were re-fetched, so they were missing until the next full refresh
         (review_agy.md 2.4, 2026-09-29)."""
+        if not self.all_data:
+            # Never overwrite the last good cache with an empty table (a
+            # refresh that fetched nothing and had nothing to fall back on).
+            return
         try:
             atomic_save_json(UNIVERSE_CACHE_FILE, self.all_data)
         except Exception as e:
@@ -538,6 +548,11 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
     def refresh_data(self):
         self.refresh_btn.setEnabled(False)
+        # Rows to fall back on for any part the refresh fails to fetch
+        # (docs/ui.md 8.8): a failed refresh used to leave those rows out of
+        # the table and the cache, or empty both when the network was down.
+        self._prev_data = list(self.all_data)
+        self._full_failure = None
         self.all_data = []
         self.market_status = {m: "Waiting" for m in ("Indices", "KOSPI", "KOSDAQ")} #, "NASDAQ 100", "S&P500")}
         self.update_status_display()
@@ -545,6 +560,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._track_thread(AllDataFetchThread(), 'fetch_thread')
         self.fetch_thread.market_loaded.connect(self.on_market_loaded)
         self.fetch_thread.market_progress.connect(self.on_market_progress)
+        self.fetch_thread.failed.connect(self._on_full_refresh_failed)
         self.fetch_thread.finished_all.connect(self.on_finished_all)
         self.fetch_thread.start()
 
@@ -560,7 +576,9 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             if getattr(self, '_lw_fetch_thread', None) is not None and self._lw_fetch_thread.isRunning():
                 return
 
+            self._lw_failure = ""
             self._track_thread(UniverseLightweightFetchThread(self.all_data), '_lw_fetch_thread')
+            self._lw_fetch_thread.failed.connect(self._on_universe_lightweight_failed)
             self._lw_fetch_thread.finished_all.connect(self._on_universe_lightweight_loaded)
             self._lw_fetch_thread.status_message.connect(self.status_message)
             self._lw_fetch_thread.start()
@@ -570,7 +588,19 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             # If empty, do a full refresh
             self.refresh_data()
 
+    def _on_universe_lightweight_failed(self, reason: str):
+        # Arrives before finished_all (same emitting thread, queued in order).
+        self._lw_failure = reason
+
     def _on_universe_lightweight_loaded(self, updated_data):
+        reason = getattr(self, "_lw_failure", "")
+        if reason:
+            # Nothing new arrived: keep the table and the last good update
+            # time, and say so (header dot turns red; docs/ui.md 8.7).
+            self._lw_failure = ""
+            self.status_text_changed.emit(f"Auto-update failed: {reason}")
+            self.refresh_failed.emit(reason)
+            return
         # UniverseLightweightFetchThread preserves all_data's order/length
         # and only reassigns item["changes"] (to a freshly-fetched dict) for
         # tickers whose price actually moved -- every unchanged item keeps
@@ -633,20 +663,46 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         # Accumulate data incrementally so the table updates as each market finishes
         self.all_data.extend(data)
 
+    _PART_MARKET = {"Indices": "Index", "KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ"}
+
+    def _on_full_refresh_failed(self, reason: str, parts: list):
+        # Arrives before finished_all (same emitting thread, queued in order).
+        self._full_failure = (reason, parts)
+
+    def _with_previous_rows(self, all_data: list, parts: list) -> list:
+        """all_data plus the previous refresh's rows for the parts that
+        failed this time (by market), so a failed market keeps its last
+        known rows instead of disappearing."""
+        markets = {self._PART_MARKET[p] for p in parts if p in self._PART_MARKET}
+        have = {x.get("ticker") for x in all_data}
+        kept = [x for x in getattr(self, "_prev_data", [])
+                if x.get("market") in markets and x.get("ticker") not in have]
+        return all_data + kept
+
     def on_finished_all(self, all_data):
+        failure = getattr(self, "_full_failure", None)
+        self._full_failure = None
         try:
             self.load_custom_settings()
             deleted = set(self.custom_settings.get("deleted", []))
             added = self.custom_settings.get("added", [])
 
+            if failure:
+                all_data = self._with_previous_rows(all_data, failure[1])
             filtered_data = [x for x in all_data if x.get("ticker", "") not in deleted]
 
             self.all_data = filtered_data
             self._sort_all_data()      # keeps a pinned Trend Score run on top
             self._reload_table()
             self.filter_table(self.search_input.text())
-            self.update_total_status()
-            self.update_last_sync_time()
+            if failure:
+                reason, parts = failure
+                self.update_total_status(prefix=f"Refresh failed ({reason}); kept the previous rows for "
+                                                f"{', '.join(parts)}.")
+                self.refresh_failed.emit(f"full refresh: {reason}")
+            else:
+                self.update_total_status()
+                self.update_last_sync_time()
 
             # Cache the newly fetched data (the user-added tickers below are
             # appended by _render_startup_batch, which saves again)

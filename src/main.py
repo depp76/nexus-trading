@@ -19,9 +19,11 @@ from ui.common import (
     FONT_TITLE,
     FONT_SMALL,
     cancel_thread,
+    refresh_state,
+    RefreshFailures,
 )
 from ui.theme import app_qss, TEXT_EMPTY
-from ui.colors import OK, WARN
+from ui.colors import OK, WARN, DANGER
 
 load_dotenv(ENV_FILE)
 
@@ -91,6 +93,8 @@ class MainWindow(QMainWindow):
         # two intervals, faint while auto-refresh is off. The time used to sit
         # in a footer row, apart from the toggle.
         self._last_sync_at = None
+        # Active failure per source, cleared by that source's next success.
+        self._failures = RefreshFailures()
         self._refresh_dot = QLabel("●")
         self._refresh_dot.setFont(create_font(FONT_SMALL))
         header_layout.addWidget(self._refresh_dot)
@@ -154,6 +158,9 @@ class MainWindow(QMainWindow):
         # Wire Trading Universe tab -> header refresh status / native status bar /
         # cross-tab triggers (its status_text_changed goes to its own footer).
         self.universe_tab.sync_time_changed.connect(self._on_sync_time)
+        self.universe_tab.refresh_failed.connect(self._on_universe_failed)
+        self.trading_history_tab.price_refresh_failed.connect(self._on_history_failed)
+        self.trading_history_tab.price_refresh_ok.connect(self._on_history_ok)
         self.universe_tab.status_message.connect(self._on_thread_status_message)
         self.universe_tab.refresh_started.connect(self.trading_history_tab._reload_current)
         self.universe_tab.auto_lightweight_tick.connect(self.trading_history_tab._start_realtime_price_update)
@@ -201,19 +208,33 @@ class MainWindow(QMainWindow):
 
     def _on_sync_time(self, _text: str):
         self._last_sync_at = datetime.now()
+        self._failures.clear("Trading Universe")
         self.update_time_label.setText(f"last {self._last_sync_at:%H:%M:%S}")
         self._update_refresh_indicator()
 
-    def _update_refresh_indicator(self):
-        if not self.auto_refresh_cb.isChecked():
-            color, tip = TEXT_EMPTY, "Auto-refresh is off"
-        elif self._last_sync_at is None:
-            color, tip = TEXT_EMPTY, "Waiting for the first update"
-        elif (datetime.now() - self._last_sync_at).total_seconds() * 1000 > 2 * self.AUTO_REFRESH_MS:
-            color, tip = WARN, "Late: no update for more than two intervals"
+    def _set_failure(self, source: str, reason: str | None):
+        if reason is None:
+            self._failures.clear(source)
         else:
-            color, tip = OK, "Updating"
-        self._refresh_dot.setStyleSheet(f"color: {color};")
+            self._failures.fail(source, reason, datetime.now())
+        self._update_refresh_indicator()
+
+    def _on_universe_failed(self, reason: str):
+        self._set_failure("Trading Universe", reason)
+
+    def _on_history_failed(self, reason: str):
+        self._set_failure("Trading History", f"prices: {reason}")
+
+    def _on_history_ok(self):
+        self._set_failure("Trading History", None)
+
+
+    _REFRESH_DOT_COLOR = {"off": TEXT_EMPTY, "waiting": TEXT_EMPTY, "failed": DANGER, "late": WARN, "ok": OK}
+
+    def _update_refresh_indicator(self):
+        kind, tip = refresh_state(self.auto_refresh_cb.isChecked(), self._last_sync_at, self._failures.active(),
+                                  datetime.now(), self.AUTO_REFRESH_MS)
+        self._refresh_dot.setStyleSheet(f"color: {self._REFRESH_DOT_COLOR[kind]};")
         self._refresh_dot.setToolTip(tip)
 
     def _on_global_auto_timer(self):

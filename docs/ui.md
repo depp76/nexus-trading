@@ -1,13 +1,17 @@
 # Nexus Trading — UI 명세
 
-PyQt6 데스크톱 앱(`src/ui/`)의 탭 재설계 명세(현재 상위 탭 3개; Strategy 탭은 2026-09-28 제거). 각 항목은 현재 소스의 진단에서 도출되었고, 대응하는 mockup 파일이 있습니다.
+PyQt6 데스크톱 앱(`src/ui/`)의 UI 명세. 상위 탭은 4개(Trading Universe · Trading History · Total Assets · Strategy)다.
+Strategy 탭은 2026-09-28 옛 전략 계층과 함께 제거됐다가 같은 날 Trend Following 서브탭 하나로 다시 만들어졌다.
+
+**읽는 법 (2026-10-25 정리)**: 1~7장은 2026-09 재설계 당시의 진단과 제안이고, 이후 결정으로 바뀐 항목은 그 자리에
+"→ 현재"로 표시했다. **8장이 현재 적용 중인 규칙**이며 1~7장과 다르면 8장이 우선한다.
 
 | 탭 | mockup | 진단 |
 | --- | --- | --- |
 | Trading Universe | `Trading Universe Redesign.dc.html` | 12건 |
 | Trading History | `Trading History Redesign.dc.html` | 10건 |
 | Total Assets | `Total Assets Redesign.dc.html` | 9건 |
-| ~~Strategy~~ | `Strategy Redesign.dc.html` | 9건 — 탭 자체를 2026-09-28 제거, 5장은 재도입 시 참고용 기록 |
+| ~~Strategy~~ | `Strategy Redesign.dc.html` | 9건 — 옛 Strategy 탭 기준. 지금의 Strategy 탭(Trend Following)과는 다른 화면이라 5장은 기록용 |
 
 ---
 
@@ -28,22 +32,22 @@ FLAT   = "#75798c"   # 0, 미해당
 DANGER = "#d1453b"   # 삭제/경고 등 가격 방향과 무관한 빨강 (PROFIT/LOSS와 별개)
 ```
 
-현재 위반 사항:
+당시 위반 사항(→ 현재 해결됨: 모든 셀이 `ui/colors.py`의 `fg_for()`/`heatmap_bg()`를 쓴다. 상태·판정 색은 8.3):
 
 - `widgets.py` `_C_BG_BLUE_SEVERE` — 변화율 +30% 이상에 **파란** 배경 (상승=파랑)
 - `widgets.py` `_populate_row` col 11/13 — High/Low Diff 양수에 `color_red` (상승=빨강)
 - `history_table.py` `col_red`/`col_blue` — 이익=빨강 (관행과 일치)
 
-→ 같은 행 안에서 빨강의 의미가 뒤집히고, 탭 간에도 어긋난다. `PROFIT`/`LOSS` 두 상수로 통일한다.
-
 ### 1.2 색 농도 — 히트맵
 
-- 모든 모멘텀/변화율 컬럼은 **하나의 공통 스케일**을 쓴다: `±10%`에서 최대 농도.
+- 모든 모멘텀/변화율 컬럼은 **하나의 공식**을 쓴다. 최대 농도 거리(`scale`)는 열 스펙에 둔다.
+  → 현재: Chg ±5%, 3D~120D ±10%, MA Div 100 ±20, 금리 행 ±25bp(처음 제안한 "모두 ±10%"가 아님; 8.7).
 - 농도는 `alpha = 0.04 + min(|v|/10, 1) × 0.20` (배경), 글자색은 항상 `PROFIT`/`LOSS` 원색.
 - 임계값을 `if` 사다리로 하드코딩하지 않는다. 컬럼 스펙의 `scale` 값으로 분리한다.
 - 범례를 표 하단에 상시 노출한다.
 
-현재: `Div(20)`은 120/110/105/102/98/93, `Div(50)`은 130/110/107/103/98/90, 변화율은 ±30/±15/0 — 세 가지 스케일이 각각 코드에 박혀 있다.
+당시: `Div(20)`은 120/110/105/102/98/93, `Div(50)`은 130/110/107/103/98/90, 변화율은 ±30/±15/0 — 세 가지 스케일이 각각 코드에 박혀 있었다.
+→ 현재 해결됨: `heatmap_bg(value, scale)` 하나, 범례는 Universe 푸터의 `HeatLegend`(8.7).
 
 ### 1.3 숫자
 
@@ -57,6 +61,7 @@ DANGER = "#d1453b"   # 삭제/경고 등 가격 방향과 무관한 빨강 (PROF
 ### 1.4 밀도
 
 행 높이 토글을 제공하고 기본은 컴팩트.
+→ 현재: 토글은 2026-09-19 사용자 결정으로 삭제. 행 높이는 하나(24px, `TABLE_ROW_H`)이고 Trading Universe만 28px(8.2).
 
 | 단계 | 행 높이 | 셀 세로 패딩 |
 | --- | --- | --- |
@@ -76,7 +81,8 @@ minmax(<최소폭>, <비율>fr)
 - 최소폭 합계가 창 폭을 넘으면 가로 스크롤을 허용한다. 스크롤을 끈 채 강제로 욱여넣지 않는다.
 - 가로 스크롤이 생기는 표는 식별 열(종목명·티커)을 좌측 고정한다.
 
-현재 위반: `widgets.py` `MIN_W=38` + `ScrollBarAlwaysOff` → 값이 잘리는데 볼 방법이 없다. `assets_tab.py` `ResizeMode.Fixed` → 창을 넓혀도 그대로.
+당시 위반: `widgets.py` `MIN_W=38` + `ScrollBarAlwaysOff` → 값이 잘리는데 볼 방법이 없다. `assets_tab.py` `ResizeMode.Fixed` → 창을 넓혀도 그대로.
+→ 현재 해결됨: Universe·Total Assets 모두 `ColSpec`(최소폭 + 비율), 가로 스크롤 `AsNeeded`, Universe는 이름 열 고정.
 
 ### 1.6 버튼
 
@@ -84,7 +90,8 @@ minmax(<최소폭>, <비율>fr)
 - 파괴적 동작(삭제)은 상시 노출하지 않는다 — 행 hover 또는 우클릭 메뉴. 확인 단계 필수.
 - 버튼 색은 **의미**(주/보조/위험)를 나타낸다. 기능 종류별로 색을 배정하지 않는다.
 
-현재 위반: `_BTN_BLUE`/`_BTN_ORANGE`/`_BTN_GREY`/`_BTN_INSIGHT` 4~5종의 채도 높은 fill이 툴바에 나열.
+당시 위반: `_BTN_BLUE`/`_BTN_ORANGE`/`_BTN_GREY`/`_BTN_INSIGHT` 4~5종의 채도 높은 fill이 툴바에 나열.
+→ 현재 해결됨: `make_button()` + `#primary`/`#danger` 역할만(8.1). 삭제는 세 탭 모두 우클릭 메뉴 + Delete 키 + 확인 창.
 
 ### 1.7 상태 표기
 
@@ -92,7 +99,7 @@ minmax(<최소폭>, <비율>fr)
 - 셀 배경색을 상태 채널로 쓰지 않는다 — 지브라 줄무늬와 충돌하고 인쇄·색각이상에서 사라진다.
 - 용어는 하나로 통일한다. 현재 헤더는 `Pf`, 버튼 라벨은 `On`/`Tg`/`-`, 배경은 노랑/하늘색으로 세 가지가 같은 상태를 가리킨다.
 - (2026-09-29) 저장값 `On`/`Tg`의 표시 용어는 **Held / Target**(2026-10-15에 Port → Held; 저장값은 그대로). 행의 상태 버튼·행 컨텍스트 메뉴·툴바 상태 필터 버튼이 같은 단어를 쓴다. 툴바 상태 필터는 버튼 하나가 **빈 라벨(필터 없음) → Held → Target → 빈 라벨**로 순환하고, 라벨이 바뀌어도 크기는 고정(다른 필터 버튼과 동일 폭). 빈 상태만 unchecked.
-- (2026-09-29) 행의 상태 표기는 배지가 아니라 **고정 크기(56×18) 버튼**이다. 빈 상태는 테두리만, Held는 연한 채움, Target은 진한 채움. 델리게이트가 그리고 `StockTable`이 클릭을 판정하므로 위젯은 없다. 클릭할 때마다 그 종목의 상태가 **빈 → Port → Target → 빈**으로 순환한다(더블클릭은 두 번 전진, MA 차트를 열지 않음). 컨텍스트 메뉴의 항목도 같은 순환을 한다.
+- (2026-09-29) 행의 상태 표기는 배지가 아니라 **고정 크기(56×18) 버튼**이다. 빈 상태는 테두리만, Held는 연한 채움, Target은 진한 채움. 델리게이트가 그리고 `StockTable`이 클릭을 판정하므로 위젯은 없다. 클릭할 때마다 그 종목의 상태가 **빈 → Held → Target → 빈**으로 순환한다(더블클릭은 두 번 전진, MA 차트를 열지 않음). 컨텍스트 메뉴의 항목도 같은 순환을 한다.
 
 ### 1.8 표 상호작용
 
@@ -101,7 +108,8 @@ minmax(<최소폭>, <비율>fr)
 - `Enter` / 더블클릭 — 상세(MA 차트) 열기.
 - 정렬 상태는 **데이터 갱신 후에도 유지**한다.
 
-현재 위반: `widgets.py` `NoSelection` + `NoFocus` → 복사도 키보드 탐색도 불가.
+당시 위반: `widgets.py` `NoSelection` + `NoFocus` → 복사도 키보드 탐색도 불가.
+→ 현재 해결됨: 행 선택·Ctrl+C·Enter가 Universe·History·Total Assets 표 모두에 있다(`install_table_keys`, 8.6).
 
 ### 1.9 데이터 갱신 정합성
 
@@ -117,6 +125,7 @@ def update_changed_rows(self, data, changed_rows, highlights=None):
 `setSortingEnabled(True)`이므로 사용자가 정렬한 뒤에는 data 인덱스 ≠ 화면 행. 60초 경량 갱신이 **다른 종목 행에 가격을 쓴다.**
 
 → `ticker → 현재 행` 매핑을 유지하거나, `QAbstractTableModel` + `QSortFilterProxyModel`로 전환해 정렬/필터와 데이터 갱신을 분리한다.
+→ 현재 해결됨: `update_changed_rows`가 티커로 현재 행을 찾는다(`_ticker_to_row`). 위 코드는 당시의 버그 예시다.
 
 ### 1.10 갱신 상태 표시
 
@@ -135,11 +144,10 @@ def update_changed_rows(self, data, changed_rows, highlights=None):
 ### 2.1 구조
 
 ```
-헤더:   앱명 · 탭 · [Auto update 상태] · [+ Ticker]
-툴바:   [검색] [ALL|KOSPI|KOSDAQ] [ |Held|Target 순환] [저장된 뷰…] ····· [Trend Score] [Refresh]
-Market rail:  지수·금리·원자재 카드 (표에서 분리)
-표:     13열, 유동 폭, 가로 스크롤 없음
-푸터:   건수 · 정렬 상태 · 모멘텀 공통 스케일 범례
+헤더:   앱명 · 탭 · [● Auto-refresh · 60s · last 시각]          (8.4, 8.7)
+툴바:   [검색] [ALL|KOSPI|KOSDAQ] [ |Held|Target 순환] ····· [시장][티커][Add Ticker] [Trend Score] [Refresh]
+표:     15열(지수·금리·원자재 행 포함), 최소폭 + 비율, 가로 스크롤 AsNeeded, 이름 열 고정
+푸터:   상태 문구 · 히트맵 범례                                     (8.7)
 ```
 
 - (2026-09-29) **Trend Score** 버튼: 표의 KOSPI/KOSDAQ 행을 `trend_following.md` 2-5(추세 + 눌림 점수)로 채점해
@@ -198,18 +206,20 @@ Market rail:  지수·금리·원자재 카드 (표에서 분리)
 
 ~~`is_index` / `is_bond` / `change_mode in ('bp','abs')` 행은 표에서 제외하고 상단 카드로 분리한다.~~
 
-- 이유: 지수(포인트)·금리(bp)·WTI($)·개별주(원)가 한 컬럼에서 정렬되면 의미가 없다. 지수 행은 `Market Cap`·`PER`이 전부 `-`이고, 정렬 시 결측을 `float('-inf')`로 밀어 넣어야 한다.
+- (당시 제안의 이유) 지수(포인트)·금리(bp)·WTI($)·개별주(원)가 한 컬럼에서 정렬되면 의미가 없다. 지수 행은 `Market Cap`·`PER`이 전부 `-`이고, 정렬 시 결측을 `float('-inf')`로 밀어 넣어야 한다.
 - 카드: 라벨 · 값 · 변화(단위 자동: `%` / `bp` / `$`).
 
 ### 2.5 컬럼 그룹
 
 22열을 4그룹으로 묶고 토글한다: **가격 · 밸류 · 모멘텀 · 수급**. 기본은 가격+밸류+모멘텀.
+→ 현재: 미구현. 열 스펙에 그룹(`price`/`value`/`momentum`)은 있고 폭 계산은 숨긴 열을 제외하지만, 토글 UI가 없다. 수급 열은 없다.
 
 ### 2.6 저장된 뷰
 
 필터 조합을 이름으로 저장하고 건수 배지를 붙인다. 예: `관심 42` `타깃 12` `저PER 58` `신고가 근접 9`.
 
 컬럼 필터는 Market 하나(`FILTER_COLS = {2}`)에서 확장한다 — 수치 컬럼은 범위 필터, 범주 컬럼은 체크박스.
+→ 현재: 미구현. Market 필터는 툴바 버튼으로 옮겨져 `FILTER_COLS`는 비어 있다(필터 팝업 코드는 남아 있음).
 
 ---
 
@@ -223,14 +233,15 @@ Market rail:  지수·금리·원자재 카드 (표에서 분리)
 
 | 그룹 | span | 컬럼 |
 | --- | --- | --- |
-| Trading | 1 | Company (종목명 + `티커 · 시장` + 상태 배지) |
+| Trading | 3 | Company · Market · Ticker (Company 셀에 상태 배지) |
 | Buy | 4 | Date · Price · Qty · Amount |
 | Sell | 7 | Date · Days · Price · Qty · Amount · P/L · P/L % |
 | Position | 4 | Days · Price · P/L · P/L % |
 | Past | 3 | 5D · 10D · 20D |
 
 - 2단 헤더(그룹 + 컬럼)를 **공식 구조**로 삼는다. 그룹 라벨은 본문과 같은 그리드 위에서 `span`으로 묶는다.
-- 그룹 상단에 2px 색 규칙: Trading 중립 / Buy 초록 / Sell PROFIT / Position accent / Past 연회색.
+- ~~그룹 상단에 2px 색 규칙: Trading 중립 / Buy 초록 / Sell PROFIT / Position accent / Past 연회색.~~
+  → 현재: 그룹 헤더는 범주색 없이 중립(8.3). 빨간 Sell·파란 손익 헤더가 손실·이익으로 읽혔기 때문.
 - 엑셀 헤더 매핑은 **임포터에만** 둔다. 화면 구조가 엑셀 파일 구조를 미러링하지 않는다.
 
 ### 3.3 미해당 칸
@@ -257,7 +268,7 @@ Market rail:  지수·금리·원자재 카드 (표에서 분리)
 
 ### 3.6 KPI 스트립
 
-읽기 전용 `QLineEdit` 9개(`_make_ro_edit`)를 텍스트 KPI 스트립으로 대체한다. 입력 가능한 항목(원금·입금·출금)만 실제 필드로 남긴다.
+읽기 전용 `QLineEdit` 9개(`_make_ro_edit`)를 텍스트 KPI 스트립으로 대체한다(→ 현재 구현: `KpiStrip`, 8.6). 입력 가능한 항목(원금·입금·출금)만 실제 필드로 남긴다.
 
 `Total Asset · Cumulative Asset · Total P/L · Total P/L(%) · Principal · Cost Basis · Deposit · Withdrawal`
 (2026-09-20: "Total Invest"는 실제로 NAV를 보여주면서 서브텍스트만 "Cost basis"였던
@@ -277,7 +288,8 @@ Asset에 섞여 있던 누적출금 포함 금액은 별도 `Cumulative Asset` �
 
 ```
 헤더:   앱명 · 탭 · [KRW|USD] · USD/KRW 환율 ····· [Graph] [Export]
-KPI:    Current Total Assets · Weekly P/L · Cumulative P/L · vs KOSPI · 기록 주차
+KPI:    ~~Current Total Assets · Weekly P/L · Cumulative P/L · vs KOSPI · 기록 주차~~
+        → 적용 안 함(2026-10-25 사용자 결정). 현재 총자산·주간 손익은 입력 줄에 표시.
 차트:   주간 추이 (자산 vs KOSPI, 첫 주 = 100 재계산, 초과수익 음영) — 상시 노출
 입력:   이번 주 기록 [W38 · 2026-09-18] [금액(자동 채움)] [기록 저장]
 표:     10열
@@ -309,7 +321,8 @@ KRW 7열 + USD 6열 = 15열을 **토글 하나 + 10열**로 줄인다. 환산율
 
 ### 4.5 총자산 자동 채움
 
-`history_tab.py`의 `total_asset_updated` 시그널 값을 입력란에 **자동 채운다.** 사용자는 확인만 한다. 수기로 고치면 기록에 `manual: true` 플래그를 남겨 이후 비교가 가능하게 한다.
+`history_tab.py`의 `total_asset_updated` 시그널 값을 입력란에 **자동 채운다.**
+값은 **계좌 평가액 + 누적 인출액**(2026-10-25 사용자 지시; 2026-09-20~10-25에는 인출액 제외 NAV). 사용자는 확인만 한다. 수기로 고치면 기록에 `manual: true` 플래그를 남겨 이후 비교가 가능하게 한다.
 
 ### 4.6 기타
 
@@ -319,7 +332,10 @@ KRW 7열 + USD 6열 = 15열을 **토글 하나 + 10열**로 줄인다. 환산율
 
 ---
 
-## 5. Strategy (2026-09-28 제거 — 전략은 추후 새로 개발·검증 예정. 아래는 재도입 시 참고할 당시 명세)
+## 5. 옛 Strategy 탭 (기록용)
+
+2026-09-28에 옛 전략 계층과 함께 제거된 화면의 명세다. 지금의 Strategy 탭은 Trend Following 리서치 화면
+(`ui/trend_following_tab.py`, 8.4·8.6)이라 아래 구조와 다르다. 고지 배너(5.6)와 상태·오류 분리(5.2)의 원칙만 지금 화면에도 적용돼 있다.
 
 ### 5.1 구조
 
@@ -419,6 +435,9 @@ MA Cross는 **비활성 탭 + `준비중` 배지**로 명시한다. 회색 안�
 ## 6. Qt 적용 — 목업과 실제 앱이 달라 보이는 이유
 
 목업은 브라우저 렌더링이고 앱은 Qt 위젯입니다. 탭 코드를 고쳐도 **전역 스타일시트가 전부를 덮어쓰기 때문에** look & feel이 바뀌지 않습니다. 이 절을 **Phase 0**으로 먼저 처리해야 나머지 작업의 결과가 화면에 나타납니다.
+
+→ 현재 구현됨: `ui/theme.py`의 `app_qss()`와 토큰. 아래 6.1은 당시 상태, 6.2의 코드는 당시 제안이며 실제 값은 `theme.py`가 기준이다
+(예: 표 테두리는 `LINE_GROUP` 1px 직각, 셀 패딩 1px 3px — 8.2).
 
 ### 6.1 현재 전역 스타일시트가 강제하는 것
 
@@ -549,7 +568,7 @@ app.setStyleSheet(app_qss(FONT_FAMILY_CSS))
 | `conic-gradient` 도넛 | matplotlib 또는 `QPainter.drawPie` |
 | 행 hover 시 액션 노출 | `setMouseTracking(True)` + `entered` 시그널로 델리게이트가 아이콘을 그린다 |
 | `text-wrap: pretty` | 없음. 긴 텍스트는 `QLabel.setWordWrap(True)` |
-| 폰트 `Inter` / `IBM Plex Mono` | 본문은 기존 Malgun Gothic Semilight 유지. **숫자만** `QFont("Consolas")` 또는 `setStyleName`으로 tabular 확보 |
+| 폰트 `Inter` / `IBM Plex Mono` | 맑은 고딕 Semilight 한 글꼴(숫자 포함; 1.3의 2026-09-19 결정. 당시 제안한 Consolas 숫자 글꼴은 폐기) |
 
 ### 6.4 폰트·DPI
 
@@ -559,7 +578,10 @@ app.setStyleSheet(app_qss(FONT_FAMILY_CSS))
 
 ---
 
-## 7. 적용 순서
+## 7. 적용 순서 (당시 계획)
+
+→ 현재: Phase 0~4와 6의 대부분이 적용됐다(2026-09 ~ 2026-10, 8장). 남은 것은 2.5 열 그룹 토글과 2.6 저장된 뷰·범위 필터,
+그리고 6의 "지수/원자재 분리"(2.4에서 폐기)다.
 
 | Phase | 내용 | 대상 파일 | 규모 |
 | --- | --- | --- | --- |
@@ -655,3 +677,25 @@ app.setStyleSheet(app_qss(FONT_FAMILY_CSS))
 - **Strategy 탭**: 파라미터 폼을 한 줄 4쌍(8열)에서 3쌍씩 3줄로, 긴 라벨 설명은 툴팁으로. 상태 문구는 결과 아래 푸터로.
 - **다이얼로그 표**: MA 차트의 투자자/선물 표와 종목별 거래 이력 창도 `setup_table` 사용. 거래 이력 창의 행 번호 열 제거,
   직접 그리는 격자선도 `LINE_GROUP`.
+
+### 8.7 갱신 실패 표시와 히트맵 범례 (2026-10-25)
+
+- **갱신 실패**: `UniverseLightweightFetchThread.failed(reason)` — 예외가 나거나, 요청한 종목에 대해 시세를 하나도 받지 못하면
+  (수집기는 네트워크 실패 시 예외 대신 빈 결과를 돌려준다) `finished_all` 직전에 보낸다. 일부라도 받으면 실패가 아니다.
+  Universe 탭은 그 틱에서 표를 건드리지 않고, 마지막 정상 갱신 시각을 유지하고, 푸터에 `Auto-update failed: …`를 쓰고
+  `refresh_failed(reason)`을 보낸다. 헤더 점은 마지막 실패가 마지막 성공보다 최근이면 **빨강(DANGER)**, 툴팁에 실패 시각과 사유.
+  다음 정상 갱신에서 자동으로 초록으로 돌아온다. 상태 판정은 `ui.common.refresh_state()`(off / waiting / failed / late / ok).
+- **히트맵 범례**(1.2 구현): Universe 푸터 오른쪽의 `HeatLegend` — `heatmap_bg()`로 직접 칠한 LOSS → 0 → PROFIT 막대와
+  열별 최대 농도 기준. 1.2는 "모든 열 ±10% 공통"이었지만 실제 열 스펙은 Chg ±5%, 3D~120D ±10%, MA Div 100 ±20이므로
+  범례 문구를 `COLUMNS`의 `scale` 값에서 만들어 셀과 어긋나지 않게 했다. 금리 행(±25bp)은 툴팁에 표기.
+
+### 8.8 갱신 실패 범위 확대 (2026-10-25)
+
+- **전체 새로고침**(`AllDataFetchThread.failed(reason, parts)`): 지수·KOSPI·KOSDAQ 중 예외가 나거나 0건인 부분을 알린다.
+  Universe는 그 부분의 **이전 행을 유지**하고(새로고침 직전 스냅샷 `_prev_data`), 마지막 갱신 시각을 바꾸지 않고, 실패를 보고한다.
+  이전에는 실패한 시장의 행이 표와 캐시에서 빠졌고, 네트워크가 끊긴 채 시작하면 표와 `universe_cache.json`이 비었다.
+  `_save_universe_cache()`는 빈 목록으로 캐시를 덮어쓰지 않는다.
+- **History 보유 종목 시세**(`RealtimePriceThread.failed`): 예외 또는 시세 0건이면 실패. 예외가 나면 스레드가 아무 신호 없이
+  끝나던 것도 고침. 성공하면 `price_refresh_ok`.
+- **헤더 점**: `ui.common.RefreshFailures`가 출처별(Trading Universe / Trading History) 실패를 들고 있고, **같은 출처의 다음 성공만**
+  그 실패를 지운다. 그래서 History 시세 실패가 Universe 성공에 가려지지 않는다. 툴팁은 활성 실패를 모두 나열한다.
