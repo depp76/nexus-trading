@@ -647,9 +647,9 @@ app.setStyleSheet(app_qss(FONT_FAMILY_CSS))
 - **표 키 동작**: 모든 데이터 표에 `ui.common.install_table_keys()` — Ctrl+C는 선택 행을 TSV로 복사(보이는 열, 화면 순서),
   Enter는 현재 셀 더블클릭과 같은 동작(History는 매수/매도 편집, Total Assets는 총자산 편집). History의 월 요약 행은 제외.
   Universe는 기존 자체 구현(이름 셀이 델리게이트라 텍스트를 따로 조립)을 유지.
-- **KPI 띠 공용화**: `ui.common.KpiStrip`. History의 띠를 이 클래스로 옮기고, Total Assets에 같은 띠를 추가(명세 4.1):
-  Current Total Assets · Since Last Record · Cumulative P/L · vs KOSPI · Records. 입력 줄에 섞여 있던
-  "Current Total Assets:/Weekly P/L:" 라벨 쌍은 제거("Weekly P/L"은 실제로는 마지막 기록 대비 값이라 이름도 바로잡음).
+- **KPI 띠 공용화**: `ui.common.KpiStrip`으로 History의 띠를 옮김. Total Assets에도 같은 띠(명세 4.1의 5칸)를
+  넣었다가 사용자 결정으로 되돌림(2026-10-25: Total Assets에는 KPI 띠가 필요 없음). Total Assets는 입력 줄의
+  "Current Total Assets / Weekly P/L" 표시를 그대로 쓴다. 명세 4.1의 KPI 줄은 적용하지 않는다.
 - **Strategy 탭**: 파라미터 폼을 한 줄 4쌍(8열)에서 3쌍씩 3줄로, 긴 라벨 설명은 툴팁으로. 상태 문구는 결과 아래 푸터로.
 - **다이얼로그 표**: MA 차트의 투자자/선물 표와 종목별 거래 이력 창도 `setup_table` 사용. 거래 이력 창의 행 번호 열 제거,
   직접 그리는 격자선도 `LINE_GROUP`.

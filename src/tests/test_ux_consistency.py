@@ -156,25 +156,6 @@ class TestKpiStrip(unittest.TestCase):
         self.assertIn(TEXT, value.styleSheet())
 
 
-class TestAssetsKpis(unittest.TestCase):
-    def test_kpis_from_records_and_live_value(self):
-        records = [{"date": "2026-01-02", "total": 1000.0}, {"date": "2026-01-09", "total": 1100.0}]
-        with patch("ui.assets_tab.trade_db.load_asset_records", return_value=records), \
-             patch("ui.assets_tab.trade_db.save_asset_records"), \
-             patch("ui.assets_tab.TradingRecordTab._start_metrics_preload"), \
-             patch("ui.assets_tab.TradingRecordTab._schedule_daily_sync"):
-            from ui.assets_tab import TradingRecordTab
-            tab = TradingRecordTab()
-            tab._refresh_table()
-            tab.update_live_asset(1210.0)
-            cells = tab._kpis.cells
-            self.assertEqual(cells["records"][0].text(), "2")
-            self.assertEqual(cells["cumulative"][0].text(), "+100")
-            self.assertEqual(cells["current"][0].text(), "1,210")
-            self.assertEqual(cells["since_last"][0].text(), "+110")
-            self.assertIn("+10.00% vs 2026-01-09", cells["since_last"][1].text())
-
-
 class TestDialogTables(unittest.TestCase):
     def test_trade_history_dialog_uses_table_defaults(self):
         from ui.dialogs.trade_history import StockTradeHistoryDialog

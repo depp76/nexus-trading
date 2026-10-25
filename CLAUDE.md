@@ -116,7 +116,7 @@ Dev tooling is in `requirements-dev.txt`
   `apply_matplotlib_font`, status color constants,
   input validators, `make_button`/`BTN_H` (every push button), `setup_table`/`TABLE_ROW_H` (every data
   table), `make_footer_label`/`TAB_MARGINS`/`TAB_SPACING` (the tab skeleton), `install_table_keys`
-  (Ctrl+C/Enter on a table), `KpiStrip` (History/Total Assets KPI row; all docs/ui.md 8), `atomic_save_json` /
+  (Ctrl+C/Enter on a table), `KpiStrip` (History's KPI row; all docs/ui.md 8), `atomic_save_json` /
   `safe_load_json`, `retire_thread`, `ThreadOwnerMixin`). Tabs never
   reference each other
   directly; `MainWindow` connects their signals (`status_message`, `refresh_started`,
