@@ -12,11 +12,11 @@ from datetime import datetime
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
-    QLineEdit, QPushButton, QLabel, QHeaderView, QComboBox, QMessageBox,
-    QInputDialog, QFileDialog,
+    QLineEdit, QLabel, QHeaderView, QComboBox, QMessageBox,
+    QInputDialog, QFileDialog, QMenu,
 )
-from PyQt6.QtCore import Qt, QTimer, QSettings
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtCore import Qt, QTimer, QSettings, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QKeySequence, QShortcut
 
 import matplotlib.dates as mdates
 from matplotlib.figure import Figure
@@ -58,12 +58,19 @@ class _AssetsTable(QTableWidget):
 
 
 from ui.common import (
-    create_font, FONT_FAMILY_CSS, ThreadOwnerMixin,
+    FONT_BODY,
+    create_font, ThreadOwnerMixin, make_button, setup_table, TAB_MARGINS, TAB_SPACING,
+    install_table_keys,
 )
+
+
+# Message boxes are titled with the tab name (docs/ui.md 8.5).
+_TITLE = "Total Assets"
 
 
 class TradingRecordTab(ThreadOwnerMixin, QWidget):
     """Tab for recording periodic total-asset snapshots with weekly/cumulative return calculations."""
+    status_message = pyqtSignal(str)   # -> MainWindow's status bar (docs/ui.md 8.5)
 
 
     # docs/ui.md 4.2/4.3: KRW-7-col + USD-6-col = 15 columns collapsed to a
@@ -75,9 +82,9 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         ("Date", 0, 1, TEXT_SUB),
         ("KOSPI", 1, 3, TEXT_SUB),
         ("Total Assets", 4, 1, TEXT_SUB),
-        ("Weekly P/L", 5, 2, "#1a6b3c"),
-        ("Cumulative P/L", 7, 2, "#0078d4"),
-        ("vs KOSPI", 9, 1, "#6d28d9"),
+        ("Weekly P/L", 5, 2, TEXT_SUB),
+        ("Cumulative P/L", 7, 2, TEXT_SUB),
+        ("vs KOSPI", 9, 1, TEXT_SUB),
     ]
     # Sub-labels are English to match the rest of the app's UI (docs/ui.md's
     # own table uses Korean sub-labels -- 종가/주간 %/누적 % -- but every
@@ -128,17 +135,17 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
     # ---UI ---
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setSpacing(8)
-        root.setContentsMargins(12, 10, 12, 10)
+        root.setSpacing(TAB_SPACING)
+        root.setContentsMargins(*TAB_MARGINS)
 
         # ---Header row: currency toggle + USD/KRW rate (docs/ui.md 4.1/4.3) ---
         header_row = QHBoxLayout()
         lbl_currency = QLabel("Currency:")
-        lbl_currency.setFont(create_font(10, style_name="Semilight"))
+        lbl_currency.setFont(create_font(FONT_BODY, style_name="Semilight"))
         header_row.addWidget(lbl_currency)
 
         self._currency_combo = QComboBox()
-        self._currency_combo.setFont(create_font(10, style_name="Semilight"))
+        self._currency_combo.setFont(create_font(FONT_BODY, style_name="Semilight"))
         self._currency_combo.addItems(["KRW", "USD"])
         self._currency_combo.setFixedWidth(90)
         self._currency_combo.currentTextChanged.connect(self._on_currency_changed)
@@ -146,7 +153,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
 
         header_row.addSpacing(12)
         self._rate_lbl = QLabel("USD/KRW: -")
-        self._rate_lbl.setFont(create_font(10, style_name="Semilight"))
+        self._rate_lbl.setFont(create_font(FONT_BODY, style_name="Semilight"))
         self._rate_lbl.setStyleSheet(f"color: {TEXT_MUTED};")
         header_row.addWidget(self._rate_lbl)
         header_row.addStretch()
@@ -167,65 +174,51 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         ctrl = QHBoxLayout()
 
         self._date_combo = QComboBox()
-        self._date_combo.setFont(create_font(10, style_name="Semilight"))
+        self._date_combo.setFont(create_font(FONT_BODY, style_name="Semilight"))
         self._date_combo.setFixedWidth(150)
         self._date_combo_start_year = None
         self._rebuild_date_combo()
         self._date_combo.currentIndexChanged.connect(self._on_date_combo_changed)
 
         self._asset_edit = QLineEdit()
-        self._asset_edit.setFont(create_font(10, style_name="Semilight"))
+        self._asset_edit.setFont(create_font(FONT_BODY, style_name="Semilight"))
         self._asset_edit.setPlaceholderText("Total Assets (auto-filled)")
         self._asset_edit.setFixedWidth(120)
         self._asset_edit.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._asset_edit.textEdited.connect(self._fmt_asset_input)
         self._asset_edit.textEdited.connect(self._on_asset_edit_user_typed)
 
-        # Add Record is this tab's one primary action (docs/ui.md 1.6);
-        # Delete is destructive ("danger"); This Week/Graph/Export are
-        # secondary utilities and stay neutral.
-        add_btn = QPushButton("\u2795  Add Record")
-        add_btn.setObjectName("primary")
-        add_btn.setFont(create_font(10, QFont.Weight.Bold))
-        add_btn.setFixedHeight(32)
-        add_btn.clicked.connect(self._add_record)
-
-        del_btn = QPushButton("\U0001f5d1  Delete Selected")
-        del_btn.setObjectName("danger")
-        del_btn.setFont(create_font(10, QFont.Weight.Bold))
-        del_btn.setFixedHeight(32)
-        del_btn.clicked.connect(self._delete_selected)
-
-        today_btn = QPushButton("\U0001f4c5  This Week")
-        today_btn.setFont(create_font(10, QFont.Weight.Bold))
-        today_btn.setFixedHeight(32)
-        def _select_latest():
-            self._date_combo.setCurrentIndex(self._date_combo.count() - 1)
-        today_btn.clicked.connect(_select_latest)
+        # Add Record is this tab's one primary action (docs/ui.md 1.6 / 8.1);
+        # This Week/Graph/Export are secondary utilities and stay neutral.
+        # Delete lives on the table's right-click menu and the Delete key, as
+        # in the other tabs -- never an always-visible button.
+        add_btn = make_button("Add Record", "primary", self._add_record)
+        today_btn = make_button("This Week", on_click=self._select_latest_week)
 
         lbl_date = QLabel("Date:")
-        lbl_date.setFont(create_font(10, style_name="Semilight"))
+        lbl_date.setFont(create_font(FONT_BODY, style_name="Semilight"))
         lbl_assets = QLabel("Total Assets:")
-        lbl_assets.setFont(create_font(10, style_name="Semilight"))
+        lbl_assets.setFont(create_font(FONT_BODY, style_name="Semilight"))
 
         live_asset_title = QLabel("Current Total Assets:")
-        live_asset_title.setFont(create_font(10, style_name="Semilight"))
+        live_asset_title.setToolTip("Account valuation + cumulative withdrawals, from Trading History")
+        live_asset_title.setFont(create_font(FONT_BODY, style_name="Semilight"))
 
         # docs/ui.md issue #7 (mockup): these were QLineEdit(readOnly), which
         # look editable (bordered, input-shaped) despite never accepting
         # input -- plain KPI-style labels now, matching History's KPI strip.
         self.live_asset_lbl = QLabel("-")
         self.live_asset_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.live_asset_lbl.setFont(create_font(10, QFont.Weight.Bold))
+        self.live_asset_lbl.setFont(create_font(FONT_BODY, QFont.Weight.Bold))
         self.live_asset_lbl.setStyleSheet(f"color:{TEXT};")
         self.live_asset_lbl.setFixedWidth(120)
 
         live_diff_title = QLabel("Weekly P/L:")
-        live_diff_title.setFont(create_font(10, style_name="Semilight"))
+        live_diff_title.setFont(create_font(FONT_BODY, style_name="Semilight"))
 
         self.live_diff_lbl = QLabel("-")
         self.live_diff_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.live_diff_lbl.setFont(create_font(10, QFont.Weight.Bold))
+        self.live_diff_lbl.setFont(create_font(FONT_BODY, QFont.Weight.Bold))
         self.live_diff_lbl.setStyleSheet(f"color:{TEXT};")
         self.live_diff_lbl.setFixedWidth(150)
 
@@ -240,43 +233,34 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         ctrl.addSpacing(12)
         ctrl.addWidget(live_diff_title)
         ctrl.addWidget(self.live_diff_lbl)
-        ctrl.addWidget(today_btn)
-        ctrl.addWidget(add_btn)
 
         # Graph/Export sit on the header row, right-aligned above the chart
         # they belong to: all on one controls row the tab needed ~1,540px
         # and ran past the screen edge (user report 2026-10-15).
-        graph_btn = QPushButton("\U0001f4c8  Graph")
-        graph_btn.setFont(create_font(10, QFont.Weight.Bold))
-        graph_btn.setFixedHeight(32)
-        graph_btn.clicked.connect(self._show_graph)
+        graph_btn = make_button("Graph", on_click=self._show_graph)
         header_row.addWidget(graph_btn)
 
-        export_btn = QPushButton("\U0001f4e5  Export")
-        export_btn.setFont(create_font(10, QFont.Weight.Bold))
-        export_btn.setFixedHeight(32)
-        export_btn.setToolTip("Export the asset snapshot table to Excel or CSV")
-        export_btn.clicked.connect(self._on_export_clicked)
+        export_btn = make_button("Export", on_click=self._on_export_clicked,
+                                 tooltip="Export the asset snapshot table to Excel or CSV")
         header_row.addWidget(export_btn)
 
+        # Actions on the right, the primary last (docs/ui.md 8.4).
         ctrl.addStretch()
-        ctrl.addWidget(del_btn)
+        ctrl.addWidget(today_btn)
+        ctrl.addWidget(add_btn)
         root.addLayout(ctrl)
 
         # ---Table (docs/ui.md 4.2/4.5: one spec -- label/min-width/weight --
         # instead of a separate _COLS_SUB list and a flat widths=[...] list) ---
         self._table = _AssetsTable(self._stretch_columns)
-        self._table.setFont(create_font(9, style_name="Semilight"))
+        setup_table(self._table, empty_text="No weekly records yet -- pick a week and Add Record")
         self._table.setColumnCount(len(self._COLUMNS))
 
         self._grouped_hdr = GroupedHeaderView(
             self._GROUPS, self._current_sub_labels(), self._table, group_h=22, sub_h=18, sortable=True,
         )
         self._table.setHorizontalHeader(self._grouped_hdr)
-        self._table.verticalHeader().setVisible(False)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self._table.setAlternatingRowColors(True)
         # docs/ui.md issue #9 (mockup): "정렬이 꺼져 있다" -- every column is
         # sortable now (a superset of the doc's minimum ask, Weekly P/L and
         # vs KOSPI). Default stays chronological (most recent first, matching
@@ -288,12 +272,27 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         for col_idx, spec in enumerate(self._COLUMNS):
             self._table.horizontalHeader().setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
             self._table.setColumnWidth(col_idx, spec.min_width)
-        self._table.setStyleSheet(
-            "QTableWidget { gridline-color: #d0d0d0; " + FONT_FAMILY_CSS + " font-size: 9pt; }"
-            "QTableWidget::item { padding: 1px 3px; }"
-        )
         self._table.cellDoubleClicked.connect(self._on_cell_double_clicked)
+        # Ctrl+C copies the selected weeks, Enter edits like a double-click
+        # (docs/ui.md 1.8 / 8.6).
+        install_table_keys(self._table, on_activate=self._on_cell_double_clicked)
+        self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._on_table_context_menu)
+        self._delete_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self._table)
+        self._delete_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+        self._delete_shortcut.activated.connect(self._delete_selected)
         root.addWidget(self._table)
+
+    def _select_latest_week(self):
+        self._date_combo.setCurrentIndex(self._date_combo.count() - 1)
+
+    def _on_table_context_menu(self, pos):
+        if not self._table.selectedIndexes():
+            return
+        menu = QMenu(self._table)
+        delete_action = menu.addAction("Delete Record...")
+        if menu.exec(self._table.viewport().mapToGlobal(pos)) is delete_action:
+            self._delete_selected()
 
     def _stretch_columns(self):
         """Distributes column widths from _COLUMNS (min-width + weight),
@@ -462,7 +461,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
             trade_db.save_asset_records(self._records)
         except Exception as e:
             logger.error("[TradingRecord] Save error: %s", e, exc_info=True)
-            QMessageBox.warning(self, "Database Error", f"Failed to save asset records:\n{e}")
+            QMessageBox.warning(self, _TITLE, f"Failed to save asset records:\n{e}")
 
     # ---Background metrics warm-up (roadmap 2026-09-18, review.md 1-2) ---
     def _start_metrics_preload(self):
@@ -495,14 +494,14 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         date_str = self._selected_date()
         raw_amt  = self._asset_edit.text().replace(',', '').strip()
         if not date_str:
-            QMessageBox.warning(self, "Error", "Select a Friday.")
+            QMessageBox.warning(self, _TITLE, "Select a Friday.")
             return
         try:
             total = float(raw_amt)
         except ValueError:
             total = math.nan
         if not math.isfinite(total):  # float() takes "nan"/"inf" (review_codex.md #6)
-            QMessageBox.warning(self, "Error", "Total Assets must be a number.")
+            QMessageBox.warning(self, _TITLE, "Total Assets must be a number.")
             return
 
         # docs/ui.md 4.5: the value was auto-filled from the live position
@@ -540,7 +539,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         if not dates_to_delete:
             return
         reply = QMessageBox.question(
-            self, "Delete", f"Are you sure you want to delete {len(dates_to_delete)} record(s)?",
+            self, _TITLE, f"Delete {len(dates_to_delete)} record(s)?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -571,15 +570,13 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
 
     def _show_graph(self):
         if len(self._records) == 0:
-            QMessageBox.information(self, "Graph", "No data to plot.")
+            self.status_message.emit("Graph: no records to plot yet")
             return
         # Same guard as _refresh_table_impl: until AssetMetricsPreloadThread
         # has warmed the USD/KRW and KOSPI caches, _rate_kospi_for_date()
         # would do its first-call network fetch right here on the UI thread.
         if not self._metrics_ready:
-            QMessageBox.information(
-                self, "Graph", "USD/KRW and KOSPI history are still loading — try again in a moment.",
-            )
+            self.status_message.emit("Graph: USD/KRW and KOSPI history are still loading -- try again in a moment")
             return
 
         dates = []
@@ -662,16 +659,16 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         parent = self._graph_dlg or self
         if self._graph_dlg is not None:
             self._graph_dlg.report_btn.setEnabled(True)
-            self._graph_dlg.report_btn.setText("📋  Report")
+            self._graph_dlg.report_btn.setText("Report")
         if error or not kospi:
-            QMessageBox.warning(parent, "Report", f"Could not load the report data.\n{error or 'No KOSPI history.'}")
+            QMessageBox.warning(parent, _TITLE, f"Could not load the report data.\n{error or 'No KOSPI history.'}")
             return
         settings = QSettings(*self._SETTINGS_SCOPE)
         end_cash = self._settings_amount(settings, "deposit") + self._settings_amount(settings, "withdrawal")
         points = report_dates([d for d, _ in kospi], self._report_start, datetime.now().strftime("%Y-%m-%d"))
         rows = build_report(trades, end_cash, points, closes, kospi, usd_krw)
         if not rows:
-            QMessageBox.information(parent, "Report", "No trading days in the recorded period.")
+            QMessageBox.information(parent, _TITLE, "No trading days in the recorded period.")
             return
         AssetsReportDialog(rows, parent).exec()
 
@@ -696,7 +693,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
     def _on_export_clicked(self):
         metrics = self._compute_records_metrics()
         if not metrics:
-            QMessageBox.information(self, "Export", "No data to export.")
+            self.status_message.emit("Export: no records to export yet")
             return
 
         default_name = f"total_assets_{datetime.now().strftime('%Y%m%d')}.xlsx"
@@ -754,10 +751,10 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
                 wb.save(path)
         except Exception as e:
             logger.warning("Total assets export failed: %s", e, exc_info=True)
-            QMessageBox.warning(self, "Export Error", f"Failed to export:\n{e}")
+            QMessageBox.warning(self, _TITLE, f"Failed to export:\n{e}")
             return
 
-        QMessageBox.information(self, "Export", f"Exported {len(rows)} row(s) to {path}")
+        self.status_message.emit(f"Exported {len(rows)} row(s) to {path}")
 
     def _on_cell_double_clicked(self, row, col):
         # COL_TOTAL_ASSETS is "Total Assets" (docs/ui.md 4.2) in both the old
@@ -791,7 +788,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
                     self._save_records()
                     self._refresh_table()
                 except ValueError:
-                    QMessageBox.warning(self, "Error", "Invalid number format.")
+                    QMessageBox.warning(self, _TITLE, "Invalid number format.")
 
     # ---Table rendering ---
     # docs/ui.md issue #9 (mockup): "정렬이 꺼져 있다" -- sorting is enabled

@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import QStyledItemDelegate, QStyle
 from PyQt6.QtCore import Qt, QRect, QSize
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPen
 
-from ui.theme import ACCENT, ACCENT_TEXT, ACCENT_BG, TEXT, TEXT_FAINT, LINE, LINE_SOFT
+from ui.theme import ACCENT, ACCENT_TEXT, ACCENT_BG, TEXT, TEXT_FAINT, LINE, LINE_SOFT, SURFACE
 
 
 class CellDelegate(QStyledItemDelegate):
@@ -121,7 +121,7 @@ class CellDelegate(QStyledItemDelegate):
 STATUS_BUTTON = {
     "-": ("", TEXT_FAINT, LINE, None),
     "On": ("Held", ACCENT_TEXT, ACCENT, ACCENT_BG),
-    "Tg": ("Target", "#ffffff", ACCENT, ACCENT),
+    "Tg": ("Target", SURFACE, ACCENT, ACCENT),
 }
 STATUS_MARKER = {"On": ACCENT, "Tg": ACCENT}
 
@@ -179,6 +179,17 @@ class RangeBarDelegate(CellDelegate):
     low/position%/high labels underneath (docs/ui.md 2.3), replacing the
     four separate 52W High/High Diff/Low/Low Diff columns."""
 
+    TRACK_TOP = 6   # px from the cell top to the bar
+    TRACK_H = 5
+    LABEL_GAP = 3   # bar -> labels
+
+    @classmethod
+    def content_height(cls, cell_font: QFont) -> int:
+        """Pixels the bar + label line need; the row must be at least this tall."""
+        label_font = QFont(cell_font)
+        label_font.setPointSize(max(6, cell_font.pointSize() - 2))
+        return cls.TRACK_TOP + cls.TRACK_H + cls.LABEL_GAP + QFontMetrics(label_font).height()
+
     def paint(self, painter, option, index):
         painter.save()
         rect = option.rect
@@ -190,8 +201,8 @@ class RangeBarDelegate(CellDelegate):
             return
 
         pad = 10
-        track_y = rect.y() + 6
-        track_h = 5
+        track_y = rect.y() + self.TRACK_TOP
+        track_h = self.TRACK_H
         track_x = rect.x() + pad
         track_w = max(1, rect.width() - 2 * pad)
         painter.setPen(Qt.PenStyle.NoPen)
@@ -206,7 +217,7 @@ class RangeBarDelegate(CellDelegate):
         label_font = QFont(option.font)
         label_font.setPointSize(max(6, option.font.pointSize() - 2))
         painter.setFont(label_font)
-        label_y = track_y + track_h + 3
+        label_y = track_y + track_h + self.LABEL_GAP
         label_rect = QRect(track_x, label_y, track_w, rect.bottom() - label_y)
         fm = QFontMetrics(label_font)
 

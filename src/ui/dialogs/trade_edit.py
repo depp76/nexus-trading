@@ -25,6 +25,9 @@ from ui.common import (
 from ui.history_calc import trade_conflict
 from threads.fetch_threads import TickerValidateThread
 
+# Message boxes carry the owning tab's name (docs/ui.md 8.5).
+_TITLE = "Trading History"
+
 
 # ---------------------------------------------------------------------------
 # BuyEditDialog — Edit buy details in TradingHistoryTab
@@ -94,7 +97,7 @@ class BuyEditDialog(QDialog):
         price_ok = self._val_price()
         qty_ok = self._val_qty()
         if not (date_ok and price_ok and qty_ok):
-            QMessageBox.warning(self, "Input Error", "Please check the highlighted fields (shown with a red border).")
+            QMessageBox.warning(self, _TITLE, "Please check the highlighted fields (shown with a red border).")
             return
 
         def to_f(val):
@@ -110,7 +113,7 @@ class BuyEditDialog(QDialog):
         # the buy side moves (review_codex.md #5).
         conflict = trade_conflict(buy_date_str, b_qty, self._sell_date_str, self._sell_qty)
         if conflict:
-            QMessageBox.warning(self, "Input Error", conflict)
+            QMessageBox.warning(self, _TITLE, conflict)
             return
 
         self.result_data = {
@@ -205,7 +208,7 @@ class SellEditDialog(QDialog):
         price_ok = self._val_sell_price()
         qty_ok = self._val_sell_qty()
         if not (date_ok and price_ok and qty_ok):
-            QMessageBox.warning(self, "Input Error", "Please check the highlighted fields (shown with a red border).")
+            QMessageBox.warning(self, _TITLE, "Please check the highlighted fields (shown with a red border).")
             return
 
         sell_date_str = _normalize_date_str(self.sell_date_edit.text())
@@ -220,7 +223,7 @@ class SellEditDialog(QDialog):
 
         conflict = trade_conflict(self._buy_date_str, self._orig_qty, sell_date_str, s_qty)
         if conflict:
-            QMessageBox.warning(self, "Input Error", conflict)
+            QMessageBox.warning(self, _TITLE, conflict)
             return
 
         self.result_data = {
@@ -303,14 +306,14 @@ class TradeEntryDialog(QDialog):
         market = self.market_combo.currentText()
         ticker = self.ticker_edit.text().strip().upper()
         if not ticker:
-            QMessageBox.warning(self, "Error", "Ticker is required.")
+            QMessageBox.warning(self, _TITLE, "Ticker is required.")
             return
 
         date_ok = self._val_date()
         price_ok = self._val_price()
         qty_ok = self._val_qty()
         if not (date_ok and price_ok and qty_ok):
-            QMessageBox.warning(self, "Input Error", "Please check the highlighted fields (shown with a red border).")
+            QMessageBox.warning(self, _TITLE, "Please check the highlighted fields (shown with a red border).")
             return
 
         def to_f(val):
@@ -361,7 +364,7 @@ class TradeEntryDialog(QDialog):
 
         if not is_valid:
             QMessageBox.warning(
-                self, "Input Error",
+                self, _TITLE,
                 f"Ticker is not valid (Could not find stock information):\n{pending['ticker']}\n\nDetails: {err or ''}",
             )
             return

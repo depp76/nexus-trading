@@ -120,7 +120,7 @@ class TotalAssetsGraphDialog(QDialog):
 
         btns = QHBoxLayout()
         btns.addStretch()
-        self.report_btn = QPushButton("📋  Report")
+        self.report_btn = QPushButton("Report")
         self.report_btn.setToolTip("Positions, cash and KOSPI at the start and middle of every month")
         if on_report is not None:
             self.report_btn.clicked.connect(on_report)

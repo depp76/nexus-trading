@@ -7,10 +7,9 @@ Contains:
   live directly on MainWindow.
 
 Cross-tab communication (mirrors the TradingHistoryTab pattern from Phase 4):
-  status_text_changed / sync_time_changed — MainWindow forwards these to the
-    shared footer labels (status_label / update_time_label) it owns, so the
-    footer's on-screen position (below the tab widget, visible regardless of
-    which tab is active) is unchanged from before this split.
+  status_text_changed — this tab's own footer line (footer_lbl) under the
+    table (docs/ui.md 8.4; it used to be MainWindow's shared footer row).
+  sync_time_changed — MainWindow's header refresh status (dot + last time).
   status_message — short-lived progress text, forwarded to MainWindow's
     native status bar via _on_thread_status_message (same as
     TradingHistoryTab.status_message).
@@ -27,11 +26,10 @@ from collections import Counter
 from datetime import datetime
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QLineEdit,
+    QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLineEdit,
     QPushButton, QMessageBox,
 )
 from PyQt6.QtCore import pyqtSignal, QTimer
-from PyQt6.QtGui import QFont
 
 from paths import UNIVERSE_CACHE_FILE, CUSTOM_SETTINGS_FILE
 from threads.fetch_threads import (
@@ -49,18 +47,25 @@ logger = logging.getLogger(__name__)
 
 
 from ui.common import (
-    create_font,
     _MARKET_ORDER,
     atomic_save_json,
     safe_load_json,
     ThreadOwnerMixin,
+    make_button,
+    make_footer_label,
+    TAB_MARGINS,
+    TAB_SPACING,
 )
+
+# Message boxes are titled with the tab name (docs/ui.md 8.5).
+_TITLE = "Trading Universe"
+
 
 class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     """Trading Universe tab: watchlist table + ticker add/search controls."""
 
-    status_text_changed = pyqtSignal(str)  # -> MainWindow's shared status_label
-    sync_time_changed = pyqtSignal(str)    # -> MainWindow's shared update_time_label
+    status_text_changed = pyqtSignal(str)  # -> this tab's footer_lbl
+    sync_time_changed = pyqtSignal(str)    # -> MainWindow's header refresh status
     status_message = pyqtSignal(str)       # -> MainWindow's native status bar (roadmap 2-3)
     refresh_started = pyqtSignal()         # -> MainWindow also reloads Trading History tab
     auto_lightweight_tick = pyqtSignal()   # -> MainWindow also triggers Trading History realtime update
@@ -94,96 +99,76 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
     def _build_ui(self):
         universe_layout = QVBoxLayout(self)
+        universe_layout.setContentsMargins(*TAB_MARGINS)
+        universe_layout.setSpacing(TAB_SPACING)
 
-        # Add Ticker + Search panel
-        add_layout = QHBoxLayout()
-
-        lbl_market = QLabel("Market:")
-        lbl_market.setFont(create_font(10, style_name="Semilight"))
-        add_layout.addWidget(lbl_market)
-
-        self.market_combo = QComboBox()
-        self.market_combo.setFont(create_font(10, style_name="Semilight"))
-        self.market_combo.addItems(["KOSPI", "KOSDAQ"]) #, "NASDAQ 100", "S&P500"])
-        self.market_combo.setFixedWidth(100)
-        add_layout.addWidget(self.market_combo)
-
-        lbl_ticker = QLabel("Ticker:")
-        lbl_ticker.setFont(create_font(10, style_name="Semilight"))
-        add_layout.addWidget(lbl_ticker)
-
-        self.ticker_input = QLineEdit()
-        self.ticker_input.setFont(create_font(10, style_name="Semilight"))
-        self.ticker_input.setPlaceholderText("e.g. AAPL or 005930")
-        self.ticker_input.setFixedWidth(140)
-        self.ticker_input.returnPressed.connect(self.add_ticker)
-        add_layout.addWidget(self.ticker_input)
-
-        self.add_ticker_btn = QPushButton("+ Add Ticker")
-        self.add_ticker_btn.setFont(create_font(10, QFont.Weight.Bold))
-        self.add_ticker_btn.setFixedWidth(120)
-        self.add_ticker_btn.clicked.connect(self.add_ticker)
-        add_layout.addWidget(self.add_ticker_btn)
-
-        add_layout.addSpacing(16)
-
-        lbl_search = QLabel("Search:")
-        lbl_search.setFont(create_font(10, style_name="Semilight"))
-        add_layout.addWidget(lbl_search)
+        # Toolbar (docs/ui.md 8.4): filters and search on the left, actions on
+        # the right, the primary action last. Widgets take the app font and
+        # the theme's input/button heights; no per-widget font.
+        bar = QHBoxLayout()
 
         self.search_input = QLineEdit()
-        self.search_input.setFont(create_font(10, style_name="Semilight"))
-        self.search_input.setPlaceholderText("Search by name or ticker...")
+        self.search_input.setPlaceholderText("Search name or ticker")
         self.search_input.setMinimumWidth(160)
         self.search_input.setMaximumWidth(260)
         self.search_input.textChanged.connect(self.filter_table)
-        add_layout.addWidget(self.search_input)
+        bar.addWidget(self.search_input)
 
         # Market filter (docs/ui.md 2.1): ALL/KOSPI/KOSDAQ toolbar buttons,
         # replacing the old Excel-style dropdown on a Market table column
         # (Market isn't a column anymore -- see the identity cell's meta text).
         # The four filter toggles (ALL/KOSPI/KOSDAQ and the status cycle)
-        # share one size, the former Target List button's, and one gap --
-        # the layout's default spacing, with no extra spacer before the
-        # status button (user direction 2026-09-19).
-        add_layout.addSpacing(8)
+        # share one size and one gap (user direction 2026-09-19).
+        bar.addSpacing(8)
         self._market_buttons = {}
         for m in ("ALL", "KOSPI", "KOSDAQ"):
             btn = self._filter_button(m, checked=(m == "ALL"))
             btn.clicked.connect(lambda checked, mk=m: self._on_market_filter_changed(mk))
-            add_layout.addWidget(btn)
+            bar.addWidget(btn)
             self._market_buttons[m] = btn
 
         # Status filter: one button cycling blank (no filter) -> Held -> Target
         # (user direction 2026-09-29); fixed width so the label change never
         # resizes it. Blank = unchecked, Held/Target = checked.
         self.tg_filter_btn = self._filter_button(self._STATUS_FILTER_STATES[0][1])
+        self.tg_filter_btn.setToolTip("Status filter: none / Held / Target")
         self.tg_filter_btn.clicked.connect(self._on_status_filter_clicked)
-        add_layout.addWidget(self.tg_filter_btn)
+        bar.addWidget(self.tg_filter_btn)
 
-        add_layout.addStretch()
+        bar.addStretch()
+
+        # Add a ticker: market + code + button, one action group.
+        self.market_combo = QComboBox()
+        self.market_combo.addItems(["KOSPI", "KOSDAQ"]) #, "NASDAQ 100", "S&P500"])
+        self.market_combo.setFixedWidth(100)
+        bar.addWidget(self.market_combo)
+
+        self.ticker_input = QLineEdit()
+        self.ticker_input.setPlaceholderText("Ticker, e.g. 005930")
+        self.ticker_input.setFixedWidth(140)
+        self.ticker_input.returnPressed.connect(self.add_ticker)
+        bar.addWidget(self.ticker_input)
+
+        self.add_ticker_btn = make_button("Add Ticker", on_click=self.add_ticker)
+        bar.addWidget(self.add_ticker_btn)
+        bar.addSpacing(8)
 
         # Weekly "trend + pullback" Top/Bottom recommendation
         # (trend_following.md 2-5; scoring.py via TrendScoreThread). Checked
         # while a run's Top/Bottom rows are pinned to the top of the table;
         # clicking it again restores the default order (user direction 2026-09-29).
-        self.trend_score_btn = QPushButton("Trend Score")
-        self.trend_score_btn.setFont(create_font(10, style_name="Semilight"))
-        self.trend_score_btn.setFixedWidth(100)
-        self.trend_score_btn.setCheckable(True)
+        self.trend_score_btn = make_button("Trend Score", checkable=True)
         self.trend_score_btn.setToolTip("Score the KOSPI/KOSDAQ rows with trend_following.md 2-5 and pin the "
                                         "weekly Top 10 / Bottom 10 to the top of the table; click again to "
                                         "restore the default order")
         self.trend_score_btn.clicked.connect(self._on_trend_score_clicked)
-        add_layout.addWidget(self.trend_score_btn)
+        bar.addWidget(self.trend_score_btn)
 
-        self.refresh_btn = QPushButton("Refresh")
-        self.refresh_btn.setFont(create_font(10, style_name="Semilight"))
-        self.refresh_btn.setFixedWidth(100)
-        self.refresh_btn.clicked.connect(self.refresh_data)
-        add_layout.addWidget(self.refresh_btn)
+        # Refresh is this tab's one primary action (docs/ui.md 1.6 / 8.1).
+        self.refresh_btn = make_button("Refresh", "primary", self.refresh_data)
+        bar.addWidget(self.refresh_btn)
 
-        universe_layout.addLayout(add_layout)
+        universe_layout.addLayout(bar)
 
         self.table = StockTable()
         self.table.col_filter_changed.connect(self.filter_table)
@@ -193,7 +178,14 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.table.user_sorted.connect(self._on_user_sorted)
         self.table.toggle_requested.connect(self.toggle_stock)
 
-        universe_layout.addWidget(self.table)
+        universe_layout.addWidget(self.table, 1)
+
+        # Footer: this tab's lasting status line (load/progress/Trend Score
+        # results). It used to be MainWindow's shared footer row, visible on
+        # every tab though only this tab wrote to it (docs/ui.md 8.4).
+        self.footer_lbl = make_footer_label()
+        self.status_text_changed.connect(self.footer_lbl.setText)
+        universe_layout.addWidget(self.footer_lbl)
 
     _FILTER_BTN_W = 80
     # (highlight status to show, button label): "" = no status filter. The
@@ -203,12 +195,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
     @classmethod
     def _filter_button(cls, text: str, checked: bool = False) -> QPushButton:
-        btn = QPushButton(text)
-        btn.setFont(create_font(10, style_name="Semilight"))
-        btn.setCheckable(True)   # checked state: ui/theme.py's QPushButton:checked rule
-        btn.setFixedWidth(cls._FILTER_BTN_W)
-        btn.setChecked(checked)
-        return btn
+        # checked state: ui/theme.py's QPushButton:checked rule
+        return make_button(text, width=cls._FILTER_BTN_W, checkable=True, checked=checked)
 
     def _on_market_filter_changed(self, market):
         self._market_filter = market
@@ -263,8 +251,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
     def delete_stock(self, ticker):
         reply = QMessageBox.question(
-            self, 'Confirm Delete',
-            f"Are you sure you want to delete '{ticker}'?",
+            self, _TITLE,
+            f"Remove '{ticker}' from the universe?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
@@ -449,10 +437,10 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     def _on_ai_report_requested(self, ticker: str):
         item = next((d for d in self.all_data if d.get('ticker') == ticker), None)
         if item is None:
-            QMessageBox.warning(self, "AI Stock Report", f"No data found for {ticker}.")
+            QMessageBox.warning(self, _TITLE, f"AI Stock Report: no data found for {ticker}.")
             return
         name = item.get('name', ticker)
-        self.status_text_changed.emit(f"🤖 Generating AI report for {name} ({ticker})...")
+        self.status_text_changed.emit(f"Generating AI report for {name} ({ticker})...")
         thread = self._track_thread(GeminiStockReportThread(item))
         thread.finished.connect(self._on_stock_report_ready)
         thread.start()
@@ -460,7 +448,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     def _on_stock_report_ready(self, ticker: str, name: str, result_text: str, error: str):
         if error:
             self.status_text_changed.emit(f"AI report failed for {name} ({ticker}).")
-            QMessageBox.warning(self, "AI Stock Report", f"Failed to generate report:\n{error}")
+            QMessageBox.warning(self, _TITLE, f"AI Stock Report failed:\n{error}")
             return
         self.status_text_changed.emit(f"AI report ready for {name} ({ticker}).")
         show_stock_report_result(self, ticker, name, result_text)
@@ -485,7 +473,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.trend_score_btn.setChecked(False)   # the click toggled it on; checked means "pinned"
         items = self._trend_score_items()
         if not items:
-            QMessageBox.information(self, "Trend Score", "No KOSPI/KOSDAQ rows to score. Refresh the universe first.")
+            self.status_text_changed.emit("Trend Score: no KOSPI/KOSDAQ rows to score -- Refresh the universe first")
             return
         self.trend_score_btn.setEnabled(False)
         self.status_text_changed.emit(f"Scoring {len(items)} names (trend + pullback)...")
@@ -502,7 +490,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         if rec is None:
             self.trend_score_btn.setChecked(False)
             if error != CANCELLED_MESSAGE:
-                QMessageBox.warning(self, "Trend Score", f"Scoring failed:\n{error}")
+                QMessageBox.warning(self, _TITLE, f"Trend Score failed:\n{error}")
             self.status_text_changed.emit(f"Trend Score: {error}")
             return
         order = {}

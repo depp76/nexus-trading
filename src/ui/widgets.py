@@ -16,10 +16,10 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QRect, QTimer
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPolygon, QKeySequence
 
-from ui.common import create_font, FONT_FAMILY_CSS, FONT_SMALL
+from ui.common import create_font, FONT_SMALL, _EmptyHint, FONT_CAPTION
 from ui.delegates import IdentityDelegate, RangeBarDelegate, TrendDelegate
-from ui.colors import fg_for, heatmap_bg, PROFIT, LOSS, FLAT
-from ui.theme import ACCENT, TEXT, TEXT_FAINT, TEXT_EMPTY, TEXT_SUB, LINE_GROUP
+from ui.colors import fg_for, heatmap_bg, PROFIT, LOSS, FLAT, OK, WARN
+from ui.theme import ACCENT, TEXT, TEXT_FAINT, TEXT_EMPTY, TEXT_SUB, TEXT_MUTED, LINE_GROUP, SURFACE, GRP_BG
 
 
 # ---------------------------------------------------------------------------
@@ -169,9 +169,7 @@ class FilterPopup(QFrame):
         super().__init__(parent, Qt.WindowType.Popup)
         self.col = col
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setStyleSheet(
-            "QFrame { background: white; border: 1px solid #aaa; border-radius: 4px; }"
-        )
+        self.setStyleSheet(f"QFrame {{ background: {SURFACE}; border: 1px solid {LINE_GROUP}; border-radius: 4px; }}")
 
         layout = QVBoxLayout(self)
         layout.setSpacing(3)
@@ -179,14 +177,14 @@ class FilterPopup(QFrame):
 
         # Search inside popup
         self._search = QLineEdit()
-        self._search.setFont(create_font(9, style_name="Semilight"))
+        self._search.setFont(create_font(FONT_SMALL, style_name="Semilight"))
         self._search.setPlaceholderText("Search...")
         self._search.textChanged.connect(self._on_search)
         layout.addWidget(self._search)
 
         # Select All
         self._all_cb = QCheckBox("(Select All)")
-        self._all_cb.setFont(create_font(9, style_name="Semilight"))
+        self._all_cb.setFont(create_font(FONT_SMALL, style_name="Semilight"))
         self._all_cb.setTristate(True)
         layout.addWidget(self._all_cb)
 
@@ -207,7 +205,7 @@ class FilterPopup(QFrame):
         self._checkboxes = {}
         for val in sorted(unique_vals, key=lambda v: (v != "Index", v)):
             cb = QCheckBox(str(val))
-            cb.setFont(create_font(9, style_name="Semilight"))
+            cb.setFont(create_font(FONT_SMALL, style_name="Semilight"))
             cb.setChecked(current_filter is None or val in current_filter)
             inner_layout.addWidget(cb)
             self._checkboxes[val] = cb
@@ -217,12 +215,9 @@ class FilterPopup(QFrame):
         # Buttons
         btn_layout = QHBoxLayout()
         ok_btn = QPushButton("OK")
-        ok_btn.setFont(create_font(9, QFont.Weight.Bold))
-        ok_btn.setFixedHeight(26)
+        ok_btn.setObjectName("primary")
         ok_btn.clicked.connect(self._apply)
         clear_btn = QPushButton("Clear")
-        clear_btn.setFont(create_font(9, QFont.Weight.Bold))
-        clear_btn.setFixedHeight(26)
         clear_btn.clicked.connect(self._clear)
         btn_layout.addWidget(clear_btn)
         btn_layout.addWidget(ok_btn)
@@ -381,8 +376,9 @@ class StockTable(QTableWidget):
     delete_requested = pyqtSignal(str)     # emitted with the row's ticker
     toggle_requested = pyqtSignal(str)     # emitted with the row's ticker
 
-    # One row height (the old "compact" density; the Normal/Spacious toggle
-    # was removed on 2026-09-19 by user direction).
+    # 28 px, not the app-wide TABLE_ROW_H (24): the 52W Range cell draws two
+    # lines -- the bar, then the low / % / high labels under it -- which do
+    # not fit in 24 px (user report 2026-10-25; docs/ui.md 8.2 exception).
     ROW_HEIGHT = 28
 
     def __init__(self):
@@ -390,23 +386,16 @@ class StockTable(QTableWidget):
         self.setColumnCount(len(COLUMNS))
         self.setHorizontalHeaderLabels([c.label for c in COLUMNS])
         # Table font: Malgun Gothic Semilight 9pt (set appropriate size to prevent text cutoff)
-        self.setFont(create_font(9, style_name="Semilight"))
+        self.setFont(create_font(FONT_SMALL, style_name="Semilight"))
         # Same family as text cells (one app font); built once per table
         # instance rather than per cell.
         self._numeric_font = create_font(FONT_SMALL, style_name="Semilight")
-        self.setStyleSheet(
-            # Outer frame: one thin (1px) gray line, square corners (user
-            # direction 2026-10-02; same gray as the grid lines). The right
-            # side is painted in paintEvent instead: the last column's own
-            # grid line already sits on the viewport's last pixel, so a frame
-            # border there would make a 2 px line.
-            "QTableWidget { gridline-color: #d0d0d0; border: 1px solid #d0d0d0; border-right: none; border-radius: 0px; "
-            + FONT_FAMILY_CSS + " font-size: 9pt; }"
-            "QTableWidget::item { padding: 1px 3px; }"
-            # Header borders in the same gray (the global rule uses two other,
-            # lighter tints, so the header lines read differently from the body's).
-            "QHeaderView::section { border-bottom: 1px solid #d0d0d0; border-right: 1px solid #d0d0d0; }"
-        )
+        # Frame, grid and header lines come from ui/theme.py's table rules
+        # (docs/ui.md 8.2). Only the right side differs: paintEvent draws it,
+        # because the last column's own grid line already sits on the
+        # viewport's last pixel and a frame border there would make 2 px.
+        self.setStyleSheet("QTableWidget { border-right: none; }")
+        self._empty_hint = _EmptyHint(self, "No stocks loaded yet -- Refresh fetches the universe")
         self._identity_delegate = IdentityDelegate(self)
         self._range_delegate = RangeBarDelegate(self)
         self._trend_delegate = TrendDelegate(self)
@@ -417,7 +406,7 @@ class StockTable(QTableWidget):
         self._filter_header = FilterableHeader(Qt.Orientation.Horizontal, self)
         self._filter_header.divider_cols = GROUP_START_COLS
         self._filter_header.right_edge = True
-        self._filter_header.setFont(create_font(9, QFont.Weight.Bold))
+        self._filter_header.setFont(create_font(FONT_SMALL, QFont.Weight.Bold))
         self._filter_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self._filter_header.filter_requested.connect(self._show_filter_popup)
         self.setHorizontalHeader(self._filter_header)
@@ -501,11 +490,7 @@ class StockTable(QTableWidget):
         self._frozen.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._frozen.setFont(self.font())
         self._frozen.setFrameShape(QFrame.Shape.NoFrame)
-        self._frozen.setStyleSheet(
-            "QTableWidget { gridline-color: #d0d0d0; border: none; border-right: 1px solid #d0d0d0; "
-            + FONT_FAMILY_CSS + " font-size: 9pt; }"
-            "QTableWidget::item { padding: 1px 3px; }"
-        )
+        self._frozen.setStyleSheet(f"QTableWidget {{ border: none; border-right: 1px solid {LINE_GROUP}; }}")
         # Purely a visual mirror -- never the target of a click/hover, so
         # every real interaction (row selection, context menu, sort) still
         # reaches the main table underneath it.
@@ -640,8 +625,8 @@ class StockTable(QTableWidget):
         status = data.get("status", "-")
         toggle_label = {"On": "Set as Target", "Tg": "Clear Held/Target"}.get(status, "Mark as Held")
         toggle_action = menu.addAction(toggle_label)
-        ma_action = menu.addAction("📈 View MA Chart")
-        report_action = menu.addAction("🤖 AI Stock Report")
+        ma_action = menu.addAction("View MA Chart")
+        report_action = menu.addAction("AI Stock Report")
         menu.addSeparator()
         delete_action = menu.addAction("Remove from Universe...")
 
@@ -990,7 +975,7 @@ class StockTable(QTableWidget):
                 cell.setTextAlignment(right)
                 cell.setFont(numeric_font)
                 if col == COL_TPER:
-                    color = "#2e7d5b" if val < 12 else "#a32f26" if val > 60 else TEXT
+                    color = OK if val < 12 else WARN if val > 60 else TEXT
                     cell.setForeground(QColor(color))
             else:
                 cell = NumericItem("-", float('-inf'))
@@ -1182,12 +1167,11 @@ class GroupedHeaderView(QHeaderView):
         sub_rect = rect.adjusted(0, self._GROUP_H, 0, 0)
         opt = self._style_option(logical_index)
 
-        # Find this column's group colour and section boundary flags
-        col_color = TEXT_SUB
-        for _, start, span, color in self._sections:
-            if start <= logical_index < start + span:
-                col_color = color
-                break
+        # Group headers are neutral (docs/ui.md 8.3): blue/red mean
+        # up/down and accent means selection everywhere else, so a "Sell"
+        # header in red or a "Cumulative P/L" header in blue read as a
+        # loss/gain. The sections' color field is ignored.
+        col_color = TEXT_MUTED
 
         # Draw frame
         self.style().drawControl(
@@ -1197,7 +1181,7 @@ class GroupedHeaderView(QHeaderView):
         # Draw sub-label text with group colour
         painter.setPen(QColor(col_color))
         f = painter.font()
-        f.setPointSize(8)
+        f.setPointSize(FONT_CAPTION)
         f.setBold(True)
         painter.setFont(f)
         label = self._sub_labels[logical_index] if logical_index < len(self._sub_labels) else ""
@@ -1229,12 +1213,10 @@ class GroupedHeaderView(QHeaderView):
             group_rect = QRect(gx, 0, gw, self._GROUP_H)
 
             # Background
-            bg = QColor(color)
-            bg.setAlpha(30)
-            painter.fillRect(group_rect, bg)
+            painter.fillRect(group_rect, QColor(GRP_BG))
 
             # Thin top/bottom border for the group row
-            pen_thin = QPen(QColor(color))
+            pen_thin = QPen(QColor(LINE_GROUP))
             pen_thin.setWidth(1)
             pen_thin.setCosmetic(True)
             painter.setPen(pen_thin)
@@ -1242,10 +1224,9 @@ class GroupedHeaderView(QHeaderView):
             painter.drawLine(gx, self._GROUP_H - 1, gx + gw - 1, self._GROUP_H - 1) # bottom
 
             # Label only (vertical borders are drawn per-column in paintSection)
-            pen2 = QPen(QColor(color))
-            painter.setPen(pen2)
+            painter.setPen(QPen(QColor(TEXT_SUB)))
             f = painter.font()
-            f.setPointSize(9)
+            f.setPointSize(FONT_SMALL)
             f.setBold(True)
             painter.setFont(f)
             painter.drawText(group_rect, Qt.AlignmentFlag.AlignCenter, label)
@@ -1259,7 +1240,7 @@ class GroupedHeaderView(QHeaderView):
             if start >= self.count():
                 continue
             end_col = min(start + span - 1, self.count() - 1)
-            pen_sec.setColor(QColor(color))
+            pen_sec.setColor(QColor(LINE_GROUP))
             painter.setPen(pen_sec)
             # Left border of this section
             xl = self.sectionViewportPosition(start)

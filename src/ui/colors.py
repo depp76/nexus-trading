@@ -20,6 +20,16 @@ FLAT = "#75798c"      # zero / not applicable
 # changes (2026-09-22: PROFIT/LOSS swapped to blue=up/red=down, but "danger"
 # must stay red regardless of which one currently means "up").
 DANGER = "#d1453b"
+DANGER_BG = "#fdf0ef"     # danger hover / invalid-input field fill
+DANGER_LINE = "#f0c4c1"   # danger button outline
+
+# Status / judgement colors (docs/ui.md 8.3) -- a third channel next to
+# PROFIT/LOSS (price direction) and the accent (selection/emphasis). OK is
+# "good / done" (a cheap tPER, a fetched deposit); WARN is "look at this"
+# (an expensive tPER). WARN is amber rather than red so it never reads as
+# LOSS; a failure uses DANGER.
+OK = "#2e7d5b"
+WARN = "#b8650a"
 
 # MA divergence (price / MA x 100): within +-MA_DIV_NEUTRAL_PCT of 100 is
 # "neutral". The MA chart's three background bands (StockMaDialog) and the

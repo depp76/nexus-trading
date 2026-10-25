@@ -63,7 +63,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont, QFontMetrics
 
-from ui.common import create_font, FONT_TITLE, FONT_BODY, FONT_SMALL, FONT_CAPTION
+from ui.common import create_font, setup_table, BTN_H, FONT_TITLE, FONT_BODY, FONT_SMALL, FONT_CAPTION
 from ui.colors import PROFIT, LOSS, MA_RAMP, MA_DIV_NEUTRAL_PCT
 from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_FAINT, LINE, SURFACE
 
@@ -76,7 +76,7 @@ _TICK_PT = FONT_SMALL          # issue #12: nothing on the chart below 9pt
 
 # Segment buttons share one look: a checkable neutral button; the checked one
 # takes the theme's QPushButton:checked accent.
-_SEG_H = 26
+_SEG_H = BTN_H
 
 _PERIODS = [("1M", 1), ("3M", 3), ("6M", 6), ("1Y", 12), ("3Y", 36), ("All", None)]
 _DEFAULT_PERIOD = "1Y"
@@ -307,8 +307,6 @@ class StockMaDialog(QDialog):
 
         if is_stock:
             fin_btn = QPushButton("Company Info ↗")
-            fin_btn.setFont(create_font(FONT_BODY, QFont.Weight.Bold))
-            fin_btn.setMinimumHeight(40)
             fin_btn.clicked.connect(self._open_company_page)
             v.addSpacing(10)
             v.addWidget(fin_btn)
@@ -326,12 +324,13 @@ class StockMaDialog(QDialog):
 
     @staticmethod
     def _new_side_table(headers: list) -> QTableWidget:
-        table = QTableWidget()
-        table.setFont(create_font(FONT_SMALL, style_name="Semilight"))
+        # App-wide table defaults (docs/ui.md 8.2 / 8.6): row height, font,
+        # zebra; the frame and grid come from the theme. Read-only: no
+        # selection.
+        table = setup_table(QTableWidget())
         table.horizontalHeader().setFont(create_font(FONT_SMALL, QFont.Weight.Bold))
         table.setColumnCount(len(headers))
         table.setHorizontalHeaderLabels(headers)
-        table.verticalHeader().setVisible(False)
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         return table
@@ -345,7 +344,8 @@ class StockMaDialog(QDialog):
         return it
 
     # Horizontal room a cell needs beyond its text: ui/theme.py's
-    # QTableWidget::item padding (8px a side), the style's own text margin
+    # QTableWidget::item padding (3px a side since docs/ui.md 8.2; was 8),
+    # the style's own text margin
     # (~3px a side), plus slack for hinting/DPI differences between the
     # metrics measured here and the glyphs painted later. 22px was exactly
     # the sum with no slack, and a 7-digit close (1,849,000) still elided

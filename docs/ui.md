@@ -120,7 +120,7 @@ def update_changed_rows(self, data, changed_rows, highlights=None):
 
 ### 1.10 갱신 상태 표시
 
-자동갱신 토글·주기·마지막 갱신 시각·실패 경고를 **헤더 한 곳에** 모은다. 현재는 토글이 우상단, 상태 라벨이 창 하단으로 갈라져 있다.
+자동갱신 토글·주기·마지막 갱신 시각·실패 경고를 **헤더 한 곳에** 모은다. (2026-10-25 구현, 8.4)
 
 ```
 ● Auto update · 60s   last 09:41:22
@@ -572,3 +572,86 @@ app.setStyleSheet(app_qss(FONT_FAMILY_CSS))
 | 6 | 지수/원자재 분리 · 저장된 뷰 · 행 선택·복사 · 월 요약 그룹 헤더 | `universe_tab.py` · `history_calc.py` · `history_table.py` | 1주+ |
 
 **Phase 0을 먼저 하지 않으면 이후 작업의 결과가 화면에 나타나지 않습니다** — `main.py`의 전역 QSS가 버튼·헤더·탭·표 색을 전부 덮어쓰기 때문입니다. Phase 1–2는 코드 변경량 대비 체감이 가장 크고, Phase 2는 실제 데이터 오염 가능성을 막는 수정이므로 우선순위가 높습니다.
+
+---
+
+## 8. 탭 간 일관성 규칙 (2026-10-25)
+
+같은 역할은 같은 위젯·같은 위치·같은 모양. 네 탭을 비교한 진단(상태 표시 3곳 분산, 버튼 높이 3종·이모지 혼용,
+표 외형 3종, 그룹 헤더 범주색이 손익색과 충돌, 글꼴 크기 숫자 직접 지정, 정보성 알림까지 모달)에서 도출했고
+8.1 → 8.2 → 8.3 → 8.4 → 8.5 순서로 적용했다.
+
+### 8.1 버튼
+
+- 모든 툴바 버튼은 `ui.common.make_button()`으로 만든다. 높이는 `BTN_H`(28px) 하나, 다이얼로그의 일반
+  `QPushButton`도 전역 QSS의 `min-height`로 같은 28px가 된다.
+- 폭은 텍스트에 맞춘다. 고정 폭은 라벨이 바뀌는 토글(Universe 상태 순환, History 정렬)과 세그먼트 줄
+  (ALL/KOSPI/KOSDAQ, 1M/3M/YTD/All, MA 차트 기간)에만 쓴다.
+- 라벨은 텍스트만: 이모지·기호(▶ ■ 🔄 📅 🔍 ➕ 🗑) 없음, 버튼별 굵은 글꼴 없음.
+- 탭마다 primary 하나: Universe **Refresh**, History **Add Trade**, Total Assets **Add Record**,
+  Strategy **Run Research**. Stop은 실행 취소일 뿐 파괴적이지 않으므로 중립.
+- 삭제는 세 탭 모두 **우클릭 메뉴 + Delete 키 + 확인 창**. Total Assets의 상시 노출 `Delete Selected`
+  버튼은 제거.
+
+### 8.2 표
+
+- 외형은 `ui/theme.py`의 표 규칙 한 곳에서 정한다: 외곽선·격자선·헤더 선 모두 `LINE_GROUP`(`#d0d0d0`) 1px,
+  직각 모서리, 셀 패딩 `1px 3px`(2026-10-02 Universe에 임시 적용했던 모양을 전 탭 규칙으로 승격).
+  탭별 인라인 표 스타일시트는 제거. Universe만 오른쪽 가장자리를 `paintEvent`가 그리므로 `border-right: none` 한 줄을 남긴다.
+- 행 높이·글꼴·행 선택·지브라는 `ui.common.setup_table()`: 행 24px(`TABLE_ROW_H`; History 22에서 통일).
+  **예외: Trading Universe는 28px** — 52W Range 셀이 막대와 그 아래 저가·위치%·고가 라벨 두 줄을 그려 24px에 들어가지 않음
+  (2026-10-25 사용자 보고 후 복원; `RangeBarDelegate.content_height()`가 행 높이 이하인지 테스트로 확인).
+  행 단위 선택, 지브라 켜짐(History는 셀 배경으로 직접 줄무늬를 칠하므로 끔).
+- 빈 표는 가운데에 이유와 다음 동작을 한 줄로 표시한다(`setup_table(empty_text=...)`). Strategy의 NAV 차트도
+  실행 전에는 빈 0~1 축 대신 안내 문구.
+- 열 정렬은 행이 단순 레코드인 표(Universe, Total Assets)에서 헤더 클릭. History는 월 요약 행이 있어 열 정렬과
+  공존할 수 없으므로 "Sort: Date" 토글(라벨이 반대 모드를 가리키던) 대신 보기 모드 세그먼트 **By Status | By Month**.
+
+### 8.3 색 의미 — 세 채널
+
+- **방향**: `PROFIT`(파랑)/`LOSS`(빨강)은 수치의 상승·하락·손익에만.
+- **강조**: accent(보라)는 선택·체크·primary에만.
+- **상태·판정**: `colors.OK`(초록, 양호·완료)와 `colors.WARN`(주황, 주의 — 빨강이 아니라 LOSS로 읽히지 않음),
+  실패는 `DANGER`. tPER 저평가/고평가, 입력 오류, 상태 문구가 이 토큰을 쓴다(`DANGER_BG`/`DANGER_LINE` 포함).
+- 그룹 헤더는 범주색을 쓰지 않는다: `GRP_BG` 바탕 + `TEXT_SUB` 라벨 + `LINE_GROUP` 선. 빨간 Sell·파란 Cumulative P/L
+  헤더가 손실·이익처럼 읽히던 문제를 없앰. History 본문의 색 구분선도 제거(모든 선은 `#d0d0d0` 1px).
+- 면책 고지는 정보이므로 `DANGER`가 아니라 `#muted`.
+- `ui/theme.py`·`ui/colors.py` 밖에 hex 색을 쓰지 않는다.
+
+### 8.4 셸과 탭 골격
+
+- **헤더 한 줄의 갱신 상태**(1.10 구현): `● Auto-refresh · 60s  last 09:41:22`. 점은 갱신이 오면 `OK`, 마지막 갱신이
+  주기의 2배를 넘으면 `WARN`, 꺼짐·첫 갱신 전은 흐린 색. 별도 실패 신호가 없어 실패는 "지연"으로 드러난다.
+- **창 하단 공용 상태 행 제거**: 일시적 진행·결과 문구는 네이티브 상태바 하나(`status_message`), 탭 고유의 지속 상태는
+  그 탭 표 아래 푸터(`ui.common.make_footer_label`). Universe 상태 문구는 Universe 푸터, History 데이터 출처는 History 푸터,
+  History 예수금 조회 결과는 상태바(툴바 끝의 색 굵은 글씨 라벨 제거).
+- **탭 골격**: 툴바 1행 → (KPI 띠 또는 차트) → 표 → 푸터, 여백 `TAB_MARGINS`(12·10)·간격 `TAB_SPACING`(8).
+  History는 KPI 띠 아래에 있던 툴바를 맨 위로.
+- **툴바 배치**: 왼쪽은 표를 거르는 것(검색·시장·상태·기간·묶음·30일 규칙), `addStretch`, 오른쪽은 동작이며 primary가 맨 끝.
+  Universe는 종목 추가(시장·코드·Add Ticker)를 오른쪽 동작 묶음으로, "Market:/Ticker:/Search:" 라벨 대신 placeholder.
+  Total Assets 입력 줄도 This Week·Add Record를 오른쪽 끝으로.
+- Strategy: 탭 안 제목·부제 제거(다른 탭에 없음, 설명은 Run 버튼 툴팁), 서브탭이 하나일 때 서브탭 바 숨김(`setTabBarAutoHide`).
+
+### 8.5 글꼴·메시지·다이얼로그
+
+- 글꼴 크기는 `ui.common`의 `FONT_*` 상수로만 지정한다(`create_font(9)` 같은 숫자 직접 지정 금지).
+  툴바 위젯은 앱 기본 글꼴을 그대로 쓰고 위젯별 `setFont`를 하지 않는다.
+- 탭 안에 제목·부제를 두지 않는다(탭 라벨이 이름).
+- 메시지 박스 제목은 그 탭 이름 하나(`Trading Universe` / `Trading History` / `Total Assets` / `Strategy`).
+  "Error", "Input Error", "Database Error", "Search Result" 같은 제목을 쓰지 않는다.
+- 모달은 **오류와 확인**에만. 정보성 결과(검색 결과 없음, 내보내기 완료, 데이터 없음, 아직 로딩 중)는 상태바나
+  탭 푸터로. 예외: 모달 다이얼로그 안에서 시작된 동작의 결과(그래프 창의 Report)는 상태바가 가려지므로 메시지 박스로 남긴다.
+- 다이얼로그: 크기 조절 가능(고정 크기 금지), 닫기 버튼 폭 미지정, 창 제목·메뉴 항목에 이모지 없음.
+- 검증: `tests/test_ux_consistency.py`(버튼 팩토리·표 기본값·빈 상태 안내·탭별 primary 1개·정보 메시지의 상태바 전달).
+
+### 8.6 마무리 (2026-10-25)
+
+- **표 키 동작**: 모든 데이터 표에 `ui.common.install_table_keys()` — Ctrl+C는 선택 행을 TSV로 복사(보이는 열, 화면 순서),
+  Enter는 현재 셀 더블클릭과 같은 동작(History는 매수/매도 편집, Total Assets는 총자산 편집). History의 월 요약 행은 제외.
+  Universe는 기존 자체 구현(이름 셀이 델리게이트라 텍스트를 따로 조립)을 유지.
+- **KPI 띠 공용화**: `ui.common.KpiStrip`으로 History의 띠를 옮김. Total Assets에도 같은 띠(명세 4.1의 5칸)를
+  넣었다가 사용자 결정으로 되돌림(2026-10-25: Total Assets에는 KPI 띠가 필요 없음). Total Assets는 입력 줄의
+  "Current Total Assets / Weekly P/L" 표시를 그대로 쓴다. 명세 4.1의 KPI 줄은 적용하지 않는다.
+- **Strategy 탭**: 파라미터 폼을 한 줄 4쌍(8열)에서 3쌍씩 3줄로, 긴 라벨 설명은 툴팁으로. 상태 문구는 결과 아래 푸터로.
+- **다이얼로그 표**: MA 차트의 투자자/선물 표와 종목별 거래 이력 창도 `setup_table` 사용. 거래 이력 창의 행 번호 열 제거,
+  직접 그리는 격자선도 `LINE_GROUP`.

@@ -18,9 +18,9 @@ from matplotlib.dates import date2num, num2date
 from datetime import date, datetime
 
 from PyQt6.QtCore import Qt, QDate
-from PyQt6.QtGui import QFont, QBrush, QColor
+from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QCheckBox, QComboBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QCheckBox, QComboBox,
     QSpinBox, QDateEdit, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QMessageBox,
     QSplitter, QFrame,
 )
@@ -35,14 +35,14 @@ from strategy.trend_following import (
 from strategy.trend_following.research import SUMMARY_COLUMNS
 from strategy.trend_following.event_study import HORIZONS
 from threads.strategy_threads import TrendFollowingResearchThread, CANCELLED_MESSAGE
-from ui.common import create_font, ThreadOwnerMixin, FONT_HEADING, FONT_SMALL, FONT_BODY
-from ui.theme import TEXT, TEXT_MUTED, LINE, DANGER
+from ui.common import create_font, make_button, setup_table, make_footer_label, ThreadOwnerMixin, TAB_MARGINS, TAB_SPACING, FONT_SMALL
+from ui.theme import TEXT, TEXT_SUB, TEXT_MUTED, TEXT_FAINT, TEXT_EMPTY, LINE
 
 logger = logging.getLogger(__name__)
 
 _WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"]
-_COST_CHOICES = [("0x / 1x / 2x (4-1 sensitivity)", COST_MULTIPLIERS), ("1x only", (1.0,))]
-_BENCHMARK_STYLE = {"BM1": ("#595d6c", "--"), "BM2": ("#9397ab", ":"), "BM3": ("#1c1e2c", "-."), "BM4": ("#c3c6d4", ":")}
+_COST_CHOICES = [("0x / 1x / 2x", COST_MULTIPLIERS), ("1x only", (1.0,))]
+_BENCHMARK_STYLE = {"BM1": (TEXT_SUB, "--"), "BM2": (TEXT_FAINT, ":"), "BM3": (TEXT, "-."), "BM4": (TEXT_EMPTY, ":")}
 
 
 def _fmt_event(value, pct=True, digits=1) -> str:
@@ -69,18 +69,12 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setSpacing(8)
-        root.setContentsMargins(12, 10, 12, 10)
-
-        title = QLabel("Trend Following")
-        title.setFont(create_font(FONT_HEADING, QFont.Weight.Bold))
-        subtitle = QLabel(f"Research backtest per trend_following.md {SPEC_VERSION}: variants A0–A5 and B "
-                          f"against BM1–BM4 with the 0x/1x/2x cost scenarios and the 6-1 event study.")
-        subtitle.setObjectName("muted")
-        subtitle.setFont(create_font(FONT_SMALL))
-        subtitle.setWordWrap(True)
-        root.addWidget(title)
-        root.addWidget(subtitle)
+        root.setSpacing(TAB_SPACING)
+        root.setContentsMargins(*TAB_MARGINS)
+        # No in-tab title (docs/ui.md 8.4): no other tab has one and the tab
+        # label already names it. What a run does is on the Run button's tooltip.
+        self._run_tooltip = (f"Research backtest per trend_following.md {SPEC_VERSION}: variants A0–A5 and B "
+                             f"against BM1–BM4 with the 0x/1x/2x cost scenarios and the 6-1 event study.")
 
         form = QGridLayout()
         form.setHorizontalSpacing(10)
@@ -92,7 +86,6 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             de.setCalendarPopup(True)
             de.setDisplayFormat("yyyy-MM-dd")
             de.setMaximumDate(QDate(DEV_END.year, DEV_END.month, DEV_END.day))
-            de.setFont(create_font(FONT_BODY))
 
         self.universe_spin = QSpinBox()
         self.universe_spin.setRange(20, 300)
@@ -117,36 +110,37 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         for label, _ in _COST_CHOICES:
             self.cost_combo.addItem(label)
 
-        self.flows_cb = QCheckBox("Investor flows (F/FX; Naver, slow on first run)")
-        self.event_cb = QCheckBox("Event study (6-1)")
+        self.flows_cb = QCheckBox("Investor flows")
+        self.flows_cb.setToolTip("F/FX signals from Naver investor flows; slow on the first run")
+        self.event_cb = QCheckBox("Event study")
+        self.event_cb.setToolTip("trend_following.md 6-1 breakout event study")
         self.event_cb.setChecked(True)
 
-        for w in (self.universe_spin, self.liquidity_spin, self.positions_spin, self.weekday_combo,
-                  self.cost_combo, self.flows_cb, self.event_cb):
-            w.setFont(create_font(FONT_BODY))
-
-        def _lbl(text):
+        def _lbl(text, tip=""):
             lbl = QLabel(text)
-            lbl.setFont(create_font(FONT_BODY))
+            if tip:
+                lbl.setToolTip(tip)
             return lbl
 
-        form.addWidget(_lbl("Start"), 0, 0)
-        form.addWidget(self.start_edit, 0, 1)
-        form.addWidget(_lbl("End"), 0, 2)
-        form.addWidget(self.end_edit, 0, 3)
-        form.addWidget(_lbl("Universe (KOSPI top N)"), 0, 4)
-        form.addWidget(self.universe_spin, 0, 5)
-        form.addWidget(_lbl("Liquidity floor (20d avg value)"), 0, 6)
-        form.addWidget(self.liquidity_spin, 0, 7)
-        form.addWidget(_lbl("Max positions"), 1, 0)
-        form.addWidget(self.positions_spin, 1, 1)
-        form.addWidget(_lbl("Weekly check day"), 1, 2)
-        form.addWidget(self.weekday_combo, 1, 3)
-        form.addWidget(_lbl("Cost scenarios"), 1, 4)
-        form.addWidget(self.cost_combo, 1, 5)
-        form.addWidget(self.flows_cb, 1, 6)
-        form.addWidget(self.event_cb, 1, 7)
-        form.setColumnStretch(8, 1)
+        # Three label/field pairs per row (docs/ui.md 8.6): the old 8-column
+        # grid with long labels made this the widest tab by far. Long
+        # explanations moved to tooltips.
+        fields = [
+            (_lbl("Start"), self.start_edit),
+            (_lbl("End"), self.end_edit),
+            (_lbl("Universe", "KOSPI top N by market cap"), self.universe_spin),
+            (_lbl("Liquidity floor", "20-day average trading value"), self.liquidity_spin),
+            (_lbl("Max positions"), self.positions_spin),
+            (_lbl("Check day", "Weekly signal check day"), self.weekday_combo),
+            (_lbl("Cost scenarios", "trend_following.md 4-1 cost sensitivity"), self.cost_combo),
+        ]
+        for i, (lbl, w) in enumerate(fields):
+            row, pair = divmod(i, 3)
+            form.addWidget(lbl, row, pair * 2)
+            form.addWidget(w, row, pair * 2 + 1)
+        form.addWidget(self.flows_cb, 2, 2, 1, 2)
+        form.addWidget(self.event_cb, 2, 4, 1, 2)
+        form.setColumnStretch(6, 1)
         root.addLayout(form)
 
         variants_row = QHBoxLayout()
@@ -156,43 +150,25 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             cb = QCheckBox(vid)
             cb.setChecked(True)
             cb.setToolTip(v.label)
-            cb.setFont(create_font(FONT_BODY))
             self.variant_cbs[vid] = cb
             variants_row.addWidget(cb)
         variants_row.addStretch()
-        self.run_btn = QPushButton("▶  Run Research")
-        self.run_btn.setObjectName("primary")
-        self.run_btn.setFont(create_font(FONT_BODY, QFont.Weight.Bold))
-        self.run_btn.clicked.connect(self._on_run_clicked)
-        self.stop_btn = QPushButton("■  Stop")
-        self.stop_btn.setObjectName("danger")
-        self.stop_btn.setFont(create_font(FONT_BODY))
+        # Run is the tab's one primary action; Stop cancels a run, it does not
+        # destroy anything, so it stays neutral (docs/ui.md 8.1).
+        self.run_btn = make_button("Run Research", "primary", self._on_run_clicked, tooltip=self._run_tooltip)
+        self.stop_btn = make_button("Stop", on_click=self._on_stop_clicked)
         self.stop_btn.setEnabled(False)
-        self.stop_btn.clicked.connect(self._on_stop_clicked)
-        self.save_btn = QPushButton("Save Report")
-        self.save_btn.setFont(create_font(FONT_BODY))
+        self.save_btn = make_button("Save Report", on_click=self._on_save_clicked)
         self.save_btn.setEnabled(False)
-        self.save_btn.clicked.connect(self._on_save_clicked)
         variants_row.addWidget(self.run_btn)
         variants_row.addWidget(self.stop_btn)
         variants_row.addWidget(self.save_btn)
         root.addLayout(variants_row)
 
-        # Status and errors live in their own line, never over the results (docs/ui.md 5.2).
-        self.status_lbl = QLabel("Ready")
-        self.status_lbl.setObjectName("muted")
-        self.status_lbl.setFont(create_font(FONT_SMALL))
-        self.status_lbl.setWordWrap(True)
-        root.addWidget(self.status_lbl)
-
         splitter = QSplitter(Qt.Orientation.Vertical)
 
-        self.table = QTableWidget()
-        self.table.setFont(create_font(FONT_SMALL))
+        self.table = setup_table(QTableWidget(), empty_text="Run Research to fill the scorecard")
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setVisible(False)
         headers = ["ID", "Cost"] + [h for h, _ in SUMMARY_COLUMNS[1:]]
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
@@ -204,6 +180,11 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
 
         self.fig = Figure(figsize=(6, 2.6), constrained_layout=True)
         self.ax = self.fig.add_subplot(111)
+        # Empty state (docs/ui.md 8.2): a hint instead of a bare 0-1 axis.
+        self.ax.text(0.5, 0.5, "Run Research to plot the rebased NAV of each variant and benchmark",
+                     ha="center", va="center", transform=self.ax.transAxes, color=TEXT_FAINT,
+                     fontsize=FONT_SMALL)
+        self.ax.set_axis_off()
         self.canvas = FigureCanvas(self.fig)
         self.canvas.setMinimumHeight(180)
         self.canvas.mpl_connect("motion_notify_event", self._on_chart_motion)
@@ -222,11 +203,8 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         chart_layout.addWidget(self.canvas, 1)
         splitter.addWidget(chart_box)
 
-        self.event_table = QTableWidget()
-        self.event_table.setFont(create_font(FONT_SMALL))
+        self.event_table = setup_table(QTableWidget(), empty_text="The 6-1 event study appears here after a run")
         self.event_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.event_table.setAlternatingRowColors(True)
-        self.event_table.verticalHeader().setVisible(False)
         ev_headers = ["Breakout group", "n"] + [f"{s} {h}d" for h in HORIZONS for s in ("mean", "hit", "vs KOSPI")]
         self.event_table.setColumnCount(len(ev_headers))
         self.event_table.setHorizontalHeaderLabels(ev_headers)
@@ -237,6 +215,11 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         splitter.setStretchFactor(2, 2)
         root.addWidget(splitter, 1)
 
+        # Footer: status and errors in their own line, never over the results
+        # (docs/ui.md 5.2), under the results like every tab's footer (8.4).
+        self.status_lbl = make_footer_label("Ready")
+        root.addWidget(self.status_lbl)
+
         banner = QFrame()
         banner.setObjectName("DashboardCard")
         banner_layout = QHBoxLayout(banner)
@@ -245,8 +228,9 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
                         "KOSPI constituents (survivorship bias) and the cost assumptions of trend_following.md 4-1; "
                         "nothing here places orders.")
         notice.setWordWrap(True)
-        notice.setFont(create_font(FONT_BODY))
-        notice.setStyleSheet(f"color: {DANGER};")
+        notice.setFont(create_font(FONT_SMALL))
+        # Information, not an error: muted text on the card, not DANGER red (docs/ui.md 8.3).
+        notice.setObjectName("muted")
         banner_layout.addWidget(notice)
         root.addWidget(banner)
 
@@ -272,10 +256,10 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
 
     def _on_run_clicked(self):
         if self.start_edit.date() >= self.end_edit.date():
-            QMessageBox.warning(self, "Trend Following", "Start must be before End.")
+            QMessageBox.warning(self, "Strategy", "Start must be before End.")
             return
         if not self._selected_variants() and not self.event_cb.isChecked():
-            QMessageBox.warning(self, "Trend Following", "Select at least one variant or the event study.")
+            QMessageBox.warning(self, "Strategy", "Select at least one variant or the event study.")
             return
         req = self.build_request()
         thread = TrendFollowingResearchThread(req)
@@ -342,6 +326,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
     def _draw_chart(self, result: ResearchResult):
         ax = self.ax
         ax.clear()
+        ax.set_axis_on()
         self._chart_series = []
         self._crosshair = None
         base_mult = 1.0 if result.runs_at(1.0) else (result.request.cost_multipliers[0] if result.runs else 1.0)
@@ -349,7 +334,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             if len(r.nav) == 0:
                 continue
             if r.kind == "benchmark":
-                color, style = _BENCHMARK_STYLE.get(r.id, ("#9397ab", ":"))
+                color, style = _BENCHMARK_STYLE.get(r.id, (TEXT_FAINT, ":"))
                 line, = ax.plot(r.dates, r.nav * 100.0, linestyle=style, linewidth=1.2, color=color, label=r.id)
             else:
                 line, = ax.plot(r.dates, r.nav * 100.0, linewidth=1.5, label=r.id)

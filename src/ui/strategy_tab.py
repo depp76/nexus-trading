@@ -17,6 +17,9 @@ class StrategyTab(ThreadOwnerMixin, QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         self.sub_tabs = QTabWidget()
+        # A bar with a single tab is noise; it appears once a second strategy
+        # sub-tab exists (docs/ui.md 8.4).
+        self.sub_tabs.setTabBarAutoHide(True)
         self.trend_following_tab = TrendFollowingTab()
         self.sub_tabs.addTab(self.trend_following_tab, "Trend Following")
         root.addWidget(self.sub_tabs)

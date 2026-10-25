@@ -10,7 +10,8 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QPen
 
 from ui.colors import QC_PROFIT, QC_LOSS
-from ui.theme import SURFACE, LINE, TEXT_MUTED, TEXT_FAINT
+from ui.common import setup_table
+from ui.theme import LINE_GROUP, TEXT_MUTED, TEXT_FAINT
 
 
 logger = logging.getLogger(__name__)
@@ -42,23 +43,10 @@ class StockTradeHistoryDialog(QDialog):
         tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         tbl.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
 
-        # Custom vertical header: data rows show row numbers; footer rows appear blank.
-        _n_data = len(matches)
-        _footer_rows = ({_n_data, _n_data + 1} if is_open_position else {_n_data})
-
-        class _FooterBlankVHeader(QHeaderView):
-            def paintSection(self, painter, rect, logical_index):
-                if logical_index in _footer_rows:
-                    painter.save()
-                    painter.fillRect(rect, QColor(SURFACE))
-                    painter.restore()
-                else:
-                    super().paintSection(painter, rect, logical_index)
-
-        _vh = _FooterBlankVHeader(Qt.Orientation.Vertical, tbl)
-        _vh.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
-        _vh.setDefaultSectionSize(tbl.verticalHeader().defaultSectionSize())
-        tbl.setVerticalHeader(_vh)
+        # App-wide table defaults (docs/ui.md 8.2 / 8.6): no row-number
+        # column (it used to number the data rows and blank the footer rows),
+        # fixed row height, table font.
+        setup_table(tbl, zebra=False)
 
         def _si(text):
             it = QTableWidgetItem(str(text))
@@ -186,7 +174,7 @@ class StockTradeHistoryDialog(QDialog):
             # Closed position: draw outline border around Total row via delegate.
             _closed_total_row = total_row
             _closed_n_cols = tbl.columnCount()
-            _closed_grid_clr = QColor(LINE)
+            _closed_grid_clr = QColor(LINE_GROUP)   # the app's one table line color (docs/ui.md 8.2)
 
             class _ClosedDelegate(QStyledItemDelegate):
                 def paint(self, painter, option, index):
@@ -232,7 +220,7 @@ class StockTradeHistoryDialog(QDialog):
             # Remove borders from footer rows (Total + Weight):
             # hide the built-in grid and re-draw only for data rows via delegate.
             _footer_rows = {total_row, weight_row}
-            _grid_clr = QColor(LINE)
+            _grid_clr = QColor(LINE_GROUP)
             _n_cols = tbl.columnCount()
 
             class _PartialGridDelegate(QStyledItemDelegate):
@@ -268,8 +256,6 @@ class StockTradeHistoryDialog(QDialog):
         layout.addWidget(tbl)
 
         close_btn = QPushButton("Close")
-        close_btn.setFixedHeight(30)
-        close_btn.setFixedWidth(100)
         close_btn.clicked.connect(self.accept)
 
         btn_layout = QHBoxLayout()
@@ -277,17 +263,8 @@ class StockTradeHistoryDialog(QDialog):
         btn_layout.addWidget(close_btn)
         layout.addLayout(btn_layout)
 
-        # ---Determine scroll bar visibility based on content height ---
-        # Compare total content height against the available table viewport height.
-        hdr_h = tbl.horizontalHeader().height()
-        row_h = tbl.verticalHeader().defaultSectionSize()
-        n_rows = tbl.rowCount()
-        content_h = hdr_h + row_h * n_rows + 4  # +4 for border
-        CLOSE_BTN_H = 44  # close button row + margins
-        PADDING = 20      # dialog layout margins
-        available_tbl_h = 600 - CLOSE_BTN_H - PADDING
-        if content_h <= available_tbl_h:
-            tbl.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        else:
-            tbl.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.setFixedSize(1000, 600)
+        # Resizable like every other dialog (docs/ui.md 8.5); it used to be
+        # pinned at 1000x600 with the scroll bar switched on or off by a
+        # height estimate for that fixed size.
+        tbl.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.resize(1000, 600)

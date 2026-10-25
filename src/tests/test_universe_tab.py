@@ -229,12 +229,18 @@ class TestTrendScoreButton(unittest.TestCase):
         self.assertIs(tab._trend_score_thread, worker)
 
     def test_empty_universe_warns_instead_of_starting(self):
+        """docs/ui.md 8.5: an informational result goes to the tab's status
+        line, not a modal box."""
         tab = self._tab()
         tab.all_data = [{**_stock("AAPL", 900), "market": "NASDAQ 100"}]
+        statuses = []
+        tab.status_text_changed.connect(statuses.append)
         with patch("ui.universe_tab.TrendScoreThread", _FakeScoreThread), \
              patch("ui.universe_tab.QMessageBox.information") as info:
             tab._on_trend_score_clicked()
-        info.assert_called_once()
+        info.assert_not_called()
+        self.assertTrue(any("no KOSPI/KOSDAQ rows" in s for s in statuses), statuses)
+        self.assertIn("no KOSPI/KOSDAQ rows", tab.footer_lbl.text())
         self.assertEqual(_FakeScoreThread.instances, [])
         self.assertTrue(tab.trend_score_btn.isEnabled())
 
