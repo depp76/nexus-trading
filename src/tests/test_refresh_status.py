@@ -81,9 +81,11 @@ class TestRefreshState(unittest.TestCase):
         self.assertEqual(self.state(), "waiting")
         self.assertEqual(self.state(sync_ago=30), "ok")
         self.assertEqual(self.state(sync_ago=121), "late")
-        self.assertEqual(self.state(sync_ago=60, fail_ago=1), "failed")   # failure newer than success
-        self.assertEqual(self.state(sync_ago=1, fail_ago=60), "ok")       # recovered since
-        self.assertEqual(self.state(fail_ago=5), "failed")               # never succeeded
+        # An active failure shows even after a later success elsewhere; only
+        # the failing source's own success clears it (RefreshFailures).
+        self.assertEqual(self.state(sync_ago=60, fail_ago=1), "failed")
+        self.assertEqual(self.state(sync_ago=1, fail_ago=60), "failed")
+        self.assertEqual(self.state(fail_ago=5), "failed")
 
     def test_failed_tooltip_has_time_and_reason(self):
         _, tip = refresh_state(True, None, (self.NOW, "boom"), self.NOW, 60000)
@@ -105,6 +107,95 @@ class TestHeatLegend(unittest.TestCase):
              patch("ui.universe_tab.safe_load_json", return_value=None):
             tab = UniverseTab()
         self.assertGreater(tab.heat_legend.sizeHint().width(), tab.heat_legend.BAR_W)
+
+
+class TestRefreshFailures(unittest.TestCase):
+    def test_per_source_clear(self):
+        from ui.common import RefreshFailures
+        t0, t1 = datetime(2026, 10, 25, 9, 0), datetime(2026, 10, 25, 9, 1)
+        f = RefreshFailures()
+        self.assertIsNone(f.active())
+        f.fail("Trading Universe", "no quotes", t0)
+        f.fail("Trading History", "prices: timed out", t1)
+        at, text = f.active()
+        self.assertEqual(at, t1)
+        self.assertEqual(text, "Trading History: prices: timed out; Trading Universe: no quotes")
+        f.clear("Trading Universe")              # a Universe success does not clear History
+        self.assertEqual(f.active()[1], "Trading History: prices: timed out")
+        f.clear("Trading History")
+        self.assertIsNone(f.active())
+
+
+class TestRealtimePriceFailure(unittest.TestCase):
+    def _run(self, **patches):
+        from threads.realtime import RealtimePriceThread
+        t = RealtimePriceThread(["005930"], [])
+        failures, fetched = [], []
+        t.failed.connect(failures.append)
+        t.prices_fetched.connect(fetched.append)
+        with patch("data_fetcher.fetch_kis_realtime_prices", **patches):
+            t.run()
+        return failures, fetched
+
+    def test_no_quotes(self):
+        failures, fetched = self._run(return_value={})
+        self.assertEqual(failures, ["no quotes received (KIS/Yahoo)"])
+        self.assertEqual(fetched, [{}])
+
+    def test_exception_no_longer_kills_the_thread_silently(self):
+        failures, fetched = self._run(side_effect=OSError("KIS key folder missing"))
+        self.assertEqual(failures, ["KIS key folder missing"])
+        self.assertEqual(fetched, [{}])
+
+    def test_ok(self):
+        failures, _ = self._run(return_value={"005930": 70000.0})
+        self.assertEqual(failures, [])
+
+
+class TestFullRefreshFailure(unittest.TestCase):
+    def _tab(self):
+        from ui.universe_tab import UniverseTab
+        with patch.object(UniverseTab, "refresh_data"), \
+             patch("ui.universe_tab.safe_load_json", return_value=None):
+            return UniverseTab()
+
+    def _row(self, ticker, market):
+        return {"ticker": ticker, "name": ticker, "market": market, "price": 1.0, "changes": {}}
+
+    def test_failed_market_keeps_previous_rows_and_reports(self):
+        tab = self._tab()
+        tab._prev_data = [self._row("A", "KOSPI"), self._row("B", "KOSDAQ"), self._row("^KS11", "Index")]
+        reasons, syncs = [], []
+        tab.refresh_failed.connect(reasons.append)
+        tab.sync_time_changed.connect(syncs.append)
+        tab._on_full_refresh_failed("no data for KOSDAQ", ["KOSDAQ"])
+        with patch.object(tab, "_save_universe_cache") as save, \
+             patch.object(tab, "load_custom_settings"):
+            tab.custom_settings = {"deleted": [], "added": []}
+            tab.on_finished_all([self._row("A2", "KOSPI"), self._row("^KS11", "Index")])
+        tickers = {x["ticker"] for x in tab.all_data}
+        self.assertEqual(tickers, {"A2", "^KS11", "B"})   # KOSDAQ's old row kept, KOSPI replaced
+        self.assertEqual(reasons, ["full refresh: no data for KOSDAQ"])
+        self.assertEqual(syncs, [])
+        save.assert_called_once()
+
+    def test_empty_table_never_overwrites_the_cache(self):
+        tab = self._tab()
+        tab.all_data = []
+        with patch("ui.universe_tab.atomic_save_json") as save:
+            tab._save_universe_cache()
+        save.assert_not_called()
+
+    def test_thread_reports_failed_parts(self):
+        from threads.fetch_threads import AllDataFetchThread
+        t = AllDataFetchThread()
+        failures = []
+        t.failed.connect(lambda reason, parts: failures.append((reason, parts)))
+        with patch("data_fetcher.fetch_major_indices_as_stocks", return_value=[{"ticker": "^KS11"}]), \
+             patch("threads.fetch_threads.fetch_market_data",
+                   side_effect=lambda m, n, cb: [{"ticker": "A"}] if m == "KOSPI" else []):
+            t.run()
+        self.assertEqual(failures, [("no data for KOSDAQ", ["KOSDAQ"])])
 
 
 if __name__ == "__main__":

@@ -121,12 +121,13 @@ def make_button(text: str, role: str | None = None, on_click: Callable | None = 
 # ---------------------------------------------------------------------------
 def refresh_state(enabled: bool, last_sync, last_failure, now, interval_ms: int) -> tuple:
     """State of the header's auto-refresh dot: (kind, tooltip), kind one of
-    "off", "waiting", "failed", "late", "ok". `last_failure` is (datetime,
-    reason) or None; a failure counts only if it is newer than the last
-    successful update. "late" = no update for more than two intervals."""
+    "off", "waiting", "failed", "late", "ok". `last_failure` is the active
+    failure as (datetime, reason) or None -- MainWindow clears each source's
+    failure on that source's next success (docs/ui.md 8.8). "late" = no
+    update for more than two intervals."""
     if not enabled:
         return "off", "Auto-refresh is off"
-    if last_failure is not None and (last_sync is None or last_failure[0] > last_sync):
+    if last_failure is not None:
         at, reason = last_failure
         return "failed", f"Update failed at {at:%H:%M:%S}: {reason}"
     if last_sync is None:
@@ -134,6 +135,28 @@ def refresh_state(enabled: bool, last_sync, last_failure, now, interval_ms: int)
     if (now - last_sync).total_seconds() * 1000 > 2 * interval_ms:
         return "late", "Late: no update for more than two intervals"
     return "ok", "Updating"
+
+
+class RefreshFailures:
+    """Active refresh failure per source (docs/ui.md 8.8). A source's
+    failure stays until that same source succeeds, so a Trading History
+    price failure is not hidden by a Universe success."""
+
+    def __init__(self):
+        self._by_source = {}
+
+    def fail(self, source: str, reason: str, at):
+        self._by_source[source] = (at, reason)
+
+    def clear(self, source: str):
+        self._by_source.pop(source, None)
+
+    def active(self):
+        """(latest time, "Source: reason; ...") or None."""
+        if not self._by_source:
+            return None
+        latest = max(t for t, _ in self._by_source.values())
+        return latest, "; ".join(f"{s}: {r}" for s, (_, r) in sorted(self._by_source.items()))
 
 
 # ---------------------------------------------------------------------------

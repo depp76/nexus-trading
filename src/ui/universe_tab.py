@@ -385,6 +385,10 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         the user-added tickers. on_finished_all() wrote the cache before those
         were re-fetched, so they were missing until the next full refresh
         (review_agy.md 2.4, 2026-09-29)."""
+        if not self.all_data:
+            # Never overwrite the last good cache with an empty table (a
+            # refresh that fetched nothing and had nothing to fall back on).
+            return
         try:
             atomic_save_json(UNIVERSE_CACHE_FILE, self.all_data)
         except Exception as e:
@@ -544,6 +548,11 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
     def refresh_data(self):
         self.refresh_btn.setEnabled(False)
+        # Rows to fall back on for any part the refresh fails to fetch
+        # (docs/ui.md 8.8): a failed refresh used to leave those rows out of
+        # the table and the cache, or empty both when the network was down.
+        self._prev_data = list(self.all_data)
+        self._full_failure = None
         self.all_data = []
         self.market_status = {m: "Waiting" for m in ("Indices", "KOSPI", "KOSDAQ")} #, "NASDAQ 100", "S&P500")}
         self.update_status_display()
@@ -551,6 +560,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._track_thread(AllDataFetchThread(), 'fetch_thread')
         self.fetch_thread.market_loaded.connect(self.on_market_loaded)
         self.fetch_thread.market_progress.connect(self.on_market_progress)
+        self.fetch_thread.failed.connect(self._on_full_refresh_failed)
         self.fetch_thread.finished_all.connect(self.on_finished_all)
         self.fetch_thread.start()
 
@@ -653,20 +663,46 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         # Accumulate data incrementally so the table updates as each market finishes
         self.all_data.extend(data)
 
+    _PART_MARKET = {"Indices": "Index", "KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ"}
+
+    def _on_full_refresh_failed(self, reason: str, parts: list):
+        # Arrives before finished_all (same emitting thread, queued in order).
+        self._full_failure = (reason, parts)
+
+    def _with_previous_rows(self, all_data: list, parts: list) -> list:
+        """all_data plus the previous refresh's rows for the parts that
+        failed this time (by market), so a failed market keeps its last
+        known rows instead of disappearing."""
+        markets = {self._PART_MARKET[p] for p in parts if p in self._PART_MARKET}
+        have = {x.get("ticker") for x in all_data}
+        kept = [x for x in getattr(self, "_prev_data", [])
+                if x.get("market") in markets and x.get("ticker") not in have]
+        return all_data + kept
+
     def on_finished_all(self, all_data):
+        failure = getattr(self, "_full_failure", None)
+        self._full_failure = None
         try:
             self.load_custom_settings()
             deleted = set(self.custom_settings.get("deleted", []))
             added = self.custom_settings.get("added", [])
 
+            if failure:
+                all_data = self._with_previous_rows(all_data, failure[1])
             filtered_data = [x for x in all_data if x.get("ticker", "") not in deleted]
 
             self.all_data = filtered_data
             self._sort_all_data()      # keeps a pinned Trend Score run on top
             self._reload_table()
             self.filter_table(self.search_input.text())
-            self.update_total_status()
-            self.update_last_sync_time()
+            if failure:
+                reason, parts = failure
+                self.update_total_status(prefix=f"Refresh failed ({reason}); kept the previous rows for "
+                                                f"{', '.join(parts)}.")
+                self.refresh_failed.emit(f"full refresh: {reason}")
+            else:
+                self.update_total_status()
+                self.update_last_sync_time()
 
             # Cache the newly fetched data (the user-added tickers below are
             # appended by _render_startup_batch, which saves again)

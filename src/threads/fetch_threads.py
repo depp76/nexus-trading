@@ -282,11 +282,16 @@ class AllDataFetchThread(QThread):
     market_loaded = pyqtSignal(str, list)
     market_progress = pyqtSignal(str, int, int)
     finished_all = pyqtSignal(list)
+    # (reason, failed parts) just before finished_all when any part --
+    # "Indices", "KOSPI", "KOSDAQ" -- raised or came back empty, so the tab
+    # can keep its previous rows for those parts (docs/ui.md 8.8).
+    failed = pyqtSignal(str, list)
 
     def run(self):
         from data_fetcher import fetch_major_indices_as_stocks
 
         all_data = []
+        failed_parts = []
         try:
             # ---Step 1: Fetch indices first (fast, one concurrent call per index) ---
             try:
@@ -294,8 +299,11 @@ class AllDataFetchThread(QThread):
                 indices_data = fetch_major_indices_as_stocks()
                 self.market_loaded.emit("Indices", indices_data)
                 all_data.extend(indices_data)
+                if not indices_data:
+                    failed_parts.append("Indices")
             except Exception as e:
                 logger.warning("Error fetching indices: %s", e, exc_info=True)
+                failed_parts.append("Indices")
 
             # ---Step 2: Fetch all 4 markets IN PARALLEL ---
             markets_config = [
@@ -331,10 +339,16 @@ class AllDataFetchThread(QThread):
 
             for market, _ in markets_config:
                 all_data.extend(market_results.get(market, []))
+                if not market_results.get(market):
+                    failed_parts.append(market)
             del market_results  # release the intermediate dict to free memory
         except Exception as e:
             logger.warning("Error inside AllDataFetchThread.run: %s", e, exc_info=True)
+            failed_parts = ["Indices", "KOSPI", "KOSDAQ"]
         finally:
+            if failed_parts:
+                parts = list(dict.fromkeys(failed_parts))
+                self.failed.emit(f"no data for {', '.join(parts)}", parts)
             self.finished_all.emit(all_data)
 
 

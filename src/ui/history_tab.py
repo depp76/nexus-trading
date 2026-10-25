@@ -70,6 +70,9 @@ _TITLE = "Trading History"
 class TradingHistoryTab(ThreadOwnerMixin, QWidget):
     """Trading History tab - load from Excel and display closed/open positions."""
     total_asset_updated = pyqtSignal(float)
+    # 60 s price refresh result -> MainWindow's header refresh status (docs/ui.md 8.8)
+    price_refresh_failed = pyqtSignal(str)
+    price_refresh_ok = pyqtSignal()
     status_message = pyqtSignal(str)  # forwards background-thread progress text to MainWindow's status bar
 
     # Column headers/widths/section grouping all come from history_table.COLUMNS
@@ -501,6 +504,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             return
             
         self._track_thread(RealtimePriceThread(list(kr_tickers), list(us_tickers)), '_rt_price_thread')
+        self._rt_price_thread.failed.connect(self.price_refresh_failed)
         self._rt_price_thread.prices_fetched.connect(self._on_realtime_prices_fetched)
         self._rt_price_thread.status_message.connect(self.status_message.emit)
         self._rt_price_thread.start()
@@ -508,6 +512,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
     def _on_realtime_prices_fetched(self, prices_dict):
         if not prices_dict:
             return
+        self.price_refresh_ok.emit()
             
         updated = False
         
