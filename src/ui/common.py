@@ -117,6 +117,26 @@ def make_button(text: str, role: str | None = None, on_click: Callable | None = 
 
 
 # ---------------------------------------------------------------------------
+# Header refresh status (docs/ui.md 1.10 / 8.4 / 8.7)
+# ---------------------------------------------------------------------------
+def refresh_state(enabled: bool, last_sync, last_failure, now, interval_ms: int) -> tuple:
+    """State of the header's auto-refresh dot: (kind, tooltip), kind one of
+    "off", "waiting", "failed", "late", "ok". `last_failure` is (datetime,
+    reason) or None; a failure counts only if it is newer than the last
+    successful update. "late" = no update for more than two intervals."""
+    if not enabled:
+        return "off", "Auto-refresh is off"
+    if last_failure is not None and (last_sync is None or last_failure[0] > last_sync):
+        at, reason = last_failure
+        return "failed", f"Update failed at {at:%H:%M:%S}: {reason}"
+    if last_sync is None:
+        return "waiting", "Waiting for the first update"
+    if (now - last_sync).total_seconds() * 1000 > 2 * interval_ms:
+        return "late", "Late: no update for more than two intervals"
+    return "ok", "Updating"
+
+
+# ---------------------------------------------------------------------------
 # Tab skeleton (docs/ui.md 8.4)
 # ---------------------------------------------------------------------------
 # Every top-level tab: [toolbar row] -> [optional KPI strip or chart] ->

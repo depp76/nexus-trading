@@ -655,3 +655,14 @@ app.setStyleSheet(app_qss(FONT_FAMILY_CSS))
 - **Strategy 탭**: 파라미터 폼을 한 줄 4쌍(8열)에서 3쌍씩 3줄로, 긴 라벨 설명은 툴팁으로. 상태 문구는 결과 아래 푸터로.
 - **다이얼로그 표**: MA 차트의 투자자/선물 표와 종목별 거래 이력 창도 `setup_table` 사용. 거래 이력 창의 행 번호 열 제거,
   직접 그리는 격자선도 `LINE_GROUP`.
+
+### 8.7 갱신 실패 표시와 히트맵 범례 (2026-10-25)
+
+- **갱신 실패**: `UniverseLightweightFetchThread.failed(reason)` — 예외가 나거나, 요청한 종목에 대해 시세를 하나도 받지 못하면
+  (수집기는 네트워크 실패 시 예외 대신 빈 결과를 돌려준다) `finished_all` 직전에 보낸다. 일부라도 받으면 실패가 아니다.
+  Universe 탭은 그 틱에서 표를 건드리지 않고, 마지막 정상 갱신 시각을 유지하고, 푸터에 `Auto-update failed: …`를 쓰고
+  `refresh_failed(reason)`을 보낸다. 헤더 점은 마지막 실패가 마지막 성공보다 최근이면 **빨강(DANGER)**, 툴팁에 실패 시각과 사유.
+  다음 정상 갱신에서 자동으로 초록으로 돌아온다. 상태 판정은 `ui.common.refresh_state()`(off / waiting / failed / late / ok).
+- **히트맵 범례**(1.2 구현): Universe 푸터 오른쪽의 `HeatLegend` — `heatmap_bg()`로 직접 칠한 LOSS → 0 → PROFIT 막대와
+  열별 최대 농도 기준. 1.2는 "모든 열 ±10% 공통"이었지만 실제 열 스펙은 Chg ±5%, 3D~120D ±10%, MA Div 100 ±20이므로
+  범례 문구를 `COLUMNS`의 `scale` 값에서 만들어 셀과 어긋나지 않게 했다. 금리 행(±25bp)은 툴팁에 표기.

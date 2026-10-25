@@ -29,7 +29,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLineEdit,
     QPushButton, QMessageBox,
 )
-from PyQt6.QtCore import pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
 from paths import UNIVERSE_CACHE_FILE, CUSTOM_SETTINGS_FILE
 from threads.fetch_threads import (
@@ -39,7 +39,7 @@ from threads.fetch_threads import (
     GeminiStockReportThread,
 )
 from threads.strategy_threads import TrendScoreThread, CANCELLED_MESSAGE
-from ui.widgets import StockTable
+from ui.widgets import StockTable, HeatLegend
 from ui.dialogs.stock_report import show_stock_report_result
 from ui.ma_chart import StockMaLauncherMixin
 
@@ -66,6 +66,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
     status_text_changed = pyqtSignal(str)  # -> this tab's footer_lbl
     sync_time_changed = pyqtSignal(str)    # -> MainWindow's header refresh status
+    refresh_failed = pyqtSignal(str)       # -> MainWindow's header refresh status (reason)
     status_message = pyqtSignal(str)       # -> MainWindow's native status bar (roadmap 2-3)
     refresh_started = pyqtSignal()         # -> MainWindow also reloads Trading History tab
     auto_lightweight_tick = pyqtSignal()   # -> MainWindow also triggers Trading History realtime update
@@ -185,7 +186,12 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         # every tab though only this tab wrote to it (docs/ui.md 8.4).
         self.footer_lbl = make_footer_label()
         self.status_text_changed.connect(self.footer_lbl.setText)
-        universe_layout.addWidget(self.footer_lbl)
+        footer = QHBoxLayout()
+        footer.addWidget(self.footer_lbl, 1)
+        # Heatmap legend, always visible under the table (docs/ui.md 1.2).
+        self.heat_legend = HeatLegend()
+        footer.addWidget(self.heat_legend, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        universe_layout.addLayout(footer)
 
     _FILTER_BTN_W = 80
     # (highlight status to show, button label): "" = no status filter. The
@@ -560,7 +566,9 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             if getattr(self, '_lw_fetch_thread', None) is not None and self._lw_fetch_thread.isRunning():
                 return
 
+            self._lw_failure = ""
             self._track_thread(UniverseLightweightFetchThread(self.all_data), '_lw_fetch_thread')
+            self._lw_fetch_thread.failed.connect(self._on_universe_lightweight_failed)
             self._lw_fetch_thread.finished_all.connect(self._on_universe_lightweight_loaded)
             self._lw_fetch_thread.status_message.connect(self.status_message)
             self._lw_fetch_thread.start()
@@ -570,7 +578,19 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             # If empty, do a full refresh
             self.refresh_data()
 
+    def _on_universe_lightweight_failed(self, reason: str):
+        # Arrives before finished_all (same emitting thread, queued in order).
+        self._lw_failure = reason
+
     def _on_universe_lightweight_loaded(self, updated_data):
+        reason = getattr(self, "_lw_failure", "")
+        if reason:
+            # Nothing new arrived: keep the table and the last good update
+            # time, and say so (header dot turns red; docs/ui.md 8.7).
+            self._lw_failure = ""
+            self.status_text_changed.emit(f"Auto-update failed: {reason}")
+            self.refresh_failed.emit(reason)
+            return
         # UniverseLightweightFetchThread preserves all_data's order/length
         # and only reassigns item["changes"] (to a freshly-fetched dict) for
         # tickers whose price actually moved -- every unchanged item keeps

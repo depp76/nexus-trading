@@ -344,6 +344,11 @@ class AllDataFetchThread(QThread):
 class UniverseLightweightFetchThread(QThread):
     finished_all = pyqtSignal(list)
     status_message = pyqtSignal(str)  # short progress text for MainWindow's status bar
+    # Emitted just before finished_all when the tick fetched nothing usable:
+    # an exception, or no quote at all for the tickers it asked for (the
+    # collectors return {} on a network failure instead of raising). A tick
+    # that gets some quotes is not a failure. (docs/ui.md 1.10 / 8.7)
+    failed = pyqtSignal(str)
 
     def __init__(self, current_data: list):
         super().__init__()
@@ -361,6 +366,7 @@ class UniverseLightweightFetchThread(QThread):
             fetch_historical_changes,
         )
 
+        error = ""
         try:
             kr_tickers = []
             us_yf_tickers = []
@@ -389,6 +395,8 @@ class UniverseLightweightFetchThread(QThread):
             if us_yf_tickers:
                 self.status_message.emit("Waiting for Yahoo Finance response...")
                 prices_dict.update(fetch_us_realtime_prices(us_yf_tickers))
+            if (kr_tickers or kr_index_tickers or us_yf_tickers) and not prices_dict:
+                error = "no quotes received (Naver/Yahoo)"
 
             updated_count = 0
             for item in self.current_data:
@@ -413,7 +421,10 @@ class UniverseLightweightFetchThread(QThread):
                         )
         except Exception as e:
             logger.warning("Error in UniverseLightweightFetchThread: %s", e, exc_info=True)
+            error = str(e) or type(e).__name__
         finally:
+            if error:
+                self.failed.emit(error)
             self.finished_all.emit(self.current_data)
 
 
