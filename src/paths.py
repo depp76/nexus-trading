@@ -44,6 +44,8 @@ CD91_CSV_FILE = root_path("cd91.csv")
 # Last downloaded JP 10Y JGB yield series (data/collectors/krx.py), served when the
 # MOF download fails.
 JP10Y_CACHE_FILE = root_path("cache", "jp10y.json")
+# KRX open/closed days from the KIS holiday API (data/krx_calendar.py).
+KRX_CALENDAR_CACHE_FILE = root_path("cache", "krx_calendar.json")
 
 # Backtest reports written by the Strategy tab ("Save Report").
 REPORTS_DIR = root_path("reports")

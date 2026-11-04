@@ -460,6 +460,7 @@ class CostModel:
 | `scoring.py` | 2-5 (1)~(3) | 날짜×종목 배열: MA50Div·Range52·MA20Div·R3(ATR% 정규화 옵션; R10은 6-1-2 리포트용 참고 값으로만 계산, 점수 미사용), 유동성 종목 내 퍼센타일, 게이트(유동성·MA50Div>0·Range52≥0.70·MA20Div 상위 5% 제외), 추세·타이밍·총점, 게이트 통과 종목 내 총점순위(`compute_scores`); 주간 Top/Bottom 추천(`weekly_recommendation`); Universe 행 → `PriceBook` 로더(`load_score_inputs`) |
 | `scoring_policy.py` | 2-5 (4)(5), 6-2 | C1~C3 엔진 정책 `ScoringPolicy`(9-16): 주간 매수·상대 매도·일별 절대 매도, 점수는 `scoring.compute_scores` 재사용 |
 | `raw_check.py`, `data/raw_prices.py` | A5 | 비수정 일봉 조회(KIS 원주가)와 수정 대비 수준 의존 규칙 차이 집계(9-7) |
+| `schedule.py`, `data/krx_calendar.py`, `data/price_crosscheck.py` | 2-1, 5 | KIS 휴장일 API 기반 주간 점검일과 KIS vs Naver 일봉 대조(9-20). 엔진·UI에는 연결하지 않음 |
 | `data/flows.py`, `data/rates.py` | 5, 6-3 | 종목별 투자자 순매수 수집기(Naver frgn 페이지, `cache/investor_flows/` 캐시), CD91 수집기(ECOS API 키 → `cd91.csv` → 상수 3%) |
 | `ui/strategy_tab.py`, `ui/trend_following_tab.py`, `threads/strategy_threads.py` | 7 | Strategy 탭의 Trend Following 서브탭(폼 → 백그라운드 실행 → 스코어카드 표·NAV 차트·이벤트 스터디 표·리포트 저장) |
 | `ui/universe_tab.py`(Trend Score 버튼), `threads/strategy_threads.py::TrendScoreThread` | 2-5, 9-4 | Trading Universe의 KOSPI/KOSDAQ 행을 2-5로 채점해 지난 1주일 평균 총점 기준 상위 10·하위 10을 **Universe 표 맨 위에 고정**(상위 → 하위 → 나머지 기존 순서, 식별 셀에 `Top n (점수)` / `Bottom n (점수)` 태그); 버튼을 다시 누르면 기본 순서 복원 |
@@ -767,3 +768,22 @@ BM2·BM4와 개발 2구간(2021-22 / 2023-24)별 표, BM1 대비 알파·베타�
 - 현황: 수정주가(분할·배당 소급 조정)가 신호에 미래 조정 정보를 주지 않는다는 점을 원자료로 입증하지 못했다. V6 체크리스트 A5는 **판정 불가**다(NEX-59).
 - 요구: 다음 전략 버전을 채택 후보로 올리기 전에 (1) 소급 조정 배율을 곱해도 신호·순위·유동성 필터가 변하지 않음을 고정하는 테스트와 (2) Validation 재감사를 마쳐야 한다. 이 두 가지가 없으면 그 버전은 A5 미확정 상태로 채택 후보가 될 수 없다.
 - v06은 폐기 결론이므로 이번 판정에는 영향이 없다. 미래 정보 누수가 있었다면 성과는 실제보다 좋게 나왔을 방향인데도 목표에 못 미쳤다(J1 판정문 2장).
+
+### 9-20. KIS 휴장일 달력과 일봉 대조 (2026-11-04, `docs/nexus/kis_api_review.md` 5장 2~3단계)
+
+전략 규칙·파라미터·엔진·스냅샷은 바뀌지 않았다. 대조는 개발 구간까지만 하며 2025 홀드아웃은 보지 않았다.
+
+- **`data/krx_calendar.py`**: KIS `chk-holiday`(CTCA0903R, 1회 24일치)의 `opnd_yn`으로 개장일을 구한다. 지난 날은 영구 캐시, 오늘 이후는 하루 1회 갱신, 갱신 실패 시 캐시 사용, 답이 없는 날은 예외(평일을 개장일로 추정하지 않음).
+- **`schedule.py::weekly_check_dates`**: 위 달력에 `signals.weekly_check_days`를 그대로 적용한다. 범위가 주 중간에서 잘려도 점검일이 바뀌지 않도록 ISO 주 단위로 읽는다.
+- **달력 실측**: 2021~2024의 KIS 개장일 983일이 KOSPI 일봉 983일과 날짜까지 일치했다.
+- **`data/price_crosscheck.py`** (`python -m data.price_crosscheck`): KIS 수정 일봉(`raw_prices.get_adjusted_daily_prices`)과 Naver(`get_historical_data`)를 비교해 보고만 한다. 거래정지일은 KIS가 시·고·저가를 종가로 채우고 Naver는 0으로 주는 표기 차이라서 종가만 비교한다.
+- **대조 실측** (2021~2024, 7종목: 005930·000660·035420·035720·373220·247540·091990): 가격은 전부 허용 오차 0.5% 이내였고 날짜 차이도 없었다. 차이는 Naver 거래량뿐이다.
+
+| 종목 | 구간 | Naver 종가×거래량 / KIS 실제 거래대금(중앙값) | KIS 수정 종가×거래량 / 실제 거래대금 |
+|---|---|---:|---:|
+| 035720 카카오 | 2021-01-04~2021-04-09 (67일) | 0.201 | 1.000 |
+| 247540 에코프로비엠 | 2021-01-04~2022-06-24 (365일) | 0.061 | 1.000 |
+| 005930 삼성전자 (대조군) | 2021-2024 (983일) | 0.999 | 0.999 |
+
+- **의미**: 9-6의 "거래량 수정 비일관"(NEX-20)과 9-7의 "직접 비교하지 않았다"를 실제 거래대금 기준으로 측정한 결과다. 자본 변동 이전 구간에서 엔진의 `종가 × 거래량`(`signals.compute_features`)은 실제보다 작게 나오므로, 2-0 유동성 하한과 수급강도 분모(ADV)가 왜곡될 수 있다. 조정일 전후의 거래량 비율(V)도 영향을 받을 수 있다.
+- **이번에 하지 않은 일**: 엔진 데이터는 바꾸지 않았다. 전체 유니버스 규모와 성과 영향은 측정하지 않았다. 소스 교체는 스냅샷과 시행 횟수(E5)에 영향을 주므로 9-19의 A5 입증 과제와 함께 다음 전략 버전에서 결정한다.

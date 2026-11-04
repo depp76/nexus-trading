@@ -52,7 +52,7 @@ working directory:
 ### Verification
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest src\tests -q      # ~620 tests, no network, ~30 s
+.\.venv\Scripts\python.exe -m pytest src\tests -q      # ~640 tests, no network, ~30 s
 .\.venv\Scripts\ruff.exe check src                      # pyflakes rules only (ruff.toml)
 ```
 
@@ -90,7 +90,8 @@ Dev tooling is in `requirements-dev.txt`
   `factor_ic.py` (6-1-2: `run_factor_ic` -> `FactorICResult`, `render_markdown`; 9-13),
   `robustness.py` (`RobustnessRequest` -> `run_robustness` -> `render_robustness_markdown`:
   E1 weekdays, E2 pre-registered neighbours, E4 top-trade share, E5 trial counter; 9-17),
-  `snapshot.py` (`save_snapshot`/`load_snapshot` of a `Dataset` under `cache/snapshots/` with a
+  `schedule.py` (`weekly_check_dates`: the weekly check days ahead of time from the KRX calendar,
+  no engine/UI caller yet; 9-20), `snapshot.py` (`save_snapshot`/`load_snapshot` of a `Dataset` under `cache/snapshots/` with a
   SHA-256 manifest, for byte-identical reruns), `run.py` (headless CLI: `--build-snapshot`,
   `--snapshot`, `--factor-ic`, `--robustness`, `--variants`, ...), `raw_check.py` (A5 sample check
   of split-adjusted vs unadjusted prices). The Strategy tab runs the research matrix (one
@@ -157,7 +158,11 @@ Dev tooling is in `requirements-dev.txt`
   `frames.py` (`_to_polars`) -> `collectors/naver.py`, `kis.py`, `krx.py` -> `flows.py`
   (`get_investor_flows`: per-stock daily foreigner/institution/retail net shares from the
   Naver frgn page, cached per ticker under `cache/investor_flows/`), `rates.py`
-  (`get_cd91_series`: ECOS with `ECOS_API_KEY`, else `cd91.csv`, else empty) -> `listing.py`
+  (`get_cd91_series`: ECOS with `ECOS_API_KEY`, else `cd91.csv`, else empty), `krx_calendar.py`
+  (`get_krx_sessions`: open days from the KIS holiday API, cached in `cache/krx_calendar.json`),
+  `raw_prices.py` (KIS daily bars, raw or adjusted, never past the development window) and
+  `price_crosscheck.py` (report-only KIS vs Naver comparison, `python -m data.price_crosscheck`)
+  -> `listing.py`
   (`get_stock_listing`, day-scoped single-flight cache), `history.py` (`get_historical_data`
   routing KR codes to Naver, bonds to cached series, else yfinance/yahooquery/FDR), `fx.py`
   (`get_usd_krw_rate`) -> `indicators.py` (`_compute_indicators`, `fetch_historical_changes`)
@@ -212,7 +217,8 @@ plus the legacy `custom_history.json` / `trade_overrides.json` pair (read once b
 `_migrate_legacy_json`) and the legacy `trading_record.json` (read once by
 `_migrate_asset_records_json`; left on disk afterwards — both imports record completion in
 `portfolio.db`'s `migrations` table so deleted rows are never re-imported), and
-the rebuildable caches under `cache/` (`investor_flows/<ticker>.json`, `cd91.json`, and
+the rebuildable caches under `cache/` (`investor_flows/<ticker>.json`, `cd91.json`,
+`krx_calendar.json`, and
 `jp10y.json`, the last MOF JP 10Y series, served when the download fails).
 All of these paths come from `src/paths.py`. They are runtime data,
 not fixtures. Trading History principal/deposit/withdrawal live in `QSettings`

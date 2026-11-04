@@ -317,6 +317,24 @@ def fetch_kis_daily_ohlcv(code: str, days: int = 30):
     return df.tail(days).reset_index(drop=True)
 
 
+def fetch_kis_holiday_page(base_date: str) -> list:
+    """One page of KIS chk-holiday (CTCA0903R): about 24 consecutive calendar days starting at
+    `base_date` (YYYYMMDD), weekends included, each with bass_dt and the opnd_yn open-day flag.
+    Page forward by asking again from the day after the last row (data/krx_calendar.py caches
+    the result; KIS asks callers to keep this TR to about one use a day)."""
+    r = _KIS_SESSION.get(
+        f"{_KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/chk-holiday",
+        headers=_kis_headers("CTCA0903R"),
+        params={"BASS_DT": base_date, "CTX_AREA_NK": "", "CTX_AREA_FK": ""},
+        timeout=10,
+    )
+    r.raise_for_status()
+    d = r.json()
+    if d.get("rt_cd") != "0":
+        raise RuntimeError(f"[chk-holiday] KIS API error: {d.get('msg1', d)}")
+    return d.get("output") or []
+
+
 def fetch_account_deposit() -> float:
     """Fetches the account deposit (cash balance) via KIS inquire-balance (TTTC8434R).
     Unlike the old Kiwoom flow, KIS balance inquiry needs no account password/OTP."""
