@@ -1,9 +1,12 @@
 """tests/test_assets_report.py — the Total Assets early/mid-month report
 (ui/assets_report.py maths + AssetsReportDialog smoke)."""
 import unittest
+from unittest.mock import patch
 
+import polars as pl
 from PyQt6.QtWidgets import QApplication
 
+from threads.fetch_threads import AssetReportThread
 from ui.assets_report import report_dates, holdings_on, cash_on, close_on, build_report
 
 app = QApplication.instance() or QApplication([])
@@ -81,6 +84,55 @@ class TestBuildReport(unittest.TestCase):
         rows = build_report(TRADES, END_CASH, [("2026-01-14", "mid")], {}, [("2026-01-14", 1.0)], {})
         self.assertEqual(rows[0]["value"], 1500.0)
         self.assertFalse(rows[0]["priced"])
+
+
+class TestUsMarketLabels(unittest.TestCase):
+    """Every US label the trade dialog offers converts like "US" does; a
+    plain "US" comparison left the others' dollar closes counted as KRW
+    (review_codex.md R1)."""
+
+    DAY = "2026-02-02"
+    US_LABELS = ("US", "us", "NASDAQ", "NASDAQ 100", "NYSE", "AMEX")
+
+    def _row(self, market, usd_krw):
+        trades = [_trade("qqq", "2026-01-02", 10, 1000.0, market=market)]
+        return build_report(trades, 0.0, [(self.DAY, "early")], {"qqq": [(self.DAY, 100.0)]},
+                            [(self.DAY, 2700.0)], usd_krw)[0]
+
+    def test_us_labels_convert_to_krw(self):
+        for market in self.US_LABELS:
+            row = self._row(market, {self.DAY: 1400.0})
+            self.assertEqual(row["value"], 1_400_000.0, market)
+            self.assertTrue(row["priced"], market)
+
+    def test_us_label_without_a_rate_falls_back_to_cost_unpriced(self):
+        for market in self.US_LABELS:
+            row = self._row(market, {})
+            self.assertEqual(row["value"], 1000.0, market)
+            self.assertFalse(row["priced"], market)
+
+    def test_korean_labels_are_not_converted(self):
+        for market in ("KOSPI", "KOSDAQ", "ETF"):
+            self.assertEqual(self._row(market, {self.DAY: 1400.0})["value"], 1000.0, market)
+
+    def _run_thread(self, market):
+        frame = pl.DataFrame({"Date": [self.DAY], "Close": [100.0]})
+        emitted = []
+        thread = AssetReportThread("2026-01-01")
+        thread.finished.connect(lambda *args: emitted.append(args))
+        trades = [_trade("qqq", "2026-01-02", 10, 1000.0, market=market)]
+        with patch("trade_db.load_all_trades", return_value=trades), \
+                patch("threads.fetch_threads.get_historical_data", return_value=frame), \
+                patch("threads.fetch_threads.get_usd_krw_rate_for_date", return_value=1400.0):
+            thread.run()
+        return emitted[0][3]
+
+    def test_worker_fetches_rates_for_every_us_label(self):
+        for market in self.US_LABELS:
+            self.assertEqual(self._run_thread(market), {self.DAY: 1400.0}, market)
+
+    def test_worker_skips_rates_for_korean_labels(self):
+        self.assertEqual(self._run_thread("KOSPI"), {})
 
 
 class TestReportDialog(unittest.TestCase):

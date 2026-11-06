@@ -32,7 +32,7 @@ asset_records  (Total Assets tab's weekly snapshots; was trading_record.json,
   created_at / updated_at TEXT
 
 migrations  (one row per completed one-time JSON import)
-  name         TEXT     PRIMARY KEY – "trades_legacy_json" / "asset_records_json"
+  name         TEXT     PRIMARY KEY – "asset_records_json"
   done_at      TEXT
 """
 
@@ -43,15 +43,13 @@ import os
 import logging
 import datetime as _dt
 
-from paths import DB_FILE, LEGACY_CUSTOM_HISTORY_JSON, LEGACY_TRADE_OVERRIDES_JSON, TRADING_RECORD_FILE
+from paths import DB_FILE, TRADING_RECORD_FILE
 
 logger = logging.getLogger(__name__)
 
 # Module-level aliases kept as plain names so tests (TempDBMixin) can swap them
 # for temp files without touching paths.py.
 _DB_FILE        = DB_FILE
-_CUSTOM_JSON    = LEGACY_CUSTOM_HISTORY_JSON
-_OVERRIDES_JSON = LEGACY_TRADE_OVERRIDES_JSON
 _ASSET_JSON     = TRADING_RECORD_FILE
 
 
@@ -102,9 +100,9 @@ def init_db() -> None:
                 updated_at  TEXT    DEFAULT (datetime('now','localtime'))
             )
         """)
-        # Completed one-time imports. Without it the JSON migrations below
+        # Completed one-time imports. Without it the JSON migration below
         # could only tell "not migrated yet" from "data in the table", so
-        # rows the user deleted came back from the legacy files on the next
+        # rows the user deleted came back from the legacy file on the next
         # start (review_codex.md #2).
         conn.execute("""
             CREATE TABLE IF NOT EXISTS migrations (
@@ -113,9 +111,7 @@ def init_db() -> None:
             )
         """)
         conn.commit()
-        # 1. Legacy JSON migration (custom_history.json + trade_overrides.json)
-        _migrate_legacy_json(conn)
-        # 2. Total Assets snapshots (trading_record.json), once
+        # Total Assets snapshots (trading_record.json), once
         _migrate_asset_records_json(conn)
     finally:
         conn.close()
@@ -134,7 +130,6 @@ def _mark_migration_done(conn: sqlite3.Connection, name: str) -> None:
 
 
 _ASSET_MIGRATION = "asset_records_json"
-_TRADES_MIGRATION = "trades_legacy_json"
 
 
 def _migrate_asset_records_json(conn: sqlite3.Connection) -> None:
@@ -196,103 +191,6 @@ def save_asset_records(records: list[dict]) -> None:
             )
     finally:
         conn.close()
-
-
-# ── Migration from JSON ────────────────────────────────────────────────────────
-
-def _migrate_legacy_json(conn: sqlite3.Connection) -> None:
-    """One-time migration: import custom_history.json + trade_overrides.json into DB.
-    Skips records that already exist, and once it has run (recorded in
-    `migrations`) never runs again, so trades deleted afterwards stay deleted."""
-    if _migration_done(conn, _TRADES_MIGRATION):
-        return
-    if not (os.path.exists(_OVERRIDES_JSON) or os.path.exists(_CUSTOM_JSON)):
-        return
-
-    # ── Load overrides to patch buy-side records from JSON ──────────────────
-    overrides: dict = {}
-    if os.path.exists(_OVERRIDES_JSON):
-        try:
-            with open(_OVERRIDES_JSON, "r", encoding="utf-8") as f:
-                overrides = json.load(f)
-        except Exception as e:
-            logger.warning("[trade_db] Could not read trade_overrides.json: %s", e)
-
-    # ── Load custom_history.json ─────────────────────────────────────────────
-    custom_records: list = []
-    if os.path.exists(_CUSTOM_JSON):
-        try:
-            with open(_CUSTOM_JSON, "r", encoding="utf-8") as f:
-                custom_records = json.load(f)
-        except Exception as e:
-            logger.warning("[trade_db] Could not read custom_history.json: %s", e)
-
-    # ── First: import override entries (these are the canonical closed trades) ─
-    now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    imported = 0
-    for key, ov in overrides.items():
-        co = ov.get("company", "")
-        if not co:
-            continue
-        try:
-            conn.execute("""
-                INSERT OR IGNORE INTO trades
-                    (orig_key, company, market, ticker,
-                     buy_date, buy_price, qty, buy_amount,
-                     sell_date, sell_price, sell_qty, sell_amount,
-                     is_custom, created_at, updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)
-            """, (
-                key, co,
-                ov.get("market", ""), ov.get("ticker", ""),
-                ov.get("buy_date", ""), float(ov.get("buy_price", 0)),
-                float(ov.get("qty", 0)), float(ov.get("buy_amount", 0)),
-                ov.get("sell_date", ""), float(ov.get("sell_price", 0)),
-                float(ov.get("sell_qty", 0)), float(ov.get("sell_amount", 0)),
-                now, now,
-            ))
-            imported += conn.execute("SELECT changes()").fetchone()[0]
-        except Exception as e:
-            logger.warning("[trade_db] Migration error for override '%s': %s", key, e)
-
-    # ── Second: import custom_history.json (open positions not yet in DB) ─────
-    for rec in custom_records:
-        co = rec.get("company", "")
-        if not co:
-            continue
-        buy_date = rec.get("buy_date", "")
-        qty = float(rec.get("qty", 0))
-        key = rec.get("orig_key") or f"{co}_{buy_date}_{qty}"
-
-        # If this record already has an override entry, skip (already imported above)
-        if key in overrides:
-            continue
-
-        try:
-            conn.execute("""
-                INSERT OR IGNORE INTO trades
-                    (orig_key, company, market, ticker,
-                     buy_date, buy_price, qty, buy_amount,
-                     sell_date, sell_price, sell_qty, sell_amount,
-                     is_custom, created_at, updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)
-            """, (
-                key, co,
-                rec.get("market", ""), rec.get("ticker", ""),
-                buy_date, float(rec.get("buy_price", 0)),
-                qty, float(rec.get("buy_amount", 0)),
-                rec.get("sell_date", ""), float(rec.get("sell_price", 0)),
-                float(rec.get("sell_qty", 0)), float(rec.get("sell_amount", 0)),
-                now, now,
-            ))
-            imported += conn.execute("SELECT changes()").fetchone()[0]
-        except Exception as e:
-            logger.warning("[trade_db] Migration error for custom trade '%s': %s", key, e)
-
-    _mark_migration_done(conn, _TRADES_MIGRATION)
-    conn.commit()
-    if imported:
-        logger.info("[trade_db] Migrated %d legacy record(s) into portfolio.db", imported)
 
 
 # ── CRUD helpers ───────────────────────────────────────────────────────────────
@@ -427,8 +325,10 @@ def upsert_trade(record: dict) -> str:
             conn.execute(_UPSERT_SQL, (key, *values_tail))
         else:
             key = _insert_with_generated_key(conn, f"{co}_{buy_date}_{qty}", values_tail)
-            record["orig_key"] = key
         conn.commit()
+        # Only after the commit: a key left on the record by a failed save is not
+        # reserved, so retrying that record could overwrite another trade.
+        record["orig_key"] = key
         return key
     finally:
         conn.close()

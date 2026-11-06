@@ -18,10 +18,8 @@ def root_path(*parts: str) -> str:
 ENV_FILE = root_path(".env")
 APP_LOG_FILE = root_path("app.log")
 
-# Trade log (SQLite, source of truth) + the legacy JSON pair it was migrated from
+# Trade log (SQLite, source of truth)
 DB_FILE = root_path("portfolio.db")
-LEGACY_CUSTOM_HISTORY_JSON = root_path("custom_history.json")
-LEGACY_TRADE_OVERRIDES_JSON = root_path("trade_overrides.json")
 
 # Per-tab state / caches
 CUSTOM_SETTINGS_FILE = root_path("custom_settings.json")

@@ -6,7 +6,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import trade_db
 
@@ -14,8 +14,8 @@ import trade_db
 class TempDBMixin:
     """Each test uses an isolated temporary DB.
 
-    Also points _CUSTOM_JSON / _OVERRIDES_JSON at nonexistent paths so
-    _migrate_legacy_json can't read the real project JSON files.
+    Also points _ASSET_JSON at a nonexistent path so
+    _migrate_asset_records_json can't read the real project JSON file.
     """
 
     def setUp(self):
@@ -23,19 +23,13 @@ class TempDBMixin:
         self._tmp.close()
         # Isolate DB path
         self._orig_db        = trade_db._DB_FILE
-        self._orig_custom    = trade_db._CUSTOM_JSON
-        self._orig_overrides = trade_db._OVERRIDES_JSON
         self._orig_asset     = trade_db._ASSET_JSON
         trade_db._DB_FILE       = self._tmp.name
-        trade_db._CUSTOM_JSON   = self._tmp.name + ".custom.json"     # does not exist
-        trade_db._OVERRIDES_JSON = self._tmp.name + ".overrides.json" # does not exist
         trade_db._ASSET_JSON    = self._tmp.name + ".assets.json"     # does not exist
         trade_db.init_db()
 
     def tearDown(self):
         trade_db._DB_FILE        = self._orig_db
-        trade_db._CUSTOM_JSON    = self._orig_custom
-        trade_db._OVERRIDES_JSON = self._orig_overrides
         trade_db._ASSET_JSON     = self._orig_asset
         os.unlink(self._tmp.name)
         for suffix in ("-wal", "-shm", ".assets.json"):
@@ -289,30 +283,24 @@ class TestAssetRecords(TempDBMixin, unittest.TestCase):
         self.assertEqual([r["date"] for r in trade_db.load_asset_records()], ["2026-01-09"])
 
 
-class TestLegacyTradeMigration(TempDBMixin, unittest.TestCase):
-    """review_codex.md #2: trades imported from the legacy JSON pair and
-    deleted afterwards must not come back on the next init_db()."""
-
-    def test_deleted_trades_stay_deleted(self):
-        import json
-        with open(trade_db._OVERRIDES_JSON, "w", encoding="utf-8") as f:
-            json.dump({"A_2024-01-01_1.0": {"company": "A", "buy_date": "2024-01-01", "qty": 1.0}}, f)
-        with open(trade_db._CUSTOM_JSON, "w", encoding="utf-8") as f:
-            json.dump([{"company": "B", "buy_date": "2024-02-01", "qty": 2.0}], f)
-        for path in (trade_db._OVERRIDES_JSON, trade_db._CUSTOM_JSON):
-            self.addCleanup(os.unlink, path)
-        trade_db.init_db()
-        trades = trade_db.load_all_trades()
-        self.assertEqual(len(trades), 2)
-        trade_db.delete_trade(trades[0]["orig_key"])
-        trade_db.init_db()
-        self.assertEqual(len(trade_db.load_all_trades()), 1)
-        trade_db.delete_trade(trade_db.load_all_trades()[0]["orig_key"])
-        trade_db.init_db()
-        self.assertEqual(trade_db.load_all_trades(), [])
-
-
 class TestWriteValidation(TempDBMixin, unittest.TestCase):
+
+    def test_failed_commit_leaves_no_key_and_retry_keeps_both_trades(self):
+        """review_codex.md R3: a generated key reaches the record only after the commit."""
+        failed = _make_record(buy_price=100.0)
+        conn = trade_db._connect()
+        spy = MagicMock(wraps=conn)
+        spy.commit.side_effect = sqlite3.OperationalError("disk I/O error")
+        with patch.object(trade_db, "_connect", return_value=spy):
+            with self.assertRaises(sqlite3.OperationalError):
+                trade_db.upsert_trade(failed)
+        self.assertNotIn("orig_key", failed)
+
+        trade_db.upsert_trade(_make_record(buy_price=200.0))
+        trade_db.upsert_trade(failed)
+        trades = trade_db.load_all_trades()
+        self.assertEqual(sorted(t["buy_price"] for t in trades), [100.0, 200.0])
+        self.assertEqual(len({t["orig_key"] for t in trades}), 2)
 
     def test_not_null_violation_fails_instead_of_retrying_forever(self):
         """review_codex.md #7: only an orig_key collision is retried."""

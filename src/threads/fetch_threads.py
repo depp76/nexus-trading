@@ -26,6 +26,7 @@ from data_fetcher import (
     get_usd_krw_rate_for_date,
     get_index_close_for_date,
     get_historical_data,
+    is_us_market,
     start_date,
     INDEX_TICKERS,
 )
@@ -266,7 +267,7 @@ class AssetReportThread(QThread):
             if series:
                 closes[tk] = series
         usd_krw = {}
-        if any(str(t.get("market", "")).upper() == "US" for t in trades if t.get("ticker") in closes):
+        if any(is_us_market(t.get("market")) for t in trades if t.get("ticker") in closes):
             for d, _ in kospi:
                 try:
                     usd_krw[d] = float(get_usd_krw_rate_for_date(d))
