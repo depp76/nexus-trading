@@ -26,7 +26,7 @@ vkospi_cache.json
 trading_record.json
 kis_token_cache.json
 
-# Legacy pre-SQLite state (still read once by trade_db._migrate_legacy_json)
+# Legacy pre-SQLite state (no longer read; ignored so a stray copy is never committed)
 custom_history.json
 trade_overrides.json
 

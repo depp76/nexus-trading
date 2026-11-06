@@ -41,7 +41,7 @@ def is_us_market(market) -> bool:
     PositionPriceFetchThread (price routing) and TradingHistoryTab (KR/US
     P/L aggregation) used to carry their own, slightly different, tuples.
     """
-    return str(market or "").strip() in _US_MARKETS
+    return str(market or "").strip().upper() in _US_MARKETS
 
 
 _TD_PERIODS = {"1d": 1, "3d": 3, "5d": 5, "10d": 10, "20d": 20, "60d": 60, "120d": 120}
