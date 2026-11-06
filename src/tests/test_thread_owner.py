@@ -230,9 +230,9 @@ class TestSignalSlotArity(unittest.TestCase):
         from ui.history_tab import TradingHistoryTab
 
         tmp = tempfile.mkdtemp()
-        saved = (trade_db._DB_FILE, trade_db._CUSTOM_JSON, trade_db._OVERRIDES_JSON, trade_db._ASSET_JSON)
+        saved = (trade_db._DB_FILE, trade_db._ASSET_JSON)
         trade_db._DB_FILE = os.path.join(tmp, "t.db")
-        trade_db._CUSTOM_JSON = trade_db._OVERRIDES_JSON = trade_db._ASSET_JSON = os.path.join(tmp, "none.json")
+        trade_db._ASSET_JSON = os.path.join(tmp, "none.json")
         try:
             trade_db.init_db()
             rec = {"ticker": "005930", "company": "A", "market": "KOSPI", "buy_date": "2026-01-01",
@@ -274,7 +274,7 @@ class TestSignalSlotArity(unittest.TestCase):
             self.assertEqual(rows, [(4.0, 4.0, 4000.0), (6.0, 0.0, 6000.0)])
             tab._settings_save_timer.stop()
         finally:
-            trade_db._DB_FILE, trade_db._CUSTOM_JSON, trade_db._OVERRIDES_JSON, trade_db._ASSET_JSON = saved
+            trade_db._DB_FILE, trade_db._ASSET_JSON = saved
             shutil.rmtree(tmp, ignore_errors=True)
 
     def test_history_tab_sequential_partial_sells_keep_splitting_correctly(self):

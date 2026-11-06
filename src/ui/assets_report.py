@@ -15,6 +15,8 @@ Assets; external deposits/withdrawals dated in between are not modelled.
 """
 from bisect import bisect_right
 
+from data_fetcher import is_us_market
+
 
 def report_dates(trading_days: list[str], start: str, end: str) -> list[tuple[str, str]]:
     """[(date, "early"|"mid"), ...] — each month's first trading day and its
@@ -96,7 +98,7 @@ def build_report(trades: list[dict], end_cash: float, points: list[tuple[str, st
         all_priced = True
         for tk, p in holdings_on(trades, d).items():
             px = close_on(closes.get(tk, []), d)
-            if px and str(p["market"]).upper() == "US":
+            if px and is_us_market(p["market"]):
                 fx = usd_krw.get(d, 0.0)
                 px = px * fx if fx else 0.0
             priced = px > 0

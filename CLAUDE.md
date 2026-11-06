@@ -213,9 +213,8 @@ Dev tooling is in `requirements-dev.txt`
 
 `portfolio.db` (source of truth for trades and asset snapshots), `custom_settings.json`,
 `universe_cache.json`, `vkospi_cache.json`, `kis_token_cache.json`, `app.log`, `archive/`,
-plus the legacy `custom_history.json` / `trade_overrides.json` pair (read once by
-`_migrate_legacy_json`) and the legacy `trading_record.json` (read once by
-`_migrate_asset_records_json`; left on disk afterwards — both imports record completion in
+plus the legacy `trading_record.json` (read once by
+`_migrate_asset_records_json`; left on disk afterwards — the import records completion in
 `portfolio.db`'s `migrations` table so deleted rows are never re-imported), and
 the rebuildable caches under `cache/` (`investor_flows/<ticker>.json`, `cd91.json`,
 `krx_calendar.json`, and
