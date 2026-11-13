@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>Trading Universe 시안</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#fbfbfd}
+a{color:#5d5294}a:hover{color:#3f3770}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="font-family: 'Malgun Gothic Semilight','Malgun Gothic','Noto Sans KR',sans-serif; color: #1c1e2c; background: #fbfbfd; min-height: 100%; font-size: 13px">
+
+<header style="display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 10px 20px; background: #ffffff; border-bottom: 1px solid #e4e7f5">
+<div style="font-weight: 700; font-size: 15px; margin-right: 8px">Portfolio Management</div>
+<nav aria-label="Main tabs" style="display: flex; flex-wrap: wrap; gap: 4px">
+<button type="button" aria-current="page" style="border: 1px solid #c9c2f3; background: #f5f4ff; color: #5d5294; font-size: 15px; font-weight: 700; padding: 6px 12px; border-radius: 6px">Trading Universe</button>
+<button type="button" style="border: 1px solid transparent; background: transparent; color: #75798c; font-size: 15px; font-weight: 700; padding: 6px 12px; border-radius: 6px">Trading History</button>
+<button type="button" style="border: 1px solid transparent; background: transparent; color: #75798c; font-size: 15px; font-weight: 700; padding: 6px 12px; border-radius: 6px">Total Assets</button>
+<button type="button" style="border: 1px solid transparent; background: transparent; color: #75798c; font-size: 15px; font-weight: 700; padding: 6px 12px; border-radius: 6px">Strategy</button>
+</nav>
+<div style="flex: 1"></div>
+<span style="background: #fff6e8; color: #8a4f08; border-radius: 4px; padding: 2px 8px; font-size: 11px">샘플 데이터 · 배치 확인용</span>
+</header>
+
+<main style="max-width: 1440px; margin: 0 auto; padding: 12px 20px 16px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px">
+
+<div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center">
+<label style="display: flex"><span style="position: absolute; left: -9999px">Search</span><input type="text" placeholder="Search name or ticker" style="height: 28px; box-sizing: border-box; width: 220px; border: 1px solid #cfd3e5; border-radius: 6px; padding: 0 9px; font-family: inherit; font-size: 13px"></label>
+<button type="button" style="width: 80px; height: 28px; border: 1px solid #9184d9; background: #f5f4ff; color: #5d5294; border-radius: 6px; font-weight: 600">ALL</button>
+<button type="button" style="width: 80px; height: 28px; border: 1px solid #cfd3e5; background: #ffffff; color: #595d6c; border-radius: 6px">KOSPI</button>
+<button type="button" style="width: 80px; height: 28px; border: 1px solid #cfd3e5; background: #ffffff; color: #595d6c; border-radius: 6px">KOSDAQ</button>
+<button type="button" style="width: 80px; height: 28px; border: 1px solid #cfd3e5; background: #ffffff; color: #595d6c; border-radius: 6px">Held</button>
+<button type="button" style="height: 28px; border: 1px solid #cfd3e5; background: #ffffff; color: #595d6c; border-radius: 6px; padding: 0 12px">Filters</button>
+<div style="flex: 1"></div>
+<button type="button" aria-pressed="true" style="height: 28px; border: 1px solid #9184d9; background: #f5f4ff; color: #5d5294; border-radius: 6px; padding: 0 12px; font-weight: 600">Trend Score</button>
+<button type="button" style="height: 28px; border: 1px solid #9184d9; background: #ffffff; color: #5d5294; border-radius: 6px; padding: 0 14px; font-weight: 600">Refresh</button>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start">
+<section aria-label="Universe table" style="flex: 999 1 760px; min-width: 0; background: #ffffff; border: 1px solid #d0d0d0; overflow-x: auto">
+<table style="width: 100%; min-width: 900px; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums">
+<thead>
+<tr style="background: #f3f5fe; color: #75798c; text-align: right">
+<th scope="col" style="text-align: left; padding: 6px 8px; border-bottom: 1px solid #d0d0d0; border-right: 1px solid #d0d0d0; font-weight: 600">Name / Ticker</th>
+<th scope="col" style="padding: 6px 8px; border-bottom: 1px solid #d0d0d0; font-weight: 600">Price</th>
+<th scope="col" style="padding: 6px 8px; border-bottom: 1px solid #d0d0d0; border-right: 1px solid #d0d0d0; font-weight: 600">Chg</th>
+<th scope="col" style="text-align: left; padding: 6px 8px; border-bottom: 1px solid #d0d0d0; font-weight: 600">52W Range</th>
+<th scope="col" style="padding: 6px 8px; border-bottom: 1px solid #d0d0d0; font-weight: 600">MA20 Div</th>
+<th scope="col" style="padding: 6px 8px; border-bottom: 1px solid #d0d0d0; border-right: 1px solid #d0d0d0; font-weight: 600">MA50 Div</th>
+<th scope="col" style="padding: 6px 8px; border-bottom: 1px solid #d0d0d0; font-weight: 600">3D</th>
+<th scope="col" style="padding: 6px 8px; border-bottom: 1px solid #d0d0d0; font-weight: 600">10D</th>
+<th scope="col" style="padding: 6px 8px; border-bottom: 1px solid #d0d0d0; font-weight: 600">20D</th>
+<th scope="col" style="padding: 6px 8px; border-bottom: 1px solid #d0d0d0; border-right: 1px solid #d0d0d0; font-weight: 600">60D</th>
+<th scope="col" style="padding: 6px 8px; border-bottom: 1px solid #d0d0d0; font-weight: 600; text-align: center">Score</th>
+</tr>
+</thead>
+<tbody>
+<sc-for list="{{rows}}" as="r" hint-placeholder-count="10">
+<tr onClick="{{r.pick}}" style="background: {{r.bg}}; border-bottom: 1px solid #f0f1f8; cursor: pointer">
+<td style="padding: 5px 8px; border-right: 1px solid #d0d0d0">
+<div style="display: flex; align-items: center; gap: 6px">
+<sc-if value="{{r.isTop}}" hint-placeholder-val="{{false}}"><span style="background: #e9eefa; color: #2d5aa8; border-radius: 4px; padding: 0 5px; font-size: 10px; font-weight: 700; white-space: nowrap">{{r.tag}}</span></sc-if>
+<sc-if value="{{r.isBottom}}" hint-placeholder-val="{{false}}"><span style="background: #fbecea; color: #b3362e; border-radius: 4px; padding: 0 5px; font-size: 10px; font-weight: 700; white-space: nowrap">{{r.tag}}</span></sc-if>
+<span style="font-weight: 600">{{r.name}}</span>
+</div>
+<div style="color: #9397ab; font-size: 10px">{{r.code}} · {{r.market}}</div>
+</td>
+<td style="padding: 5px 8px; text-align: right">{{r.price}}</td>
+<td style="padding: 5px 8px; text-align: right; border-right: 1px solid #d0d0d0; background: {{r.chgBg}}; color: {{r.chgFg}}">{{r.chg}}</td>
+<td style="padding: 5px 8px">
+<span style="position: relative; display: block; height: 6px; background: #f0f1f8; border-radius: 3px; width: 100px">
+<span style="position: absolute; top: -3px; left: {{r.rangePos}}; width: 4px; height: 12px; border-radius: 2px; background: #5d5294; display: block"></span>
+</span>
+</td>
+<td style="padding: 5px 8px; text-align: right; background: {{r.m20Bg}}; color: {{r.m20Fg}}">{{r.m20}}</td>
+<td style="padding: 5px 8px; text-align: right; border-right: 1px solid #d0d0d0; background: {{r.m50Bg}}; color: {{r.m50Fg}}">{{r.m50}}</td>
+<td style="padding: 5px 8px; text-align: right; background: {{r.d3Bg}}; color: {{r.d3Fg}}">{{r.d3}}</td>
+<td style="padding: 5px 8px; text-align: right; background: {{r.d10Bg}}; color: {{r.d10Fg}}">{{r.d10}}</td>
+<td style="padding: 5px 8px; text-align: right; background: {{r.d20Bg}}; color: {{r.d20Fg}}">{{r.d20}}</td>
+<td style="padding: 5px 8px; text-align: right; border-right: 1px solid #d0d0d0; background: {{r.d60Bg}}; color: {{r.d60Fg}}">{{r.d60}}</td>
+<td style="padding: 5px 8px; text-align: center; font-weight: 600">{{r.score}}</td>
+</tr>
+</sc-for>
+</tbody>
+</table>
+</section>
+
+<aside aria-label="Selected stock" style="flex: 1 1 320px; min-width: 0; background: #ffffff; border: 1px solid #e4e7f5; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px">
+<div><div style="font-size: 17px; font-weight: 700">{{cur.name}}</div><div style="color: #9397ab; font-size: 11px">{{cur.code}} · {{cur.market}}</div></div>
+<div style="text-align: right"><div style="font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums">{{cur.price}}</div><div style="font-size: 12px; color: {{cur.chgFg}}">{{cur.chg}}</div></div>
+</div>
+<svg viewBox="0 0 300 80" role="img" aria-label="Price trend example" style="width: 100%; height: auto; display: block; background: #fbfbfd; border-radius: 6px">
+<polyline fill="none" stroke="#9184d9" stroke-width="2" points="{{cur.spark}}"></polyline>
+<line x1="0" y1="40" x2="300" y2="40" stroke="#e4e7f5" stroke-dasharray="4 4"></line>
+</svg>
+<div>
+<div style="font-weight: 600; margin-bottom: 6px">Trend Score <span style="color: #9397ab; font-weight: 400; font-size: 11px">· 추세 + 눌림 (C 계열 점수)</span></div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px">
+<div style="background: #f3f5fe; border-radius: 6px; padding: 8px"><div style="color: #75798c; font-size: 10px">MA50Div</div><div style="font-weight: 600; font-variant-numeric: tabular-nums">{{cur.pMa50}}</div><div style="color: #9397ab; font-size: 10px">추세 방향 +</div></div>
+<div style="background: #f3f5fe; border-radius: 6px; padding: 8px"><div style="color: #75798c; font-size: 10px">Range52</div><div style="font-weight: 600; font-variant-numeric: tabular-nums">{{cur.pRange}}</div><div style="color: #9397ab; font-size: 10px">추세 위치 +</div></div>
+<div style="background: #f3f5fe; border-radius: 6px; padding: 8px"><div style="color: #75798c; font-size: 10px">R3</div><div style="font-weight: 600; font-variant-numeric: tabular-nums">{{cur.pR3}}</div><div style="color: #9397ab; font-size: 10px">최근 3일 −</div></div>
+</div>
+<div style="display: flex; justify-content: space-between; margin-top: 8px; font-size: 12px"><span style="color: #75798c">주간 평균 총점 (−1 ~ 2)</span><b style="font-variant-numeric: tabular-nums">{{cur.score}}</b></div>
+</div>
+<div>
+<div style="font-weight: 600; margin-bottom: 6px">Gate</div>
+<ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px">
+<sc-for list="{{cur.gates}}" as="g" hint-placeholder-count="4">
+<li style="display: flex; justify-content: space-between"><span style="color: #595d6c">{{g.label}}</span><span style="color: {{g.color}}; font-weight: 600">{{g.mark}}</span></li>
+</sc-for>
+</ul>
+</div>
+<div style="display: flex; gap: 6px; flex-wrap: wrap">
+<button type="button" style="height: 28px; border: 1px solid #cfd3e5; background: #ffffff; color: #595d6c; border-radius: 6px; padding: 0 12px">MA Chart</button>
+<button type="button" style="height: 28px; border: 1px solid #cfd3e5; background: #ffffff; color: #595d6c; border-radius: 6px; padding: 0 12px">AI Report</button>
+</div>
+</aside>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; color: #75798c; font-size: 12px">
+<span>10 stocks · Trend Score pinned Top 3 / Bottom 2 · L1 KOSPI Risk-on</span>
+<span style="display: flex; align-items: center; gap: 4px">Heat <span style="width: 18px; height: 10px; background: rgba(209,69,59,0.24); display: inline-block"></span><span style="width: 18px; height: 10px; background: rgba(209,69,59,0.08); display: inline-block"></span><span style="width: 18px; height: 10px; background: rgba(59,111,196,0.08); display: inline-block"></span><span style="width: 18px; height: 10px; background: rgba(59,111,196,0.24); display: inline-block"></span> down → up</span>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { sel: 0 }; }
+  renderVals() {
+    const heat = (v, scale) => {
+      if (!v) return 'transparent';
+      const a = (0.04 + Math.min(Math.abs(v) / scale, 1) * 0.20).toFixed(3);
+      return v > 0 ? 'rgba(59,111,196,' + a + ')' : 'rgba(209,69,59,' + a + ')';
+    };
+    const fg = (v) => (v > 0 ? '#3b6fc4' : v < 0 ? '#d1453b' : '#75798c');
+    const f = (v) => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(1) + '%';
+    const S = [
+      ['샘플 종목 A','A00001','KOSPI',58400,1.2,0.92,4.1,9.8,-1.8,3.5,8.2,15.1,1.71,'Top 1',[0.86,0.95,0.12]],
+      ['샘플 종목 B','A00002','KOSPI',132000,0.4,0.88,2.2,7.5,-0.9,1.1,4.6,11.8,1.63,'Top 2',[0.80,0.90,0.27]],
+      ['샘플 종목 C','A00003','KOSDAQ',24150,-0.6,0.81,1.9,6.0,-1.2,0.8,3.9,9.4,1.55,'Top 3',[0.74,0.84,0.21]],
+      ['샘플 종목 D','A00004','KOSPI',71200,0.9,0.64,1.0,2.3,0.6,1.9,2.1,4.0,0.98,'',[0.58,0.66,0.55]],
+      ['샘플 종목 E','A00005','KOSPI',9870,-1.4,0.45,-0.8,0.6,-2.0,-1.1,0.4,1.7,0.62,'',[0.49,0.45,0.40]],
+      ['샘플 종목 F','A00006','KOSDAQ',41300,2.1,0.38,1.8,-0.9,3.2,4.1,-1.5,-3.2,0.31,'',[0.30,0.36,0.70]],
+      ['샘플 종목 G','A00007','KOSPI',15600,-0.3,0.22,-2.7,-4.1,-0.5,-2.6,-5.0,-8.8,-0.12,'',[0.18,0.20,0.62]],
+      ['샘플 종목 H','A00008','KOSPI',203500,0.0,0.57,0.3,1.2,0.0,0.7,1.0,2.6,0.74,'',[0.52,0.57,0.47]],
+      ['샘플 종목 I','A00009','KOSDAQ',6420,4.8,0.15,3.9,-6.3,8.7,5.2,-7.9,-12.4,-0.48,'Bottom 2',[0.10,0.12,0.96]],
+      ['샘플 종목 J','A00010','KOSPI',33800,3.6,0.20,2.5,-5.0,6.1,4.0,-6.2,-10.1,-0.55,'Bottom 1',[0.08,0.15,0.98]]
+    ];
+    const order = [0,1,2,9,8,3,7,4,5,6];
+    const sel = this.state.sel;
+    const rows = order.map((i) => {
+      const [name, code, market, price, chg, rng, m20, m50, d3, d10, d20, d60, score, tag] = S[i];
+      return {
+        name, code, market, tag,
+        isTop: tag.startsWith('Top'), isBottom: tag.startsWith('Bottom'),
+        pick: () => this.setState({ sel: i }),
+        bg: i === sel ? '#f5f4ff' : '#ffffff',
+        price: price.toLocaleString('ko-KR'),
+        chg: f(chg), chgBg: heat(chg, 5), chgFg: fg(chg),
+        rangePos: (rng * 96).toFixed(0) + 'px',
+        m20: f(m20), m20Bg: heat(m20, 20), m20Fg: fg(m20),
+        m50: f(m50), m50Bg: heat(m50, 20), m50Fg: fg(m50),
+        d3: f(d3), d3Bg: heat(d3, 10), d3Fg: fg(d3),
+        d10: f(d10), d10Bg: heat(d10, 10), d10Fg: fg(d10),
+        d20: f(d20), d20Bg: heat(d20, 10), d20Fg: fg(d20),
+        d60: f(d60), d60Bg: heat(d60, 10), d60Fg: fg(d60),
+        score: (score < 0 ? '−' : '') + Math.abs(score).toFixed(2)
+      };
+    });
+    const s = S[sel];
+    const pts = [];
+    for (let k = 0; k < 30; k++) {
+      const y = 40 - (s[11] / 15) * 30 * (k / 29) + Math.sin(k * 1.3 + sel) * 4 - (k > 26 ? s[8] * 2 : 0);
+      pts.push((k * 300 / 29).toFixed(1) + ',' + Math.max(4, Math.min(76, y)).toFixed(1));
+    }
+    const ok = '#2e7d5b', ng = '#b3362e';
+    const gates = [
+      ['유동성 (20일 평균 거래대금 ≥ 100억)', true],
+      ['MA50Div > 0 (50일선 위)', s[7] > 0],
+      ['Range52 ≥ 0.70 (52주 범위 상단)', s[5] >= 0.70],
+      ['과열 아님 (MA20Div 상위 5% 제외)', s[6] < 4.0]
+    ].map(([label, pass]) => ({ label, mark: pass ? '✓ Pass' : '✕ Fail', color: pass ? ok : ng }));
+    return {
+      rows,
+      cur: {
+        name: s[0], code: s[1], market: s[2], price: s[3].toLocaleString('ko-KR'),
+        chg: f(s[4]), chgFg: fg(s[4]), spark: pts.join(' '),
+        pMa50: s[14][0].toFixed(2), pRange: s[14][1].toFixed(2), pR3: s[14][2].toFixed(2),
+        score: (s[12] < 0 ? '−' : '') + Math.abs(s[12]).toFixed(2), gates
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>색상과 표기 규칙</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;600;700&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width: 1440px; height: 760px; box-sizing: border-box; padding: 40px 48px; background: #fbfbfd; color: #1c1e2c; font-family: 'Malgun Gothic Semilight','Malgun Gothic','Noto Sans KR',sans-serif; display: flex; flex-direction: column; gap: 24px">
+<div>
+<h1 style="margin: 0; font-size: 28px; font-weight: 700">색상·표기 규칙</h1>
+<p style="margin: 6px 0 0; color: #595d6c; font-size: 14px">현재 ui/theme.py · ui/colors.py 토큰을 그대로 쓰고, 새로 필요한 것만 추가합니다. 회색 테두리 = 기존, 보라 테두리 = 추가 제안.</p>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px">
+<div style="background: #ffffff; border: 1px solid #e4e7f5; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 10px">
+<div style="font-weight: 700">가격 방향 (기존 유지)</div>
+<div style="display: flex; gap: 8px; align-items: center"><span style="width: 36px; height: 24px; border-radius: 4px; background: #3b6fc4; display: inline-block"></span><span style="font-size: 13px">PROFIT #3b6fc4 · 상승·이익</span></div>
+<div style="display: flex; gap: 8px; align-items: center"><span style="width: 36px; height: 24px; border-radius: 4px; background: #d1453b; display: inline-block"></span><span style="font-size: 13px">LOSS #d1453b · 하락·손실</span></div>
+<div style="display: flex; gap: 8px; align-items: center"><span style="width: 36px; height: 24px; border-radius: 4px; background: #75798c; display: inline-block"></span><span style="font-size: 13px">FLAT #75798c · 0·해당 없음</span></div>
+<div style="color: #75798c; font-size: 12px; line-height: 1.5">2026-09-22 결정(파랑=상승)을 유지합니다. 히트맵은 같은 두 색의 투명도 0.04~0.24.</div>
+</div>
+<div style="background: #ffffff; border: 1px solid #e4e7f5; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 10px">
+<div style="font-weight: 700">판정 (기존 + 배지 형태)</div>
+<div style="display: flex; gap: 6px; flex-wrap: wrap">
+<span style="background: #e8f3ee; color: #2e7d5b; border-radius: 10px; padding: 3px 10px; font-size: 12px; font-weight: 600">✓ Pass</span>
+<span style="background: #fff6e8; color: #8a4f08; border-radius: 10px; padding: 3px 10px; font-size: 12px; font-weight: 600">! Undecided</span>
+<span style="background: #fdf0ef; color: #b3362e; border-radius: 10px; padding: 3px 10px; font-size: 12px; font-weight: 600">✕ Fail</span>
+<span style="background: #f0f1f8; color: #595d6c; border-radius: 10px; padding: 3px 10px; font-size: 12px; font-weight: 600">– Not tested</span>
+</div>
+<div style="color: #75798c; font-size: 12px; line-height: 1.5">OK #2e7d5b · WARN #b8650a · DANGER #d1453b. 색만으로 구분하지 않도록 기호(✓ ! ✕ –)와 글자를 함께 씁니다. 배지 글자색은 대비 4.5:1을 위해 한 단계 어둡게.</div>
+</div>
+<div style="background: #ffffff; border: 2px solid #9184d9; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 10px">
+<div style="font-weight: 700">차트 계열 (추가 제안)</div>
+<div style="display: flex; gap: 8px; align-items: center"><span style="width: 36px; height: 3px; background: #9184d9; display: inline-block"></span><span style="font-size: 13px">선택한 전략 · ACCENT</span></div>
+<div style="display: flex; gap: 8px; align-items: center"><span style="width: 36px; height: 0; border-top: 2px dashed #9397ab; display: inline-block"></span><span style="font-size: 13px">벤치마크 BM1 · TEXT_FAINT 점선</span></div>
+<div style="display: flex; gap: 8px; align-items: center"><span style="width: 36px; height: 0; border-top: 2px dashed #b8650a; display: inline-block"></span><span style="font-size: 13px">목표선 (Sharpe 1.5, −15%) · WARN 점선</span></div>
+<div style="display: flex; gap: 8px; align-items: center"><span style="width: 36px; height: 14px; background: rgba(209,69,59,0.18); border-top: 1px solid #d1453b; display: inline-block"></span><span style="font-size: 13px">낙폭 영역 · LOSS 18%</span></div>
+<div style="color: #75798c; font-size: 12px; line-height: 1.5">10개 변형을 한 차트에 모두 그리지 않고, 선택 1개 + BM1만 기본 표시합니다.</div>
+</div>
+<div style="background: #ffffff; border: 2px solid #9184d9; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 10px">
+<div style="font-weight: 700">숫자 표기 (추가 제안)</div>
+<ul style="margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.7; color: #1c1e2c">
+<li>숫자는 오른쪽 정렬, 글꼴은 맑은 고딕 Semilight 하나(ui.md 1.3)</li>
+<li>음수는 '−'(U+2212), 부호 있는 차이는 '+'</li>
+<li>MDD는 음수로 표시, 기준은 |MDD| ≤ 15%</li>
+<li>벤치마크 대비는 %p 단위</li>
+<li>KPI 카드: 영어 라벨 + 한 줄 한국어 풀이</li>
+</ul>
+</div>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px">
+<div style="background: #ffffff; border: 1px solid #e4e7f5; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 8px">
+<div style="font-weight: 700">바탕과 강조 (기존 유지)</div>
+<div style="display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: #595d6c">
+<span style="display: flex; align-items: center; gap: 6px"><span style="width: 28px; height: 20px; border: 1px solid #e4e7f5; background: #fbfbfd; display: inline-block"></span>BG #fbfbfd</span>
+<span style="display: flex; align-items: center; gap: 6px"><span style="width: 28px; height: 20px; border: 1px solid #e4e7f5; background: #ffffff; display: inline-block"></span>SURFACE #ffffff</span>
+<span style="display: flex; align-items: center; gap: 6px"><span style="width: 28px; height: 20px; background: #f3f5fe; display: inline-block"></span>HDR_BG #f3f5fe</span>
+<span style="display: flex; align-items: center; gap: 6px"><span style="width: 28px; height: 20px; background: #9184d9; display: inline-block"></span>ACCENT #9184d9</span>
+<span style="display: flex; align-items: center; gap: 6px"><span style="width: 28px; height: 20px; background: #5d5294; display: inline-block"></span>ACCENT_TEXT #5d5294</span>
+<span style="display: flex; align-items: center; gap: 6px"><span style="width: 28px; height: 20px; background: #f5f4ff; border: 1px solid #c9c2f3; display: inline-block"></span>ACCENT_BG #f5f4ff</span>
+</div>
+<div style="color: #75798c; font-size: 12px">글꼴: 맑은 고딕 Semilight (ui/common.py FONT_FAMILIES). 주 버튼은 탭당 하나, 보라 테두리.</div>
+</div>
+<div style="background: #ffffff; border: 2px solid #9184d9; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 8px">
+<div style="font-weight: 700">QSS 추가분 (theme.py에 넣을 선택자)</div>
+<div style="font-family: Consolas, 'Courier New', monospace; font-size: 12px; background: #f3f5fe; border-radius: 6px; padding: 10px 12px; line-height: 1.6; color: #1c1e2c">QLabel#badgeOk { color: #2e7d5b; background: #e8f3ee; border-radius: 9px; padding: 1px 8px; }<br>QLabel#badgeWarn { color: #8a4f08; background: #fff6e8; ... }<br>QLabel#badgeFail { color: #b3362e; background: #fdf0ef; ... }<br>QLabel#badgeNa { color: #595d6c; background: #f0f1f8; ... }<br>QFrame#VerdictCard, QFrame#DashboardCard { ... 기존 카드 규칙 공유 }</div>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":760}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
