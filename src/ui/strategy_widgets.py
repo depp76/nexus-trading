@@ -8,7 +8,7 @@ ui/trend_following_tab.py so the tab module stays about wiring.
   - KpiRow: the six KpiCards for the selected run, reflowing to 3x2 when narrow
   - TargetCheckCard: what the app itself can judge about the selected run
   - SharpeBarDelegate: the comparison table's Sharpe bar cell
-  - fill_comparison / fill_monthly / fill_trades: the result tables
+  - fill_comparison / fill_monthly: the result tables (the trade list is ui.dialogs.strategy_trades)
 
 Pure display: every number comes from a RunSummary the research run already
 produced; nothing here recomputes a metric the scorecard reports.
@@ -459,9 +459,6 @@ def fill_monthly(table: QTableWidget, run) -> None:
         table.setUpdatesEnabled(True)
 
 
-TRADE_HEADERS = ["Entry", "Exit", "Name", "Ticker", "매입가", "매도가", "Return", "Days", "Reason"]
-_CENTER = Qt.AlignmentFlag.AlignCenter
-
 # Exit reasons the engine and the policies record (backtest.py, scoring_policy.py,
 # benchmarks.py) -> the label the trade lists show; the code stays on the tooltip.
 EXIT_REASONS = {
@@ -510,29 +507,3 @@ def trade_summary(trades) -> str:
             f"{mean_ret:+.1f}% · 평균 보유 {mean_days:.0f}일 · 손익 합계 {pnl:+,.0f}원"
             if real else f"{len(trades)}건 (비중 축소·연말 정산만) · 손익 합계 {pnl:+,.0f}원")
 
-
-def fill_trades(table: QTableWidget, run, names: dict | None = None) -> None:
-    """One row per closed trade of a strategy run, newest exit first; `names`
-    maps a ticker to its company name (blank when unknown). Dates are centred;
-    the fill prices are in KRW."""
-    table.setUpdatesEnabled(False)
-    try:
-        trades = sorted_trades(run)
-        table.setRowCount(len(trades))
-        for i, t in enumerate(trades):
-            ret = t.ret_pct / 100.0
-            cells = [
-                _item(f"{t.entry_date:%Y-%m-%d}", _CENTER),
-                _item(f"{t.exit_date:%Y-%m-%d}", _CENTER),
-                _item((names or {}).get(t.ticker, ""), _LEFT),
-                _item(t.ticker, _LEFT),
-                _item(fmt_price(t.entry_price)),
-                _item(fmt_price(t.exit_price)),
-                _item(f"{t.ret_pct:+.1f}%", color=_hex(ret)),
-                _item(str(t.holding_days)),
-                _item(reason_label(t.reason), _LEFT, tooltip=t.reason),
-            ]
-            for c, item in enumerate(cells):
-                table.setItem(i, c, item)
-    finally:
-        table.setUpdatesEnabled(True)

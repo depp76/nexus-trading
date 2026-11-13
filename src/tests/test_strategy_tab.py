@@ -700,8 +700,8 @@ class TestMultiSelect(unittest.TestCase):
         self.assertEqual(set(tab.variant_seg.checked_keys()), set(before))
 
 class TestTradeList(unittest.TestCase):
-    """docs/ui.md 8.13: the 매매 내역 tab (centred dates, fill prices, summary)
-    and its popup (StrategyTradesDialog)."""
+    """docs/ui.md 8.13: the 매매 내역 tab and its popup show the same list
+    (StrategyTradesView); the popup opens wide enough for every column."""
 
     @classmethod
     def setUpClass(cls):
@@ -716,22 +716,58 @@ class TestTradeList(unittest.TestCase):
     def _run(self, vid="A0"):
         return next(r for r in self.result.runs_at(1.0) if r.id == vid)
 
-    def test_compact_list_has_prices_and_centred_dates(self):
-        from ui.strategy_widgets import TRADE_HEADERS, fmt_price, reason_label
+    def test_tab_list_matches_the_popup(self):
+        from ui.dialogs.strategy_trades import COLUMNS
+        from ui.strategy_widgets import fmt_price, reason_label
         tab = self._tab()
         run = self._run()
         self.assertTrue(run.trades)
         t = max(run.trades, key=lambda t: (t.exit_date, t.entry_date))
-        headers = [tab.trades_table.horizontalHeaderItem(c).text() for c in range(len(TRADE_HEADERS))]
-        self.assertEqual(headers[4:6], ["매입가", "매도가"])
-        self.assertEqual(tab.trades_table.item(0, 4).text(), fmt_price(t.entry_price))
-        self.assertEqual(tab.trades_table.item(0, 5).text(), fmt_price(t.exit_price))
+        headers = [tab.trades_table.horizontalHeaderItem(c).text() for c in range(tab.trades_table.columnCount())]
+        self.assertEqual(headers, [h for h, _ in COLUMNS])
+        cells = {h: tab.trades_table.item(0, c).text() for c, h in enumerate(headers)}
+        self.assertEqual(cells["매입가"], fmt_price(t.entry_price))
+        self.assertEqual(cells["매도가"], fmt_price(t.exit_price))
+        self.assertEqual(cells["수량"], f"{t.qty:,}")
+        self.assertEqual(cells["시장"], "KOSPI")
         for c in (0, 1):
             self.assertEqual(tab.trades_table.item(0, c).textAlignment(), int(Qt.AlignmentFlag.AlignCenter))
-        self.assertEqual(tab.trades_table.item(0, 8).text(), reason_label(t.reason))
-        self.assertEqual(tab.trades_table.item(0, 8).toolTip(), t.reason)
+        self.assertEqual(cells["청산 사유"], reason_label(t.reason))
+        self.assertEqual(tab.trades_table.item(0, 14).toolTip(), t.reason)
         self.assertIn(f"{len(run.trades)}건", tab.trades_summary_lbl.text())
         self.assertTrue(tab.trades_detail_btn.isEnabled())
+        # same rows, same order, same text as the popup
+        dlg = tab.open_trades_dialog()
+        grid = lambda tbl: [[tbl.item(r, c).text() for c in range(tbl.columnCount())] for r in range(tbl.rowCount())]
+        self.assertEqual(grid(dlg.table), grid(tab.trades_table))
+        dlg.close()
+
+    def test_tab_list_filters_and_keeps_them_across_runs(self):
+        tab = self._tab()
+        run = self._run()
+        code = sorted({t.reason for t in run.trades})[0]
+        view = tab.trades_view
+        view.reason_combo.setCurrentIndex(view.reason_combo.findData(code))
+        self.assertEqual(len(view.visible_rows()), sum(1 for t in run.trades if t.reason == code))
+        tab.select_variant("A1")            # A1 becomes the focus: filter carries over when the reason occurs
+        a1 = self._run("A1")
+        if any(t.reason == code for t in a1.trades):
+            self.assertEqual(view.reason_combo.currentData(), code)
+            self.assertEqual(len(view.visible_rows()), sum(1 for t in a1.trades if t.reason == code))
+        else:
+            self.assertEqual(view.reason_combo.currentIndex(), 0)
+
+    def test_popup_is_wide_enough_for_every_column(self):
+        tab = self._tab()
+        dlg = tab.open_trades_dialog()
+        self.assertGreaterEqual(dlg.width(), min(dlg.wanted_width(), dlg.screen().availableGeometry().width() - 40))
+        if dlg.width() >= dlg.wanted_width():
+            dlg.layout().activate()
+            vp = dlg.table.viewport().width() + dlg.table.verticalScrollBar().sizeHint().width()
+            cols = sum(dlg.table.columnWidth(c) for c in range(dlg.table.columnCount() - 1))
+            self.assertLessEqual(cols, vp)
+            self.assertFalse(dlg.table.horizontalScrollBar().isVisible())
+        dlg.close()
 
     def test_benchmark_disables_the_popup(self):
         tab = self._tab("BM1")

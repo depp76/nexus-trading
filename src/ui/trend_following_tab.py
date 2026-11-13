@@ -53,10 +53,10 @@ from ui.colors import LOSS, WARN, SERIES_BENCH, SERIES_TARGET, DRAWDOWN_ALPHA, S
 from ui.theme import TEXT, TEXT_MUTED, TEXT_FAINT, TEXT_EMPTY, LINE
 from ui.strategy_widgets import (
     TARGET_MDD, SegmentRow, KpiRow, TargetCheckCard, SharpeBarDelegate, COMPARISON_HEADERS, SHARPE_COL,
-    MONTH_HEADERS, TRADE_HEADERS, comparison_rows, fill_comparison, fill_monthly, fill_trades,
-    drawdown_series, sorted_trades, trade_summary,
+    MONTH_HEADERS, comparison_rows, fill_comparison, fill_monthly,
+    drawdown_series, sorted_trades,
 )
-from ui.dialogs.strategy_trades import StrategyTradesDialog
+from ui.dialogs.strategy_trades import StrategyTradesDialog, StrategyTradesView
 
 logger = logging.getLogger(__name__)
 
@@ -449,32 +449,17 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         install_table_keys(self.monthly_table)
         self.result_tabs.addTab(self.monthly_table, "월별 수익률")
 
-        # The compact list, with a summary line and the full list in a popup
-        # (StrategyTradesDialog: "자세히 보기", a double-click or Enter on a row).
-        trades_box = QWidget()
-        trades_v = QVBoxLayout(trades_box)
-        trades_v.setContentsMargins(0, 6, 0, 0)
-        trades_v.setSpacing(4)
-        trades_bar = QHBoxLayout()
-        trades_bar.setContentsMargins(6, 0, 6, 0)
-        self.trades_summary_lbl = QLabel("")
-        self.trades_summary_lbl.setObjectName("muted")
-        trades_bar.addWidget(self.trades_summary_lbl, 1)
-        self.trades_detail_btn = make_button("자세히 보기", on_click=self.open_trades_dialog,
-                                             tooltip="선택한 변형의 매매 내역을 수량·금액·손익·비용까지 큰 표로 봅니다")
+        # The same list as the popup (StrategyTradesView); "크게 보기", a
+        # double-click or Enter on a row opens StrategyTradesDialog.
+        self.trades_detail_btn = make_button("크게 보기", on_click=self.open_trades_dialog,
+                                             tooltip="같은 매매 내역을 모든 열이 한 번에 보이는 큰 창으로 엽니다")
         self.trades_detail_btn.setEnabled(False)
-        trades_bar.addWidget(self.trades_detail_btn)
-        trades_v.addLayout(trades_bar)
-        self.trades_table = setup_table(QTableWidget(0, len(TRADE_HEADERS)), empty_text=_TRADES_EMPTY)
-        self.trades_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.trades_table.setHorizontalHeaderLabels(TRADE_HEADERS)
-        for c, w in enumerate((92, 92, 140, 70, 84, 84, 70, 50)):
-            self.trades_table.setColumnWidth(c, w)
-        self.trades_table.horizontalHeader().setStretchLastSection(True)
-        self.trades_table.cellDoubleClicked.connect(self._on_trade_activated)
-        install_table_keys(self.trades_table, on_activate=self._on_trade_activated)
-        trades_v.addWidget(self.trades_table, 1)
-        self.result_tabs.addTab(trades_box, "매매 내역")
+        self.trades_view = StrategyTradesView(empty_text=_TRADES_EMPTY, on_activate=self._on_trade_activated,
+                                              extra_widgets=(self.trades_detail_btn,))
+        self.trades_view.setContentsMargins(6, 6, 6, 0)
+        self.trades_table = self.trades_view.table
+        self.trades_summary_lbl = self.trades_view.summary_lbl
+        self.result_tabs.addTab(self.trades_view, "매매 내역")
 
         self.event_table = setup_table(QTableWidget(), empty_text="실행하면 6-1 이벤트 스터디가 여기에 나옵니다")
         self.event_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -694,7 +679,8 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             self.target_card.clear()
             self.compare_table.setRowCount(0)
             fill_monthly(self.monthly_table, None)
-            fill_trades(self.trades_table, None)
+            self.trades_view.set_trades([])
+            self.trades_detail_btn.setEnabled(False)
             self._chart_series = []
             self._draw_empty_chart()
             self._update_readout(None)
@@ -819,20 +805,20 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.target_card.show_run(run)
         fill_monthly(self.monthly_table, run)
         self.trades_table._empty_hint.text = _TRADES_EMPTY if run.kind == "strategy" else _TRADES_EMPTY_BM
-        fill_trades(self.trades_table, run, self._result.dataset_info.get("names"))
+        info = self._result.dataset_info
         trades = sorted_trades(run)
-        self.trades_summary_lbl.setText(trade_summary(trades) if run.kind == "strategy" else "")
+        self.trades_view.set_trades(trades, info.get("names"), info.get("ticker_markets"))
         self.trades_detail_btn.setEnabled(bool(trades))
 
     # ------------------------------------------------------- trade list popup
     def open_trades_dialog(self, *_, row: int | None = None):
-        """The selected run's trades in StrategyTradesDialog; `row` (a row of the
-        compact list) is pre-selected there. Modeless, one per run shown."""
+        """The selected run's trades in StrategyTradesDialog; the trade on `row`
+        of the tab's list (as sorted there) is pre-selected. Modeless."""
         run = self.selected_run()
         trades = sorted_trades(run)
         if not trades:
             return None
-        pick = trades[row] if row is not None and 0 <= row < len(trades) else None
+        pick = self.trades_view._row_trade(row) if row is not None and 0 <= row < self.trades_table.rowCount() else None
         info = self._result.dataset_info
         dlg = StrategyTradesDialog(
             f"{run.id} · 비용 {run.cost_mult:g}x · {run.label}", trades, info.get("names"), info.get("ticker_markets"),
