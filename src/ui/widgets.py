@@ -80,6 +80,7 @@ COLUMNS = [
     ColSpec("d20",       "20D",            _NARROW_W, _NARROW_WEIGHT, "momentum", 10),
     ColSpec("d60",       "60D",            _NARROW_W, _NARROW_WEIGHT, "momentum", 10),
     ColSpec("d120",      "120D",           _NARROW_W, _NARROW_WEIGHT, "momentum", 10),
+    ColSpec("score",     "Score",          54, 0.55, "momentum", None),
     ColSpec("trend",     "Trend",          80, 1.0,  "momentum", None),
 ]
 
@@ -88,20 +89,21 @@ COLUMNS = [
 # is meant makes future reordering a silent bug. Kept in sync with COLUMNS
 # by the assertion below (fails loudly at import time if they drift).
 COL_IDENTITY, COL_CAP, COL_TPER, COL_FPER, COL_PRICE, COL_CHG, COL_RANGE52W, \
-    COL_MA20DIV, COL_MA50DIV, COL_D3, COL_D10, COL_D20, COL_D60, COL_D120, COL_TREND = range(len(COLUMNS))
+    COL_MA20DIV, COL_MA50DIV, COL_D3, COL_D10, COL_D20, COL_D60, COL_D120, COL_SCORE, COL_TREND = range(len(COLUMNS))
 assert [c.key for c in COLUMNS] == [
     "identity", "cap", "tper", "fper", "price", "chg", "range52w", "ma20div", "ma50div",
-    "d3", "d10", "d20", "d60", "d120", "trend",
+    "d3", "d10", "d20", "d60", "d120", "score", "trend",
 ]
 
 # Column groups (user direction 2026-10-02; the [Price, Chg] pair moved left
 # of 52W Range on 2026-10-20): [Cap, tPER, fPER], [Price, Chg], [52W Range,
-# MA20 Div, MA50 Div], [3D..120D], [Trend]. A thin gray
+# MA20 Div, MA50 Div], [3D..120D], [Score, Trend] (Score added 2026-11-13,
+# ui_redesign_2026-11 P2-1: the last Trend Score run's weekly average). A thin gray
 # (GROUP_LINE_W px, LINE_GROUP = the table's outer-frame gray) vertical
 # divider sits on the boundary on the left of each group's first column
 # (the previous column's last pixel, where the grid line is): that also
 # covers the left of Cap and the right of 120D (= the left of Trend).
-GROUP_START_COLS = (COL_CAP, COL_PRICE, COL_RANGE52W, COL_D3, COL_TREND)
+GROUP_START_COLS = (COL_CAP, COL_PRICE, COL_RANGE52W, COL_D3, COL_SCORE)
 GROUP_LINE_W = 1
 
 # Columns that take a range filter (ui.universe_views.RANGE_FIELDS) -> column index.
@@ -1030,7 +1032,7 @@ class StockTable(QTableWidget):
             self.setUpdatesEnabled(True)
 
     def _populate_row(self, row, item, highlights):
-        """Renders every cell of one row from the redesigned 15-column spec
+        """Renders every cell of one row from the redesigned column spec
         (docs/ui.md 2.2). Index/yield/commodity rows share the table with
         equities; change_mode picks the price/change formatting and the
         cap/PER cells show "-" where the concept does not apply."""
@@ -1061,13 +1063,17 @@ class StockTable(QTableWidget):
             "ticker": ticker,
             "name": item.get('name', ticker),
             "market": item.get('market', ''),
-            # The Universe's pinned Trend Score rows carry a "Top 3 (+0.79)" /
-            # "Bottom 7 (-0.41)" tag after the market (universe_tab._sort_all_data).
-            "meta": f"{ticker} · {item.get('market', '')}"
-                    + (f" · {item['trend_rank']}" if item.get('trend_rank') else ""),
+            "meta": f"{ticker} · {item.get('market', '')}",
+            # The Universe's pinned Trend Score rows carry a ("top"|"bottom", n)
+            # rank the delegate draws as a small badge before the name
+            # (universe_tab._sort_all_data; ui_redesign_2026-11 P2-1).
+            "rank": item.get('trend_rank'),
             "status": status,
             "mode": mode,
         })
+        rank = item.get('trend_rank')
+        if rank:
+            identity_item.setToolTip(f"Trend Score {'Top' if rank[0] == 'top' else 'Bottom'} {rank[1]}")
         self.setItem(row, COL_IDENTITY, identity_item)
 
         # COL_PRICE: Price -- NumericItem (see its docstring: setData(EditRole)
@@ -1194,6 +1200,21 @@ class StockTable(QTableWidget):
                 if bg is not None:
                     cell.setBackground(bg)
             self.setItem(row, col, cell)
+
+        # COL_SCORE: the last Trend Score run's weekly average total (-1..2),
+        # "-" for a name that run did not score or before any run.
+        score = item.get('trend_score')
+        if score is not None and score == score:
+            score_item = NumericItem(f"{score:+.2f}", float(score))
+            score_item.setTextAlignment(right)
+            score_item.setFont(numeric_font)
+        else:
+            score_item = NumericItem("-", float('-inf'))
+            score_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            score_item.setForeground(QColor(TEXT_EMPTY))
+        score_item.setToolTip("Trend Score: weekly average of pct(MA50Div) + pct(Range52) - pct(R3), "
+                              "from the last Trend Score run (trend_following.md 2-5)")
+        self.setItem(row, COL_SCORE, score_item)
 
         # COL_TREND: Trend -- a small chart of the five momentum readings above (_MOMENTUM_COLS)
         # (docs/ui.md's "1Y" sparkline, honestly relabeled: see TrendDelegate)

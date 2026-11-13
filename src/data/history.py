@@ -41,6 +41,26 @@ def _cached_lookup(cache_key):
     return None
 
 
+def peek_recent_closes(ticker: str, n: int = 120) -> list[float]:
+    """The last `n` daily closes of `ticker` from _HIST_CACHE only -- never a
+    network call, so a UI slot may call it (the Universe detail panel's mini
+    chart). Uses the newest cached frame of any start date, stale or not;
+    empty when the ticker has no cached history."""
+    with _dc._HIST_CACHE_LOCK:
+        frames = [df for (tk, _start), df in _dc._HIST_CACHE.items() if tk == ticker]
+    if not frames:
+        return []
+    df = frames[-1]
+    try:
+        if df is None or df.is_empty() or "Close" not in df.columns:
+            return []
+        closes = df["Close"].drop_nulls().tail(n).to_list()
+    except Exception:
+        logger.debug("peek_recent_closes(%s) failed", ticker, exc_info=True)
+        return []
+    return [float(c) for c in closes]
+
+
 def get_historical_data(ticker: str, start: str) -> pl.DataFrame:
     """Historical data with a smart cache that skips empty DataFrames.
 
