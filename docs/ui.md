@@ -12,6 +12,9 @@ Strategy 탭은 2026-09-28 옛 전략 계층과 함께 제거됐다가 같은 �
 | Trading History | `Trading History Redesign.dc.html` | 10건 |
 | Total Assets | `Total Assets Redesign.dc.html` | 9건 |
 | ~~Strategy~~ | `Strategy Redesign.dc.html` | 9건 — 옛 Strategy 탭 기준. 지금의 Strategy 탭(Trend Following)과는 다른 화면이라 5장은 기록용 |
+| Strategy › Trend Following (2026-11) | `docs/ui_mockups/2026-11/Main.dc.html` | 8.10 — 실행 화면 `impl_strategy.png` |
+| Trading Universe 상세 패널 (2026-11) | `docs/ui_mockups/2026-11/Universe.dc.html` | 8.10 |
+| 토큰·배지 (2026-11) | `docs/ui_mockups/2026-11/Tokens.dc.html` | 8.10 |
 
 ---
 
@@ -716,3 +719,39 @@ app.setStyleSheet(app_qss(FONT_FAMILY_CSS))
 - **한 경로**: 표의 행 숨김과 뷰 건수 모두 `ui/universe_views.py`의 `matches()`를 쓴다(Qt 없음). 표는 행을
   `StockTable.row_values()`로 dict로 바꿔 넘긴다. 그래서 뷰의 건수는 그 뷰를 골랐을 때 보이는 행 수와 항상 같다.
 - 헤더 클릭은 계속 정렬이다. 열마다 필터 아이콘을 두지 않은 이유는 58px 열에서 라벨과 겹치고 클릭이 정렬과 충돌하기 때문.
+
+### 8.10 Strategy 결과 화면·Universe 상세 패널 (2026-11)
+
+구현 지시서 `docs/ui_redesign_2026-11.md`(P0~P3)의 결정 요약. 시안과 이 장이 다른 곳은 이 장(8장)을 따랐다(지시서 0.3).
+
+- **배지 4종**(`ui.common.make_badge` / `set_badge`, QSS `QLabel#badgeOk/Warn/Fail/Na`): 판정 표시이며 버튼이 아니므로
+  ✓ ✕ 같은 기호를 허용한다(버튼 라벨은 여전히 기호 금지, 8.1). 글자색은 OK/WARN/DANGER보다 한 단계 진해 작은 글씨도 대비 4.5:1.
+- **KpiCard**(`ui.common`): 대문자 라벨, 우상단 배지 자리, 값(16pt = `FONT_TITLE`), 한 줄 풀이(`kpiHelp`). History의 `KpiStrip`은 그대로.
+- **Strategy › Trend Following** (`ui/trend_following_tab.py` + `ui/strategy_widgets.py`), 위에서 아래로:
+  1. 실행 설정 카드: 폼 값을 칩(`settingsChip`)으로 요약, 오른쪽에 Edit settings · Save Report · Stop · Run Research(primary 맨 끝).
+     폼은 **실행 전 첫 화면에서는 펼쳐 두고, 결과가 오면 접는다**(Edit settings로 다시 펼침).
+  2. 변형 세그먼트(결과의 ID 순서, BM1~BM4 포함, 고정 폭 52)와 비용 세그먼트 0x | 1x | 2x(결과에 있는 배수만 활성).
+     기본 선택은 1x와 1x Sharpe가 가장 높은 전략 — 선택 초기값일 뿐 순위·채택 표시가 아니다.
+  3. KPI 카드 6장(Sharpe · Max drawdown · CAGR · vs BM1 · Volatility · Trades), 폭 960px 미만이면 3×2.
+     목표 배지는 Sharpe ≥ 1.5, |MDD| ≤ 15%(`TARGET_SHARPE`, `TARGET_MDD`; 사용자 성과 기준 H). 벤치마크 선택 시 배지 숨김.
+  4. 차트(`sharex`, 3:1): 위 NAV(100 기준)는 **선택 변형 + BM1만**(`SERIES_SELECTED` 실선 / `SERIES_BENCH` 점선), Show all이면 나머지를
+     `TEXT_EMPTY` 가는 선으로. 아래 낙폭은 `LOSS` 채움(`DRAWDOWN_ALPHA`)과 −15% 목표선(`SERIES_TARGET`). 낙폭의 고점은 시드 1.0에서
+     시작해 `metrics.max_drawdown`과 같은 값이 된다. readout·crosshair는 두 축에 같은 x.
+  5. Target check 카드: **앱이 직접 계산하는 것만**(Sharpe, MDD, 둘 다 = H). E2·A5는 "Not run here" — 검증 리포트의 고정 문구·J1 판정을 넣지 않는다.
+  6. 결과 탭: Variant comparison(기본; 한 비용 배수의 전략 + BM1~BM4, Sharpe 막대 0~1.6에 1.5 눈금, MDD 글자는 기준 판정이므로
+     상태 채널 OK/FAIL, 행 클릭 = 세그먼트 선택) · All metrics(이전 전체 열 표 그대로) · Monthly returns(`heatmap_bg(v*100, 10)`) ·
+     Trades · Event study · Warnings (n)(n > 0이면 탭 글자 WARN — 전역 QSS가 탭 색을 정하므로 `QTabWidget#ResultTabs[warn="true"]
+     QTabBar::tab:last` 규칙으로 칠한다).
+  7. 변형·비용 전환은 재실행 없이 이미 받은 `ResearchResult`로 다시 그린다.
+- **Trading Universe**:
+  - **Score 열**(Trend 왼쪽, [Score, Trend] 그룹): 마지막 Trend Score 실행의 주간 평균 총점(−1~2, `+0.00`), 실행 전·미채점은 `-`.
+    고정 해제(Trend Score 재클릭) 뒤에도 남고, 세션 안에서만 유효해 `universe_cache.json`에 저장하지 않는다.
+  - **순위 배지**: 이름 앞 `T3`(Top, PROFIT 계열 옅은 바탕) / `B7`(Bottom, LOSS 계열). 150px 이름 열에서 이름 자리를 남기려고
+    짧게 쓰고, 셀 툴팁에 "Trend Score Top 3"를 적는다(시안은 "Top 3").
+  - **상세 패널**(`ui/universe_detail.py`): 표 오른쪽 `QSplitter`, 기본 320px, 핸들 더블클릭으로 접기·펼치기(툴바 버튼을 늘리지 않음).
+    현재 행을 따라 이름·티커·시장·현재가·Chg, 일봉 120세션 미니 차트, 점수 구성(pct(MA50Div)·pct(Range52)·pct(R3) 카드와
+    주간 평균), 게이트 4줄 Pass/Fail, MA Chart · AI Report(우클릭 메뉴와 같은 동작). 실행 전에는
+    "Run Trend Score to see the score breakdown". 미니 차트는 새로 받지 않고 `data.history.peek_recent_closes`로 Universe 갱신이
+    채운 `_HIST_CACHE`만 읽는다(시안의 "TrendDelegate 시계열"은 5개 모멘텀 점이라 60~120일 곡선이 아님).
+  - 창이 좁으면(약 1500px) 패널 때문에 표가 가로 스크롤되고 이름 열이 최소 폭이 된다 — 패널을 접어 넓힌다.
+- 한국어 문구: KPI 카드 풀이 줄, 점수 구성 카드 풀이, E2·A5 툴팁은 지시서 문구 그대로 한국어(CLAUDE.md 예외).

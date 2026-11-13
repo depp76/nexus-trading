@@ -38,7 +38,7 @@
 - **DB**: SQLite (WAL 모드), `trade_db.py`
 - **AI**: `google-genai` (`gemini_helper.py`로 종목 리포트에 실사용 중; 자연어 필터·포트폴리오 진단은 2026-09-19 삭제), `google-cloud-aiplatform` (requirements에 포함, 미사용)
 
-### 소스 코드 구조 (2026-09-28 갱신)
+### 소스 코드 구조 (2026-11-13 갱신)
 
 > **구조가 바뀔 때마다(폴더/파일 신설·이동·삭제) 이 섹션을 최신 상태로 갱신할 것.** 3-1의
 > "현재 파일 구조"는 Phase 0~5 리팩토링 당시의 역사적 기록이라 갱신 대상이 아니고, 지금
@@ -65,6 +65,9 @@ src/
 │   ├── widgets.py / delegates.py        # StockTable·헤더·필터 팝업 / 커스텀 페인팅 셀
 │   ├── colors.py / theme.py             # PROFIT/LOSS 색 규칙 / 디자인 토큰 + 전역 QSS
 │   ├── universe_tab.py / history_tab.py / assets_tab.py   # 상위 탭 3개
+│   ├── universe_detail.py               # Universe 오른쪽 상세 패널 (Trend Score 구성·게이트, 미니 차트)
+│   ├── strategy_tab.py / trend_following_tab.py  # Strategy 상위 탭 / Trend Following 서브탭
+│   ├── strategy_widgets.py              # Strategy 결과 화면 위젯 (KpiRow·SharpeBarDelegate·결과 표 채우기)
 │   ├── ma_chart.py                      # StockMaLauncherMixin (MA 차트 다이얼로그 실행)
 │   ├── history_table.py / history_calc.py # History 탭 셀 팩토리·SectionTable / 순수 계산(summarize_positions 등)
 │   └── dialogs/                           # 다이얼로그 8개 (index_ma·stock_ma·trade_edit·trade_history·
@@ -805,3 +808,4 @@ pytest 219/219, ruff 0건.
 | 2026-11-06 (3차) | `review_codex.md` 재검토 후속. **R1**: 자산 리포트(`build_report`)와 `AssetReportThread`가 시장을 `== "US"`로만 비교해 거래 입력창의 NASDAQ·NASDAQ 100·NYSE·AMEX 종목은 환율 조회 없이 달러 종가를 원화처럼 합산하고 `priced=True`로 표시하던 것을 `is_us_market()`으로 통일(현재 DB의 미국 거래는 `US` 라벨 2건뿐이라 실제 수치 영향 없음). 기존 비교가 대소문자를 무시했으므로 `is_us_market()`도 대문자로 정규화. **R3**: `upsert_trade()`가 생성 키를 커밋 후에만 호출자 dict에 기록. **R2**: 거래 레거시 마이그레이션 `_migrate_legacy_json`과 관련 경로 상수 삭제(사용자 확인: 어느 PC에도 `custom_history.json`·`trade_overrides.json` 없음, 실패 처리를 고치는 대신 제거). `trading_record.json` 가져오기는 유지. R4는 스펙 결정이 필요해 보류. 검증: pytest 621, ruff 0건. |
 | 2026-11-13 | `review_codex.md` R4·Strategy UI 검토(S1·S3·S4·S8) 후속. **R4**: 6-4 위험지표(변동성·Sharpe·MDD·베타/알파·IR)도 시드 1.0 기준으로 첫 세션을 포함(`nav_returns(base)`, `max_drawdown(base)`, `session_rf`), 구간 표는 이전 구간 끝 NAV 기준. BM4 Sharpe ≈ 75(부동소수점 잡음끼리 나눈 값)도 0으로 수정. `dev_2021_2024_nex23` 실측: 전략 10개 Sharpe 차이 ≤ 0.001, BM1 −0.29 → −0.26, BM2 0.04 → 0.06, J1 결론 불변(스펙 9-21). **S1**: Investor flows가 꺼지면 A3~A5 체크박스 비활성화, 돌지 않은 변형은 `ResearchResult.skipped`로 리포트·상태·Warnings에 표시. **S3**: 탭 안 Warnings 패널. **S4**: 두 결과 표에 `install_table_keys`. **S8**: Run 툴팁에 C1~C3, End 라벨에 개발 구간 상한, 버튼 순서 Save·Stop·Run(primary 맨 끝). 검증: pytest 666, ruff 0건. |
 | 2026-11-13 (2차) | Strategy 탭 변형 선택을 팝업으로: 체크박스 10개 줄 → **Variants...** 버튼 + 선택 요약. `VariantPickerDialog`(`ui/dialogs/variant_picker.py`)는 A/B/C 그룹 체크 목록과 강조한 행의 규칙 설명을 나란히 보여준다. 설명은 `strategy/trend_following/variant_info.py`가 `Variant` 플래그·`StrategyParams`(폼 값)로 조립(스펙 9-22). Investor flows가 꺼지면 A3~A5는 설명만 보이고 체크 불가, 선택은 기억. 설명·목록 문구는 사용자 지시로 한국어(CLAUDE.md 예외 추가). 검증: pytest 673, ruff 0건, 오프스크린 렌더링으로 목록 잘림 확인 후 수정. |
+| 2026-11-13 (3차) | UI 개편(`docs/ui_redesign_2026-11.md`, 시안 `docs/ui_mockups/2026-11/`). **P0**: 배지 4종·KpiCard·칩 토큰과 QSS, `make_badge`/`KpiCard`. **P1**: Strategy 결과 화면을 실행 설정 칩 → 변형·비용 세그먼트 → KPI 카드 6장(Sharpe ≥ 1.5·\|MDD\| ≤ 15% 배지) → NAV+낙폭 차트·Target check 카드 → 결과 탭(Variant comparison·All metrics·Monthly returns·Trades·Event study·Warnings)으로 재구성, 새 모듈 `ui/strategy_widgets.py`. nex23 스냅샷 실행 화면 `impl_strategy.png`. **P2**: Universe Score 열, 이름 앞 순위 배지(T/B), 오른쪽 상세 패널(`ui/universe_detail.py`, 캐시 전용 미니 차트 `peek_recent_closes`), `scoring` 표시용 필드(`pct_*`, `Recommendation.scored`; 스펙 9-4). **P3**: `docs/ui.md` 8.10. 전략 계산 코드 변경 없음. 검증: pytest 696, ruff 0건. |

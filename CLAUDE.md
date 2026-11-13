@@ -52,7 +52,7 @@ working directory:
 ### Verification
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest src\tests -q      # ~640 tests, no network, ~30 s
+.\.venv\Scripts\python.exe -m pytest src\tests -q      # ~700 tests, no network, ~30 s
 .\.venv\Scripts\ruff.exe check src                      # pyflakes rules only (ruff.toml)
 ```
 
@@ -109,8 +109,13 @@ Dev tooling is in `requirements-dev.txt`
 - **`src/ui/`**: `universe_tab.py` (`UniverseTab`), `history_tab.py` (`TradingHistoryTab`),
   `assets_tab.py` (`TradingRecordTab`), `strategy_tab.py` (`StrategyTab`, the sub-tab host
   that merges its children's `collect_threads_to_stop()`), `trend_following_tab.py`
-  (`TrendFollowingTab`: request form -> `TrendFollowingResearchThread` -> scorecard table,
-  rebased NAV chart, event-study table, "Save Report" to `reports/`),
+  (`TrendFollowingTab`: request form folded behind a run-settings chip row ->
+  `TrendFollowingResearchThread` -> variant/cost segments, KPI cards, NAV + drawdown chart,
+  target-check card, result tabs (comparison, all metrics, monthly, trades, event study,
+  warnings), "Save Report" to `reports/`; docs/ui.md 8.10), `strategy_widgets.py` (that
+  screen's widgets: `KpiRow`, `TargetCheckCard`, `SharpeBarDelegate`, `SegmentRow`, table
+  fillers, `TARGET_SHARPE`/`TARGET_MDD`), `universe_detail.py` (`UniverseDetailPanel`, right of
+  the Universe table: score breakdown and gate of the last Trend Score run, cache-only mini chart),
   `widgets.py` (`StockTable`, `NumericItem`, `FilterPopup`, `GroupedHeaderView`), `delegates.py`
   (every custom-painted table cell: `CellDelegate` base + the Universe/History delegates),
   `ma_chart.py` (`StockMaLauncherMixin`, the MA-chart dialog launcher; `UniverseTab` is its
@@ -133,7 +138,8 @@ Dev tooling is in `requirements-dev.txt`
   `apply_matplotlib_font`, status color constants,
   input validators, `make_button`/`BTN_H` (every push button), `setup_table`/`TABLE_ROW_H` (every data
   table), `make_footer_label`/`TAB_MARGINS`/`TAB_SPACING` (the tab skeleton), `install_table_keys`
-  (Ctrl+C/Enter on a table), `KpiStrip` (History's KPI row; all docs/ui.md 8), `atomic_save_json` /
+  (Ctrl+C/Enter on a table), `KpiStrip` (History's KPI row), `KpiCard` / `make_badge` (Strategy
+  cards and status badges; all docs/ui.md 8), `atomic_save_json` /
   `safe_load_json`, `retire_thread`, `ThreadOwnerMixin`). Tabs never
   reference each other
   directly; `MainWindow` connects their signals (`status_message`, `refresh_started`,
@@ -166,7 +172,8 @@ Dev tooling is in `requirements-dev.txt`
   `price_crosscheck.py` (report-only KIS vs Naver comparison, `python -m data.price_crosscheck`)
   -> `listing.py`
   (`get_stock_listing`, day-scoped single-flight cache), `history.py` (`get_historical_data`
-  routing KR codes to Naver, bonds to cached series, else yfinance/yahooquery/FDR), `fx.py`
+  routing KR codes to Naver, bonds to cached series, else yfinance/yahooquery/FDR;
+  `peek_recent_closes` reads `_HIST_CACHE` only, never the network, so a UI slot may call it), `fx.py`
   (`get_usd_krw_rate`) -> `indicators.py` (`_compute_indicators`, `fetch_historical_changes`)
   -> `collectors/yahoo.py` (`yf_quote_batch` is the one Yahoo quote entry point, US bulk
   universe) -> `market.py` (per-market universe builds, single-stock lookup, index/MA
@@ -239,7 +246,10 @@ not fixtures. Trading History principal/deposit/withdrawal live in `QSettings`
   A second exception (user direction, 2026-11-13): the strategy-variant descriptions the
   Strategy tab's picker shows (`strategy/trend_following/variant_info.py` strings, the
   `ui/dialogs/variant_picker.py` list labels) are Korean, and the tests assert those
-  literals; their identifiers, comments and docstrings stay English.
+  literals; their identifiers, comments and docstrings stay English. The same applies to
+  the one-line explanations under the Strategy KPI cards and the Universe score cards
+  (`ui/strategy_widgets.py` `KPI_CARDS`, `ui/universe_detail.py`) and the E2/A5 tooltip,
+  worded as in `docs/ui_redesign_2026-11.md` (2026-11-13).
 - UI 변경은 `docs/ui.md` 의 전역 규칙을 따른다.
 - One font family app-wide, Malgun Gothic Semilight (user direction, 2026-09-19): every
   widget goes through `create_font()` (sizes from the `FONT_*` scale in `ui/common.py`),
