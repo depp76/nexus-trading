@@ -39,7 +39,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
 from paths import REPORTS_DIR
 from strategy.trend_following import (
-    SPEC_VERSION, DEV_END, StrategyParams, VARIANTS, COST_MULTIPLIERS, ResearchRequest, ResearchResult,
+    SPEC_VERSION, DEV_END, StrategyParams, VARIANTS, COST_MULTIPLIERS, ResearchRequest, ResearchResult, MARKETS,
 )
 from strategy.trend_following.research import SUMMARY_COLUMNS
 from strategy.trend_following.event_study import HORIZONS
@@ -222,8 +222,8 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         return card
 
     def _build_form(self) -> tuple[QWidget, QWidget]:
-        """Two rows (docs/ui.md 8.12): the window and the universe, then the
-        portfolio settings, costs, the two data switches and the variants."""
+        """Two rows (docs/ui.md 8.12): the window and the markets, then the
+        universe and portfolio settings, costs, the two data switches and the variants."""
         # The window ends today by default. Anything after DEV_END is the
         # spec's hold-out (6-5): such a request carries allow_holdout and the
         # chip, the form and the report say so (spec 9-23).
@@ -244,7 +244,17 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.universe_spin.setRange(20, 300)
         self.universe_spin.setSingleStep(10)
         self.universe_spin.setValue(StrategyParams.universe_size)
-        self.universe_spin.setToolTip("시가총액 상위 N개 KOSPI 종목")
+        self.universe_spin.setToolTip("선택한 시장 전체에서 시가총액(원화 환산) 상위 N개 종목")
+
+        # Markets the universe is drawn from (spec 9-25): any combination, at least one.
+        # Several markets are ranked together by KRW market cap.
+        self.market_buttons = {}
+        for m in MARKETS:
+            btn = make_button(m, checkable=True, checked=(m == "KOSPI"),
+                              tooltip="여러 시장을 고르면 선택한 시장 전체에서 시가총액 순으로 종목을 고릅니다. "
+                                      "미국 종목은 원화로 환산하고, 국면 필터는 종목별 자기 시장 지수로 판정합니다.")
+            btn.clicked.connect(lambda checked, mk=m: self._on_market_toggled(mk, checked))
+            self.market_buttons[m] = btn
 
         self.liquidity_spin = QSpinBox()
         self.liquidity_spin.setRange(0, 5000)
@@ -268,7 +278,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.cost_combo.setToolTip("trend_following.md 4-1 비용 민감도")
 
         self.flows_cb = QCheckBox("투자자 수급")
-        self.flows_cb.setToolTip("네이버 투자자별 매매 동향으로 F/FX 신호 계산. 처음 실행은 느림")
+        self.flows_cb.setToolTip("네이버 투자자별 매매 동향으로 F/FX 신호 계산(한국 종목만). 처음 실행은 느림")
         self.event_cb = QCheckBox("이벤트 스터디")
         self.event_cb.setToolTip("trend_following.md 6-1 돌파 이벤트 스터디")
         self.event_cb.setChecked(True)
@@ -301,10 +311,11 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         row1, row2 = QWidget(), QWidget()
         row1.setLayout(_row(
             ("기간", self.start_edit, "~", self.end_edit, self.holdout_lbl),
-            ("유니버스", self.universe_spin),
-            ("유동성 하한", self.liquidity_spin),
+            ("시장", *self.market_buttons.values()),
         ))
         row2.setLayout(_row(
+            ("유니버스", self.universe_spin),
+            ("유동성 하한", self.liquidity_spin),
             ("최대 보유", self.positions_spin),
             ("점검 요일", self.weekday_combo),
             ("비용", self.cost_combo),
@@ -314,6 +325,15 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.end_edit.dateChanged.connect(self._update_holdout)
         self._update_holdout()
         return row1, row2
+
+    def selected_markets(self) -> tuple[str, ...]:
+        return tuple(m for m in MARKETS if self.market_buttons[m].isChecked())
+
+    def _on_market_toggled(self, market: str, checked: bool):
+        if not checked and not self.selected_markets():
+            self.market_buttons[market].setChecked(True)     # at least one market stays selected
+            return
+        self._update_chips()
 
     def includes_holdout(self) -> bool:
         return self.end_edit.date().toPyDate() > DEV_END
@@ -469,7 +489,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         variants = f"변형 {len(VARIANTS)}개 전체" if n == len(VARIANTS) else f"변형 {len(VARIANTS)}개 중 {n}개"
         chips = [
             f"{start:%Y-%m-%d} → {end:%Y-%m-%d}",
-            f"KOSPI 상위 {self.universe_spin.value()}",
+            f"{'+'.join(self.selected_markets())} 상위 {self.universe_spin.value()}",
             f"유동성 ≥ {self.liquidity_spin.value()}억",
             f"최대 {self.positions_spin.value()}종목",
             f"점검: {self.weekday_combo.currentText()}",
@@ -562,7 +582,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             start=start, end=end, params=params, variant_ids=self._selected_variants(),
             cost_multipliers=tuple(mults), include_flows=self.flows_cb.isChecked(),
             run_backtests=True, run_event_study=self.event_cb.isChecked(),
-            allow_holdout=end > DEV_END,
+            allow_holdout=end > DEV_END, markets=self.selected_markets(),
         )
 
     def _on_run_clicked(self):

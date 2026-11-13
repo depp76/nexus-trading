@@ -8,6 +8,10 @@ through the same Engine (fills, interest, annual reset, costs) as the strategy.
        cash; next-open fills like the strategy.
   BM4  Risk-free (CD 91-day): cash compounding at ``Dataset.rf_period``.
 
+With several markets (spec 9-25) ``ds.bm`` holds one ETF per market (KODEX
+200TR, KODEX 코스닥150, QQQ, SPY): BM1 holds them at equal weight, re-set at
+each annual reset, and BM3 times each ETF on its own MA200 with a 1/k slot.
+
 ETF runs use ``CostModel.for_etf()`` (0.02% slippage, no transaction tax);
 BM2 uses the strategy's own cost model.
 """
@@ -113,6 +117,34 @@ class EqualWeightPolicy(Policy):
         return self._targets(t, eng, eng.book.close[t], eng.equity_now)
 
 
+class TrendTimingMixPolicy(Policy):
+    """BM3 over k ETFs: each one held with a 1/k slot of equity while its close
+    is above its own MA, otherwise its slot stays in cash."""
+
+    def __init__(self, book, ma_window: int):
+        self.ma = rolling(np.asarray(book.close, dtype=float), ma_window, "mean")
+
+    def decide(self, t: int, eng: Engine) -> list[Order]:
+        b = eng.book
+        k = b.N
+        orders: list[Order] = []
+        cash = eng.cash
+        for j, tk in enumerate(b.tickers):
+            c, m = b.close[t, j], self.ma[t, j]
+            if not (np.isfinite(c) and np.isfinite(m) and c > 0):
+                continue
+            held = tk in eng.positions
+            if held and c < m and not eng.has_pending(tk, "sell"):
+                orders.append(Order(tk, "sell", None, "below_ma"))
+            elif not held and c > m and not eng.has_pending(tk, "buy"):
+                budget = min(eng.equity_now / k, cash)
+                qty = int(math.floor(budget / c))
+                if qty > 0:
+                    orders.append(Order(tk, "buy", qty, "above_ma"))
+                    cash -= qty * c
+        return orders
+
+
 def _etf_model(cost_model: CostModel) -> CostModel:
     return cost_model.for_etf(BM_ETF_SLIPPAGE)
 
@@ -121,6 +153,8 @@ def run_bm1(ds, params: StrategyParams, cost_model: CostModel) -> BacktestResult
     if ds.bm is None:
         return None
     eng = Engine(ds.bm, ds.rf_period, params, _etf_model(cost_model), ds.start_idx, "BM1")
+    if ds.bm.N > 1:
+        return eng.run(EqualWeightPolicy(None))      # the selected markets' ETFs at equal weight
     return eng.run(BuyAndHoldPolicy(ds.bm.tickers[0]))
 
 
@@ -166,6 +200,8 @@ def run_bm3(ds, params: StrategyParams, cost_model: CostModel) -> BacktestResult
     if ds.bm is None:
         return None
     eng = Engine(ds.bm, ds.rf_period, params, _etf_model(cost_model), ds.start_idx, "BM3")
+    if ds.bm.N > 1:
+        return eng.run(TrendTimingMixPolicy(ds.bm, params.bm_ma))
     return eng.run(TrendTimingPolicy(ds.bm.tickers[0], ds.bm.close[:, 0], params.bm_ma))
 
 

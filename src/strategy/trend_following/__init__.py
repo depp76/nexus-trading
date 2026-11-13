@@ -21,7 +21,7 @@ Facade: UI and thread code import from here; the modules underneath are
 from strategy.trend_following.config import (
     SPEC_VERSION, SPEC_FILE, StrategyParams, Variant, VARIANTS, COST_MULTIPLIERS, PERIODS,
     HOLDOUT_PERIOD, FORWARD_PERIOD, IC_VERDICT_HORIZON,
-    BM_TR_TICKER, BM_PRICE_FALLBACK_TICKER, DEV_START, DEV_END,
+    BM_TR_TICKER, BM_PRICE_FALLBACK_TICKER, DEV_START, DEV_END, MARKETS, US_MARKETS, normalize_markets,
 )
 from strategy.trend_following.costs import CostModel, TradeCost, DEFAULT_TAX_TABLE, tick_size, snap_to_tick
 from strategy.trend_following.signals import Features, compute_features, regime_state, weekly_check_days
@@ -46,7 +46,7 @@ from strategy.trend_following.scoring import (
 __all__ = [
     "SPEC_VERSION", "SPEC_FILE", "StrategyParams", "Variant", "VARIANTS", "COST_MULTIPLIERS", "PERIODS",
     "HOLDOUT_PERIOD", "FORWARD_PERIOD", "IC_VERDICT_HORIZON",
-    "BM_TR_TICKER", "BM_PRICE_FALLBACK_TICKER",
+    "BM_TR_TICKER", "BM_PRICE_FALLBACK_TICKER", "MARKETS", "US_MARKETS", "normalize_markets",
     "CostModel", "TradeCost", "DEFAULT_TAX_TABLE", "tick_size", "snap_to_tick",
     "Features", "compute_features", "regime_state", "weekly_check_days",
     "Dataset", "PriceBook", "ResearchCancelled", "HoldoutGuardError", "build_dataset", "load_dataset",

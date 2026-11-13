@@ -40,6 +40,8 @@ def run_event_study(ds, feats: Features, params: StrategyParams, horizons=HORIZO
     T = b.T
     t0 = ds.start_idx
     max_h = max(horizons)
+    # each name against its own market's index (spec 9-25); one column per name
+    idx_cols = ds.index_cols() if getattr(ds, "index_by_market", None) else None
     idx = np.asarray(ds.index_close, dtype=float)
 
     event_mask = feats.breakout & feats.liquid
@@ -62,7 +64,10 @@ def run_event_study(ds, feats: Features, params: StrategyParams, horizons=HORIZO
     for k, h in enumerate(horizons):
         end_px = b.close[ts + h, js]
         rets[:, k] = end_px / base - 1.0
-        mkt = idx[ts + h] / idx[ts + 1] - 1.0
+        if idx_cols is None:
+            mkt = idx[ts + h] / idx[ts + 1] - 1.0
+        else:
+            mkt = idx_cols[ts + h, js] / idx_cols[ts + 1, js] - 1.0
         excess[:, k] = rets[:, k] - mkt
 
     groups: list[tuple[str, np.ndarray]] = [("all breakouts", np.ones(ts.size, dtype=bool))]

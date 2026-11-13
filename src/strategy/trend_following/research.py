@@ -12,7 +12,7 @@ import numpy as np
 from strategy.trend_following.backtest import BacktestResult, run_backtest
 from strategy.trend_following.benchmarks import run_benchmarks
 from strategy.trend_following.config import (
-    SPEC_VERSION, COST_MULTIPLIERS, PERIODS, VARIANTS, StrategyParams,
+    SPEC_VERSION, COST_MULTIPLIERS, PERIODS, VARIANTS, StrategyParams, normalize_markets,
 )
 from strategy.trend_following.costs import CostModel
 from strategy.trend_following.dataset import ResearchCancelled, check_dev_window
@@ -41,8 +41,10 @@ class ResearchRequest:
     run_backtests: bool = True
     run_event_study: bool = True
     allow_holdout: bool = False     # explicit switch for dates after config.DEV_END (default: blocked)
+    markets: tuple[str, ...] = ("KOSPI",)   # universe markets (spec 9-25); KOSPI alone = the original spec
 
     def __post_init__(self):
+        object.__setattr__(self, "markets", normalize_markets(self.markets))
         check_dev_window(self.start, self.allow_holdout, "start date")
         check_dev_window(self.end, self.allow_holdout, "end date")
 
@@ -218,7 +220,8 @@ def render_markdown(result: ResearchResult, header: list[str] | None = None) -> 
         out.append("")
     out.append(f"- Generated: {result.created_at:%Y-%m-%d %H:%M}")
     out.append(f"- Window: {result.dataset_info.get('eval_start', '')} → {result.dataset_info.get('eval_end', '')}")
-    out.append(f"- Universe: {result.dataset_info.get('n_tickers', 0)} KOSPI names "
+    mk = "+".join(result.dataset_info.get("markets") or ["KOSPI"])
+    out.append(f"- Universe: {result.dataset_info.get('n_tickers', 0)} {mk} names "
                f"(requested top {result.dataset_info.get('universe_size_requested', p.universe_size)}), "
                f"liquidity floor {p.min_avg_trading_value / 1e8:,.0f}억 KRW (20d avg value)")
     out.append(f"- Benchmark ETF: {result.dataset_info.get('bm_ticker', '-')} "
@@ -226,7 +229,14 @@ def render_markdown(result: ResearchResult, header: list[str] | None = None) -> 
                f"risk-free: {result.dataset_info.get('rf_source', '-')}")
     out.append(f"- Flows loaded: {result.dataset_info.get('has_flows', False)} "
                f"(coverage {_pct(result.dataset_info.get('flow_coverage', 0.0), 0)}); "
-               f"KOSPI risk-on share of sessions: {_pct(result.dataset_info.get('regime_on_share', 0.0), 0)}")
+               f"{'KOSPI' if mk == 'KOSPI' else 'any-market'} risk-on share of sessions: "
+               f"{_pct(result.dataset_info.get('regime_on_share', 0.0), 0)}")
+    if mk != "KOSPI":
+        by_m = result.dataset_info.get("names_by_market") or {}
+        out.append(f"- Markets (spec 9-25): {', '.join(f'{m} {n}' for m, n in by_m.items()) or mk}; each name's L1/RS on "
+                   f"its own market index; US prices in KRW ({result.dataset_info.get('fx_source', '-')}); "
+                   f"US costs: commission {_pct(req.cost_model.us_commission_rate, 2)}/side + SEC fee on sales, "
+                   "no tax, no tick/limit")
     out.append(f"- Seed {p.seed_krw:,.0f} KRW, annual reset {p.annual_reset}, max positions {p.max_positions}, "
                f"risk/trade {_pct(p.risk_per_trade)}, single-name cap {_pct(p.max_weight, 0)}, "
                f"check weekday {p.check_weekday}")

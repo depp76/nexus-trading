@@ -30,7 +30,7 @@ import numpy as np
 from strategy.trend_following.config import StrategyParams, Variant
 from strategy.trend_following.costs import CostModel, TradeCost
 from strategy.trend_following.dataset import PriceBook
-from strategy.trend_following.signals import Features, rank_desc_score
+from strategy.trend_following.signals import Features, entry_regime, rank_desc_score
 
 TRIM_REASON = "year_end_trim"
 WEIGHT_TRIM_REASON = "weight_trim"     # 2-4 weekly excess-weight sell (C5 standing cap)
@@ -186,7 +186,7 @@ class Engine:
         if price <= 0 or self.cash <= 0:
             return 0
         cm = self.cm
-        per_share = price * (1.0 + (cm.commission_rate + cm.slippage_rate) * cm.cost_multiplier)
+        per_share = price * (1.0 + (cm.commission_rate_for(market) + cm.slippage_rate) * cm.cost_multiplier)
         q = int(math.floor(self.cash / per_share))
         d = self.book.dates[t]
         adv = self._adv_at(t, col)
@@ -481,10 +481,13 @@ class TrendFollowingPolicy(Policy):
         pending_buys = {o.ticker for o in eng.pending if o.side == "buy"}
         staying = len([tk for tk in eng.positions if tk not in exiting])
         slots = p.max_positions - staying - len(pending_buys)
-        if v.regime and not f.regime_on[t]:
-            return orders     # 2-1: risk-off -> no new entries, exits only
+        # 2-1: risk-off -> no new entries, exits only. Each name follows its own market's
+        # regime (spec 9-25); with one market every column is the same state.
+        entry_ok = entry_regime(f, t, b.N) if v.regime else np.ones(b.N, dtype=bool)
+        if not entry_ok.any():
+            return orders
         if v.mode == "high52":
-            rebalance = self._high52_rebalance(t, eng, exiting, pending_buys)
+            rebalance = self._high52_rebalance(t, eng, exiting, pending_buys, entry_ok)
             # a name ranked out is sold whole; its excess-weight trim would only duplicate that sell
             ranked_out = {o.ticker for o in rebalance if o.reason == "rank_out"}
             return [o for o in orders if o.reason != WEIGHT_TRIM_REASON or o.ticker not in ranked_out] + rebalance
@@ -497,7 +500,7 @@ class TrendFollowingPolicy(Policy):
         for tk in pending_buys:
             if tk in b._col:
                 held[b.col(tk)] = True
-        mask = f.trend_ok[t] & f.breakout[t] & f.liquid[t] & f.traded[t] & ~held
+        mask = f.trend_ok[t] & f.breakout[t] & f.liquid[t] & f.traded[t] & ~held & entry_ok
         if v.volume:
             mask &= f.vol_ok[t]
         if v.flow:
@@ -517,12 +520,15 @@ class TrendFollowingPolicy(Policy):
                                     weight_cap=p.max_weight))
         return orders
 
-    def _high52_rebalance(self, t: int, eng: Engine, exiting: set, pending_buys: set) -> list[Order]:
+    def _high52_rebalance(self, t: int, eng: Engine, exiting: set, pending_buys: set,
+                          entry_ok: np.ndarray | None = None) -> list[Order]:
         f, p, b = self.f, self.p, eng.book
         if not f.check_day[t]:
             return []
         prox = np.where(np.isfinite(f.high52_prox[t]), f.high52_prox[t], -np.inf)
         eligible = f.trend_ok[t] & f.liquid[t] & f.traded[t] & np.isfinite(f.high52_prox[t])
+        if entry_ok is not None:
+            eligible &= entry_ok
         cands = np.flatnonzero(eligible)
         if cands.size == 0:
             return []

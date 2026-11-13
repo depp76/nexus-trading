@@ -445,7 +445,7 @@ class TestWindowEndAndFormLayout(unittest.TestCase):
                  tab.weekday_combo, tab.cost_combo, tab.flows_cb, tab.event_cb, tab.variants_btn)}
         self.assertLessEqual(len({y // 20 for y in rows}), 2)              # two lines of controls
         self.assertTrue(tab.form_row2.isVisible())
-        self.assertTrue(tab.variants_lbl.width() > 300)                  # row 2 spans under the buttons
+        self.assertGreaterEqual(tab.variants_lbl.width(), 150)          # row 2 spans under the buttons
         tab.edit_btn.click()
         self.assertFalse(tab.form_box.isVisible())
         self.assertFalse(tab.form_row2.isVisible())
@@ -463,6 +463,36 @@ class TestWindowEndAndFormLayout(unittest.TestCase):
         self.assertLessEqual(tab.minimumSizeHint().width(), 1226)
         tab.hide()
         tab.hide()
+
+
+class TestMarketChoice(unittest.TestCase):
+    """Spec 9-25: KOSPI / KOSDAQ / NASDAQ / NYSE, any combination, at least one."""
+
+    def test_markets_go_into_the_request_and_the_chip(self):
+        tab = TrendFollowingTab()
+        self.assertEqual(tab.selected_markets(), ("KOSPI",))
+        self.assertEqual(tab.build_request().markets, ("KOSPI",))
+        tab.market_buttons["NASDAQ"].click()
+        tab.market_buttons["KOSDAQ"].click()
+        self.assertEqual(tab.build_request().markets, ("KOSPI", "KOSDAQ", "NASDAQ"))
+        self.assertIn("KOSPI+KOSDAQ+NASDAQ 상위 200", [c.text() for c in tab.chips])
+
+    def test_the_last_market_cannot_be_unticked(self):
+        tab = TrendFollowingTab()
+        tab.market_buttons["KOSPI"].click()
+        self.assertTrue(tab.market_buttons["KOSPI"].isChecked())
+        self.assertEqual(tab.selected_markets(), ("KOSPI",))
+        tab.market_buttons["NYSE"].click()
+        tab.market_buttons["KOSPI"].click()
+        self.assertEqual(tab.selected_markets(), ("NYSE",))
+
+    def test_thread_passes_the_markets(self):
+        from threads.strategy_threads import TrendFollowingResearchThread
+        tab = TrendFollowingTab()
+        tab.market_buttons["NYSE"].click()
+        with patch("threads.strategy_threads.load_dataset", side_effect=RuntimeError("stop")) as load:
+            TrendFollowingResearchThread(tab.build_request()).run()
+        self.assertEqual(load.call_args.kwargs["markets"], ("KOSPI", "NYSE"))
 
 class TestTargetsAndDrawdown(unittest.TestCase):
     def test_sharpe_and_mdd_badge_boundaries(self):

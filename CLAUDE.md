@@ -81,7 +81,9 @@ Dev tooling is in `requirements-dev.txt`
   year-keyed tax table, 2023-01-25 tick-ladder reform, `scaled()`/`for_etf()`), `signals.py`
   (date x ticker arrays for L1-L4 and the exits; `regime_state` is the weekly-held L1 state),
   `dataset.py` (`PriceBook`/`Dataset`; `build_dataset` is pure and what tests feed,
-  `load_dataset` fetches through `data.*`), `backtest.py` (`Engine` + `Policy`, t+1-open fills
+  `load_dataset` fetches through `data.*`; `markets=` other than KOSPI alone goes through
+  `_load_multi_market`: KRW-ranked union of KOSPI/KOSDAQ/NASDAQ/NYSE, US prices in KRW,
+  per-market index in `Dataset.index_by_market`, spec 9-25), `backtest.py` (`Engine` + `Policy`, t+1-open fills
   with sells first, cash interest, annual reset at the year's last close, per-year cost
   ledger; `TrendFollowingPolicy`), `benchmarks.py` (BM1-BM4 as policies on the same engine),
   `metrics.py` (6-4 scorecard incl. the BM1/BM3-relative block), `event_study.py` (6-1),

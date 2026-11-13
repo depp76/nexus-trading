@@ -827,3 +827,31 @@ BM2·BM4와 개발 2구간(2021-22 / 2023-24)별 표, BM1 대비 알파·베타�
 
 계산은 바뀌지 않았다. `run_research`가 `ResearchResult.dataset_info["names"]`에 데이터셋의 티커 → 종목명 사전을 담는다(표시 전용).
 Strategy 탭의 매매 내역 탭이 티커 옆에 종목명을 보여 주는 데 쓴다.
+
+### 9-25. 유니버스 시장 선택: KOSPI·KOSDAQ·NASDAQ·NYSE (2026-11-13)
+
+사용자 지시로 유니버스를 여러 시장에서 고를 수 있게 했다. **KOSPI만 고르면 이전과 같은 경로·같은 결과**다(기존 테스트 전부 그대로 통과).
+다른 조합의 결정(같은 날 사용자 선택):
+
+- **순위·통화**: 선택한 시장들의 상장 목록을 합쳐 **원화 환산 시가총액** 순으로 상위 N개(`universe_size`)를 고른다. 한국은 Naver(FDR 대체)
+  시가총액(원), 미국은 FDR 상장 목록 앞쪽을 Yahoo 시세로 조회한 marketCap(달러, ETF·펀드 제외) × 최근 USD/KRW. 미국 종목의 OHLC는
+  그날 USD/KRW 종가로 원화 환산해 한 포트폴리오(원화 NAV, CD91 현금 이자)로 운용한다. 환율 변동이 수익률에 들어간다.
+- **달력**: 선택한 시장 지수들의 거래일 합집합. 어떤 종목의 시장이 쉬는 날은 직전 종가를 O/H/L/C로 반복하고 거래량 0으로 둔다 —
+  이동평균 창이 끊기지 않고, 거래량 0이면 엔진이 체결하지 않는다(2-0 거래정지 처리와 같은 규칙). 그날은 MA·ATR에 평평한 하루가 더해진다.
+  미국 종가(d)는 한국 시각 d+1 아침에 확정되므로 d의 신호를 d+1 시가에 체결하는 규칙(5장)에 미래 정보는 없다.
+- **L1 국면·RS·이벤트 스터디**: 종목마다 **자기 시장 지수**(KOSPI=KS11, KOSDAQ=KQ11, NASDAQ=^IXIC, NYSE=^GSPC)로 판정한다.
+  `Features.regime_cols`(날짜×종목)가 종목별 상태이고, `regime_on`은 "선택 시장 중 하나라도 Risk-on"이다. 신규 진입은 자기 시장이
+  Risk-on인 종목만(`signals.entry_regime`), 청산 규칙은 그대로.
+- **벤치마크**: BM1은 선택 시장의 지수 ETF(KODEX 200TR·KODEX 코스닥150·QQQ·SPY) **동일 비중** 혼합(연초 리셋 때 재조정), BM3은
+  ETF마다 1/k 슬롯으로 MA200 타이밍. 시장 하나면 이전과 같은 단일 ETF 정책.
+- **비용(4-1 확장)**: 미국 종목·ETF는 수수료 0.25%/편도 + 매도 시 SEC 수수료 0.00278%(수수료 칸에 합산), 거래세 없음, 호가단위
+  스냅 없음(원화 환산 가격이라 $0.01 격자의 원화 크기가 고정되지 않음 — 스프레드는 슬리피지에 포함), 가격제한폭 없음. 한국 종목은 4-1 그대로.
+  환전 수수료는 넣지 않았다.
+- **수급**: 투자자 수급(F/FX)은 한국 종목만 받는다. 미국 종목은 F 조건을 통과하지 못하므로 A3~A5에서는 사실상 한국 종목만 후보다.
+- **알아 둘 점**: 원화 시가총액으로 합치면 미국 대형주가 상위를 차지한다(2026-11-13 실측: 4개 시장 상위 30개 중 NASDAQ 14·NYSE 12·
+  KOSPI 2·KOSDAQ 0). 1주 가격이 시드보다 큰 종목(예: BRK-A)은 살 수 없다. 생존 편향(현재 구성 종목)은 그대로다.
+- 스냅샷(`snapshot.py`)과 CLI(`run.py`)는 KOSPI 단일 시장만 지원한다(여러 시장 데이터셋은 Strategy 탭에서만 만든다).
+- 구현: `config.MARKETS`·`MARKET_INDEX`·`MARKET_BM_ETF`·`normalize_markets`, `ResearchRequest.markets`, `dataset._load_multi_market`
+  (+ `build_dataset`의 `market_index_frames`·`fx_frame`·`bm_frames`), `Dataset.index_by_market`·`index_cols()`, `costs`의 미국 시장 처리,
+  `benchmarks.TrendTimingMixPolicy`, `data.fx.get_usd_krw_history`, `data.collectors.yahoo.get_us_listing_ranked`.
+  테스트 `tests/strategy/trend_following/test_markets.py`.

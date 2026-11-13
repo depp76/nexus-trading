@@ -169,3 +169,26 @@ E4_TOP_SHARE = 0.05
 BM_TR_TICKER = "278530"
 BM_PRICE_FALLBACK_TICKER = "069500"
 BM_ETF_SLIPPAGE = 0.0002
+
+# Markets the universe can be drawn from (spec 9-25). KOSPI alone is the spec's
+# original universe and runs exactly as before; any other choice ranks the
+# selected markets together by KRW market cap. US names are priced in KRW at
+# the day's USD/KRW close.
+MARKETS: tuple[str, ...] = ("KOSPI", "KOSDAQ", "NASDAQ", "NYSE")
+US_MARKETS = frozenset({"NASDAQ", "NYSE"})
+# L1 regime / RS / event-study index per market (each name is judged on its own market's index).
+MARKET_INDEX = {"KOSPI": "KS11", "KOSDAQ": "KQ11", "NASDAQ": "^IXIC", "NYSE": "^GSPC"}
+# BM1/BM3 ETF per market (an equal-weight mix when several markets are selected) and the
+# market label its costs follow: Korean ETFs pay no transaction tax, US ETFs pay US costs.
+MARKET_BM_ETF = {"KOSPI": BM_TR_TICKER, "KOSDAQ": "229200", "NASDAQ": "QQQ", "NYSE": "SPY"}
+BM_ETF_COST_MARKET = {BM_TR_TICKER: "ETF", BM_PRICE_FALLBACK_TICKER: "ETF", "229200": "ETF",
+                      "QQQ": "NASDAQ", "SPY": "NYSE"}
+BM_ETF_NAMES = {BM_TR_TICKER: "KODEX 200TR", BM_PRICE_FALLBACK_TICKER: "KODEX 200", "229200": "KODEX 코스닥150",
+                "QQQ": "Invesco QQQ", "SPY": "SPDR S&P 500"}
+
+
+def normalize_markets(markets) -> tuple[str, ...]:
+    """Selected markets in MARKETS order, unknown names dropped; KOSPI when empty."""
+    chosen = {str(m).strip().upper() for m in (markets or ())}
+    out = tuple(m for m in MARKETS if m in chosen)
+    return out or ("KOSPI",)
