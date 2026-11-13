@@ -8,10 +8,11 @@ from ui.dialogs.trade_history import StockTradeHistoryDialog
 from ui.dialogs.assets_graph import TotalAssetsGraphDialog
 from ui.dialogs.assets_report import AssetsReportDialog
 from ui.dialogs.variant_picker import VariantPickerDialog
+from ui.dialogs.strategy_trades import StrategyTradesDialog
 
 __all__ = [
     "IndexMaDialog", "StockMaDialog",
     "BuyEditDialog", "SellEditDialog", "TradeEntryDialog",
     "StockTradeHistoryDialog", "TotalAssetsGraphDialog", "AssetsReportDialog",
-    "VariantPickerDialog",
+    "VariantPickerDialog", "StrategyTradesDialog",
 ]

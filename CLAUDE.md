@@ -134,7 +134,7 @@ Dev tooling is in `requirements-dev.txt`
   `QCalendarWidget` rules have no current caller and are kept for the next `QDateEdit`),
   `dialogs/` (one module per
   dialog group: `index_ma`, `stock_ma`, `trade_edit`, `trade_history`, `assets_graph`,
-  `holdings_summary`, `assets_report`, `stock_report`, `variant_picker`; import from `ui.dialogs`),
+  `holdings_summary`, `assets_report`, `stock_report`, `variant_picker`, `strategy_trades`; import from `ui.dialogs`),
   `history_table.py` (cell factories, `fill_table_rows`, `SectionTable` + the column
   `SECTIONS` for the history grid), `history_calc.py` (pure P/L maths, no Qt:
   `compute_pl_fields`, `build_monthly_rows`, `summarize_positions`), `assets_report.py` (pure maths for the Total Assets graph's

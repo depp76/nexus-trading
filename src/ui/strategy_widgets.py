@@ -427,27 +427,78 @@ def fill_monthly(table: QTableWidget, run) -> None:
         table.setUpdatesEnabled(True)
 
 
-TRADE_HEADERS = ["Entry", "Exit", "Name", "Ticker", "Return", "Days", "Reason"]
+TRADE_HEADERS = ["Entry", "Exit", "Name", "Ticker", "매입가", "매도가", "Return", "Days", "Reason"]
+_CENTER = Qt.AlignmentFlag.AlignCenter
+
+# Exit reasons the engine and the policies record (backtest.py, scoring_policy.py,
+# benchmarks.py) -> the label the trade lists show; the code stays on the tooltip.
+EXIT_REASONS = {
+    "channel": "채널 이탈",
+    "stop": "손절",
+    "flow": "수급 이탈",
+    "rank_out": "순위 탈락",
+    "weight_trim": "비중 축소",
+    "year_end_trim": "연말 정산",
+    "ma50_exit": "MA50 이탈",
+    "score_rank_out": "점수 순위 탈락",
+    "delisted": "시세 없음(상장폐지)",
+    "below_ma": "MA 이탈",
+    "ineligible": "편입 제외",
+    "equal_weight": "동일 비중 조정",
+}
+
+
+def reason_label(reason: str) -> str:
+    return EXIT_REASONS.get(reason, reason)
+
+
+def fmt_price(x) -> str:
+    """A fill price in KRW (US names already converted, spec 9-25)."""
+    return f"{x:,.0f}" if _finite(x) else "-"
+
+
+def sorted_trades(run) -> list:
+    """The closed trades of a strategy run, newest exit first; [] for a benchmark or None."""
+    trades = list(getattr(run, "trades", None) or []) if run is not None and run.kind == "strategy" else []
+    trades.sort(key=lambda t: (t.exit_date, t.entry_date), reverse=True)
+    return trades
+
+
+def trade_summary(trades) -> str:
+    """One line: count, win rate, mean return, mean holding days, net P&L (KRW)."""
+    real = [t for t in trades if t.reason not in ("year_end_trim", "weight_trim")]
+    if not trades:
+        return "매매 없음"
+    wins = sum(1 for t in real if t.pnl > 0)
+    win = f"{wins / len(real):.0%}" if real else "-"
+    mean_ret = sum(t.ret_pct for t in real) / len(real) if real else float("nan")
+    mean_days = sum(t.holding_days for t in real) / len(real) if real else float("nan")
+    pnl = sum(t.pnl for t in trades)
+    return (f"{len(trades)}건 (청산 {len(real)}건) · 승률 {win} · 평균 수익률 "
+            f"{mean_ret:+.1f}% · 평균 보유 {mean_days:.0f}일 · 손익 합계 {pnl:+,.0f}원"
+            if real else f"{len(trades)}건 (비중 축소·연말 정산만) · 손익 합계 {pnl:+,.0f}원")
 
 
 def fill_trades(table: QTableWidget, run, names: dict | None = None) -> None:
     """One row per closed trade of a strategy run, newest exit first; `names`
-    maps a ticker to its company name (blank when unknown)."""
+    maps a ticker to its company name (blank when unknown). Dates are centred;
+    the fill prices are in KRW."""
     table.setUpdatesEnabled(False)
     try:
-        trades = list(getattr(run, "trades", None) or []) if run is not None and run.kind == "strategy" else []
-        trades.sort(key=lambda t: (t.exit_date, t.entry_date), reverse=True)
+        trades = sorted_trades(run)
         table.setRowCount(len(trades))
         for i, t in enumerate(trades):
             ret = t.ret_pct / 100.0
             cells = [
-                _item(f"{t.entry_date:%Y-%m-%d}", _LEFT),
-                _item(f"{t.exit_date:%Y-%m-%d}", _LEFT),
+                _item(f"{t.entry_date:%Y-%m-%d}", _CENTER),
+                _item(f"{t.exit_date:%Y-%m-%d}", _CENTER),
                 _item((names or {}).get(t.ticker, ""), _LEFT),
                 _item(t.ticker, _LEFT),
+                _item(fmt_price(t.entry_price)),
+                _item(fmt_price(t.exit_price)),
                 _item(f"{t.ret_pct:+.1f}%", color=_hex(ret)),
                 _item(str(t.holding_days)),
-                _item(t.reason, _LEFT),
+                _item(reason_label(t.reason), _LEFT, tooltip=t.reason),
             ]
             for c, item in enumerate(cells):
                 table.setItem(i, c, item)

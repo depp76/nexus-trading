@@ -825,8 +825,8 @@ BM2·BM4와 개발 2구간(2021-22 / 2023-24)별 표, BM1 대비 알파·베타�
 
 ### 9-24. 리서치 결과의 종목명 (2026-11-13)
 
-계산은 바뀌지 않았다. `run_research`가 `ResearchResult.dataset_info["names"]`에 데이터셋의 티커 → 종목명 사전을 담는다(표시 전용).
-Strategy 탭의 매매 내역 탭이 티커 옆에 종목명을 보여 주는 데 쓴다.
+계산은 바뀌지 않았다. `run_research`가 `ResearchResult.dataset_info["names"]`에 데이터셋의 티커 → 종목명 사전을, `["ticker_markets"]`에 티커 → 시장을
+담는다(표시 전용). Strategy 탭의 매매 내역 탭과 상세 팝업(docs/ui.md 8.13)이 종목명·시장을 보여 주는 데 쓴다.
 
 ### 9-25. 유니버스 시장 선택: KOSPI·KOSDAQ·NASDAQ·NYSE (2026-11-13)
 

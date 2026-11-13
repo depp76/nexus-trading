@@ -598,6 +598,111 @@ class TestMarketChoice(unittest.TestCase):
             TrendFollowingResearchThread(tab.build_request()).run()
         self.assertEqual(load.call_args.kwargs["markets"], ("KOSPI", "NYSE"))
 
+
+class TestTradeList(unittest.TestCase):
+    """docs/ui.md 8.13: the 매매 내역 tab (centred dates, fill prices, summary)
+    and its popup (StrategyTradesDialog)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.result = _result(("A0", "A1"), (1.0,))
+
+    def _tab(self, vid="A0"):
+        tab = TrendFollowingTab()
+        tab._on_research_finished(self.result, "")
+        tab.select_variant(vid)
+        return tab
+
+    def _run(self, vid="A0"):
+        return next(r for r in self.result.runs_at(1.0) if r.id == vid)
+
+    def test_compact_list_has_prices_and_centred_dates(self):
+        from ui.strategy_widgets import TRADE_HEADERS, fmt_price, reason_label
+        tab = self._tab()
+        run = self._run()
+        self.assertTrue(run.trades)
+        t = max(run.trades, key=lambda t: (t.exit_date, t.entry_date))
+        headers = [tab.trades_table.horizontalHeaderItem(c).text() for c in range(len(TRADE_HEADERS))]
+        self.assertEqual(headers[4:6], ["매입가", "매도가"])
+        self.assertEqual(tab.trades_table.item(0, 4).text(), fmt_price(t.entry_price))
+        self.assertEqual(tab.trades_table.item(0, 5).text(), fmt_price(t.exit_price))
+        for c in (0, 1):
+            self.assertEqual(tab.trades_table.item(0, c).textAlignment(), int(Qt.AlignmentFlag.AlignCenter))
+        self.assertEqual(tab.trades_table.item(0, 8).text(), reason_label(t.reason))
+        self.assertEqual(tab.trades_table.item(0, 8).toolTip(), t.reason)
+        self.assertIn(f"{len(run.trades)}건", tab.trades_summary_lbl.text())
+        self.assertTrue(tab.trades_detail_btn.isEnabled())
+
+    def test_benchmark_disables_the_popup(self):
+        tab = self._tab("BM1")
+        self.assertFalse(tab.trades_detail_btn.isEnabled())
+        self.assertIsNone(tab.open_trades_dialog())
+
+    def test_popup_shows_every_trade_with_amounts(self):
+        from ui.dialogs.strategy_trades import COLUMNS
+        tab = self._tab()
+        run = self._run()
+        dlg = tab.open_trades_dialog()
+        self.assertIsNotNone(dlg)
+        self.assertIn("A0", dlg.windowTitle())
+        self.assertEqual(dlg.table.rowCount(), len(run.trades))
+        headers = [dlg.table.horizontalHeaderItem(c).text() for c in range(len(COLUMNS))]
+        row = 0
+        t = dlg._row_trade(row)
+        cells = {h: dlg.table.item(row, c).text() for c, h in enumerate(headers)}
+        self.assertEqual(cells["수량"], f"{t.qty:,}")
+        self.assertEqual(cells["매입금액"], f"{t.entry_price * t.qty:,.0f}")
+        self.assertEqual(cells["매도금액"], f"{t.exit_price * t.qty:,.0f}")
+        self.assertEqual(cells["손익(원)"], f"{t.pnl:+,.0f}")
+        self.assertEqual(cells["비용(원)"], f"{t.cost.total:,.0f}")
+        self.assertEqual(cells["시장"], "KOSPI")
+        self.assertEqual(dlg.table.item(row, 0).textAlignment(), int(Qt.AlignmentFlag.AlignCenter))
+        self.assertEqual(t.exit_date, max(x.exit_date for x in run.trades))   # newest exit first
+        dlg.close()
+
+    def test_popup_sorts_numerically_and_filters(self):
+        tab = self._tab()
+        run = self._run()
+        dlg = tab.open_trades_dialog()
+        dlg.table.sortItems(10, Qt.SortOrder.DescendingOrder)          # 손익(원)
+        pnl = [dlg._row_trade(r).pnl for r in range(dlg.table.rowCount())]
+        self.assertEqual(pnl, sorted(pnl, reverse=True))
+        reasons = {t.reason for t in run.trades}
+        code = sorted(reasons)[0]
+        dlg.reason_combo.setCurrentIndex(dlg.reason_combo.findData(code))
+        self.assertEqual(len(dlg.visible_rows()), sum(1 for t in run.trades if t.reason == code))
+        if len(reasons) > 1:
+            self.assertIn("필터", dlg.summary_lbl.text())
+        dlg.reason_combo.setCurrentIndex(0)
+        dlg.search.setText(run.trades[0].ticker.lower())
+        self.assertEqual(len(dlg.visible_rows()), sum(1 for t in run.trades if t.ticker == run.trades[0].ticker))
+        dlg.search.setText("no-such-name")
+        self.assertEqual(dlg.visible_rows(), [])
+        dlg.close()
+
+    def test_double_click_opens_the_popup_on_that_trade(self):
+        tab = self._tab()
+        n = tab.trades_table.rowCount()
+        row = n - 1
+        ticker = tab.trades_table.item(row, 3).text()
+        exit_date = tab.trades_table.item(row, 1).text()
+        tab.trades_table.cellDoubleClicked.emit(row, 2)
+        dlg = tab._trades_dialog
+        sel = dlg.table.selectionModel().selectedRows()
+        self.assertEqual(len(sel), 1)
+        r = sel[0].row()
+        self.assertEqual((dlg.table.item(r, 3).text(), dlg.table.item(r, 1).text()), (ticker, exit_date))
+        dlg.close()
+
+    def test_popup_rows_copy_as_tsv(self):
+        tab = self._tab()
+        dlg = tab.open_trades_dialog()
+        self.assertTrue(hasattr(dlg.table, "_table_keys"))
+        dlg.table.selectRow(0)
+        from ui.common import copy_rows_tsv
+        self.assertEqual(len(copy_rows_tsv(dlg.table).split("	")), dlg.table.columnCount())
+        dlg.close()
+
 class TestTargetsAndDrawdown(unittest.TestCase):
     def test_sharpe_and_mdd_badge_boundaries(self):
         from ui.strategy_widgets import sharpe_badge, mdd_badge, meets_targets
