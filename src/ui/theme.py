@@ -13,7 +13,10 @@ place that chrome comes from; nothing else should call
 file already has a rule for -- add an objectName selector here instead (see
 `QPushButton#primary` / `#danger` below).
 """
-from ui.colors import DANGER, DANGER_BG, DANGER_LINE, WARN
+from ui.colors import (
+    DANGER, DANGER_BG, DANGER_LINE, WARN,
+    OK_BG, OK_TEXT, WARN_BG, WARN_TEXT, FAIL_BG, FAIL_TEXT, NA_BG, NA_TEXT,
+)
 
 BG          = "#fbfbfd"   # app background
 SURFACE     = "#ffffff"   # cards, table body
@@ -157,4 +160,17 @@ def app_qss(font_css: str) -> str:
     QLabel#faint {{ color: {TEXT_FAINT}; }}
     /* Caveats attached to a result (Strategy's Warnings panel): caution, not failure (8.3). */
     QLabel#warn  {{ color: {WARN}; }}
+
+    /* Status badges (docs/ui.md 8.3 / 8.10): a judgement, not a button, so
+       a symbol in the text is allowed. ui.common.make_badge() sets these. */
+    QLabel#badgeOk   {{ color: {OK_TEXT};   background: {OK_BG};   border-radius: 9px; padding: 1px 8px; font-weight: 600; font-size: 8pt; }}
+    QLabel#badgeWarn {{ color: {WARN_TEXT}; background: {WARN_BG}; border-radius: 9px; padding: 1px 8px; font-weight: 600; font-size: 8pt; }}
+    QLabel#badgeFail {{ color: {FAIL_TEXT}; background: {FAIL_BG}; border-radius: 9px; padding: 1px 8px; font-weight: 600; font-size: 8pt; }}
+    QLabel#badgeNa   {{ color: {NA_TEXT};   background: {NA_BG};   border-radius: 9px; padding: 1px 8px; font-weight: 600; font-size: 8pt; }}
+
+    /* Card-style KPI (ui.common.KpiCard; Strategy results). */
+    QFrame#KpiCard {{ background: {SURFACE}; border: 1px solid {LINE}; border-radius: 8px; }}
+    QFrame#KpiCard QLabel#kpiValue {{ font-size: 16pt; }}   /* FONT_TITLE: a card holds one number */
+    QLabel#kpiHelp {{ color: {TEXT_MUTED}; font-size: 8pt; }}
+    QLabel#settingsChip {{ background: {HDR_BG}; color: {TEXT_SUB}; border-radius: 4px; padding: 2px 8px; }}
     """

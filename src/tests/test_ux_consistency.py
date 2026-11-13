@@ -155,6 +155,45 @@ class TestKpiStrip(unittest.TestCase):
         self.assertIn(TEXT, value.styleSheet())
 
 
+class TestBadgesAndKpiCard(unittest.TestCase):
+    """ui_redesign_2026-11 P0-3: badges are objectName-only labels, KpiCard
+    shows a value, an optional badge and a help line."""
+
+    def test_badge_kinds(self):
+        from ui.common import make_badge
+        names = {"ok": "badgeOk", "warn": "badgeWarn", "fail": "badgeFail", "na": "badgeNa"}
+        for kind, name in names.items():
+            lbl = make_badge(kind, "x")
+            self.assertEqual((lbl.objectName(), lbl.text()), (name, "x"))
+        with self.assertRaises(ValueError):
+            make_badge("bad", "x")
+
+    def test_badge_rules_are_in_the_app_qss(self):
+        from ui.theme import app_qss
+        qss = app_qss("")
+        for name in ("badgeOk", "badgeWarn", "badgeFail", "badgeNa", "KpiCard", "kpiHelp", "settingsChip"):
+            self.assertIn(f"#{name}", qss)
+
+    def test_kpi_card_set(self):
+        from ui.common import KpiCard
+        from ui.theme import TEXT
+        card = KpiCard("Sharpe", "help line")
+        self.assertEqual((card.objectName(), card.label.text(), card.value.text()),
+                         ("KpiCard", "SHARPE", "-"))
+        self.assertTrue(card.badge.isHidden())
+        card.set("1.62", "#3b6fc4", badge=("ok", "Target met"), help="new help")
+        self.assertEqual((card.value.text(), card.badge.objectName(), card.badge.text(), card.help.text()),
+                         ("1.62", "badgeOk", "Target met", "new help"))
+        self.assertFalse(card.badge.isHidden())
+        self.assertIn("#3b6fc4", card.value.styleSheet())
+        card.set("0.40", badge=("fail", "Below 1.5"))
+        self.assertEqual(card.badge.objectName(), "badgeFail")
+        self.assertEqual(card.help.text(), "new help")      # help kept when not given
+        card.set("-")
+        self.assertTrue(card.badge.isHidden())
+        self.assertIn(TEXT, card.value.styleSheet())
+
+
 class TestDialogTables(unittest.TestCase):
     def test_trade_history_dialog_uses_table_defaults(self):
         from ui.dialogs.trade_history import StockTradeHistoryDialog

@@ -12,12 +12,12 @@ import math
 import tempfile
 import logging
 import datetime as _dt
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from PyQt6.QtCore import QObject, QEvent, Qt
 from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QTableWidget, QHeaderView, QLabel, QFrame, QHBoxLayout, QVBoxLayout,
-    QWidget, QApplication,
+    QWidget, QApplication, QGridLayout,
 )
 from PyQt6.QtGui import QFont, QPainter, QColor, QKeySequence
 
@@ -334,6 +334,80 @@ class KpiStrip(QFrame):
 
     def set_sub(self, key: str, text: str):
         self.cells[key][1].setText(text)
+
+
+# ---------------------------------------------------------------------------
+# Status badges and KPI cards (docs/ui.md 8.3 / 8.10; ui_redesign_2026-11 P0-3)
+# ---------------------------------------------------------------------------
+BadgeKind = Literal["ok", "warn", "fail", "na"]
+_BADGE_NAMES = {"ok": "badgeOk", "warn": "badgeWarn", "fail": "badgeFail", "na": "badgeNa"}
+
+
+def set_badge(label: QLabel, kind: BadgeKind, text: str) -> QLabel:
+    """Turn `label` into a status badge of `kind`: only the objectName
+    changes, the look comes from ui/theme.py's QLabel#badge* rules. The
+    style is re-polished so a label that switches kind repaints."""
+    if kind not in _BADGE_NAMES:
+        raise ValueError(f"unknown badge kind: {kind!r}")
+    label.setObjectName(_BADGE_NAMES[kind])
+    label.setText(text)
+    style = label.style()
+    if style is not None:
+        style.unpolish(label)
+        style.polish(label)
+    return label
+
+
+def make_badge(kind: BadgeKind, text: str) -> QLabel:
+    """A small pill label for a judgement (OK / WARN / FAIL / not available)."""
+    lbl = QLabel()
+    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    return set_badge(lbl, kind, text)
+
+
+class KpiCard(QFrame):
+    """One boxed KPI: a small caps label (top left), a badge slot (top
+    right), a large value and a one-line explanation under it. The card
+    counterpart of KpiStrip's cells, for screens that show a few headline
+    numbers with a judgement each (Strategy results, docs/ui.md 8.10)."""
+
+    def __init__(self, label: str, help_text: str = "", parent=None):
+        super().__init__(parent)
+        self.setObjectName("KpiCard")
+        grid = QGridLayout(self)
+        grid.setContentsMargins(12, 8, 12, 8)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(2)
+        self.label = QLabel(label.upper())
+        self.label.setObjectName("kpiLabel")
+        self.badge = make_badge("na", "")
+        self.badge.hide()
+        self.value = QLabel("-")
+        self.value.setObjectName("kpiValue")
+        self.value.setFont(create_font(FONT_TITLE, style_name="Semilight"))
+        self.help = QLabel(help_text)
+        self.help.setObjectName("kpiHelp")
+        self.help.setWordWrap(True)
+        grid.addWidget(self.label, 0, 0)
+        grid.addWidget(self.badge, 0, 1, Qt.AlignmentFlag.AlignRight)
+        grid.addWidget(self.value, 1, 0, 1, 2)
+        grid.addWidget(self.help, 2, 0, 1, 2)
+        grid.setColumnStretch(0, 1)
+
+    def set(self, value: str, color: str | None = None,
+            badge: tuple[BadgeKind, str] | None = None, help: str | None = None) -> None:
+        """Show `value` (in `color`, default text color), an optional
+        `(kind, text)` badge (None hides it) and, when given, a new
+        explanation line."""
+        self.value.setText(value)
+        self.value.setStyleSheet(f"color:{color or TEXT};")
+        if badge is None:
+            self.badge.hide()
+        else:
+            set_badge(self.badge, *badge)
+            self.badge.show()
+        if help is not None:
+            self.help.setText(help)
 
 # Status text colors (roadmap 7-2c) — e.g. a risk-gate PASS/FAIL cell. Reserved
 # for status display only (roadmap 7-4d): an action button must not reuse these,

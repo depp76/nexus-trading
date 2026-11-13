@@ -31,6 +31,20 @@ DANGER_LINE = "#f0c4c1"   # danger button outline
 OK = "#2e7d5b"
 WARN = "#b8650a"
 
+# Badge fills for the status channel (docs/ui.md 8.3; ui_redesign_2026-11 P0-1).
+# Text colors are one step darker than OK/WARN/DANGER so a small badge label
+# keeps 4.5:1 contrast on its fill.
+OK_BG, OK_TEXT = "#e8f3ee", "#2e7d5b"
+WARN_BG, WARN_TEXT = "#fff6e8", "#8a4f08"
+FAIL_BG, FAIL_TEXT = DANGER_BG, "#b3362e"
+NA_BG, NA_TEXT = "#f0f1f8", "#595d6c"
+
+# Chart series roles (strategy charts; ui_redesign_2026-11 P0-1).
+SERIES_SELECTED = "#9184d9"   # = theme.ACCENT, solid
+SERIES_BENCH = "#9397ab"      # = theme.TEXT_FAINT, dashed
+SERIES_TARGET = WARN          # target lines (Sharpe 1.5, -15% drawdown), dashed
+DRAWDOWN_ALPHA = 0.18         # LOSS fill under the drawdown curve
+
 # MA divergence (price / MA x 100): within +-MA_DIV_NEUTRAL_PCT of 100 is
 # "neutral". The MA chart's three background bands (StockMaDialog) and the
 # Universe table's MA20 Div cell both read this one number so the chart's
