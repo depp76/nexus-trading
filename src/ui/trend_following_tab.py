@@ -25,7 +25,7 @@ from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QCheckBox, QComboBox,
     QSpinBox, QDateEdit, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QMessageBox,
-    QSplitter, QFrame,
+    QSplitter, QFrame, QDialog,
 )
 
 from matplotlib.figure import Figure
@@ -38,6 +38,7 @@ from strategy.trend_following import (
 from strategy.trend_following.research import SUMMARY_COLUMNS
 from strategy.trend_following.event_study import HORIZONS
 from threads.strategy_threads import TrendFollowingResearchThread, CANCELLED_MESSAGE
+from ui.dialogs.variant_picker import VariantPickerDialog
 from ui.common import (
     create_font, make_button, setup_table, make_footer_label, install_table_keys, ThreadOwnerMixin,
     TAB_MARGINS, TAB_SPACING, FONT_SMALL,
@@ -66,9 +67,9 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._result: ResearchResult | None = None
-        # Check state of the flow-dependent variants (A3-A5) while Investor flows
-        # is off and their boxes are disabled; restored when flows is ticked again.
-        self._flow_variant_state: dict[str, bool] = {}
+        # The user's variant choice. Flow-dependent ones (A3-A5) stay in it while
+        # Investor flows is off but are not sent; ticking flows brings them back.
+        self._chosen_variants: set[str] = set(VARIANTS)
         self._research_thread = None
         # Hover readout state: (label, color, x as matplotlib date numbers, y) per plotted series.
         self._chart_series: list[tuple[str, str, np.ndarray, np.ndarray]] = []
@@ -155,15 +156,14 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         form.setColumnStretch(6, 1)
         root.addLayout(form)
 
+        # The variants are picked in a dialog that also explains each one
+        # (ui.dialogs.VariantPickerDialog); the row shows what is selected.
         variants_row = QHBoxLayout()
-        variants_row.addWidget(_lbl("Variants"))
-        self.variant_cbs: dict[str, QCheckBox] = {}
-        for vid, v in VARIANTS.items():
-            cb = QCheckBox(vid)
-            cb.setChecked(True)
-            cb.setToolTip(v.label)
-            self.variant_cbs[vid] = cb
-            variants_row.addWidget(cb)
+        self.variants_btn = make_button("Variants...", on_click=self._on_variants_clicked,
+                                        tooltip="Choose the strategy variants to backtest and read what each does")
+        variants_row.addWidget(self.variants_btn)
+        self.variants_lbl = QLabel("")
+        variants_row.addWidget(self.variants_lbl)
         variants_row.addStretch()
         # Run is the tab's one primary action and sits last (docs/ui.md 8.4);
         # Stop cancels a run, it does not destroy anything, so it stays neutral (8.1).
@@ -176,10 +176,10 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         variants_row.addWidget(self.stop_btn)
         variants_row.addWidget(self.run_btn)
         root.addLayout(variants_row)
-        # A3-A5 cannot run without investor flows: keep the selection equal to
-        # what a run will actually do (review_codex.md S1).
-        self.flows_cb.toggled.connect(self._sync_flow_variants)
-        self._sync_flow_variants(self.flows_cb.isChecked())
+        # A3-A5 cannot run without investor flows: the selection shown and sent
+        # is what a run will actually do (review_codex.md S1).
+        self.flows_cb.toggled.connect(self._update_variants_label)
+        self._update_variants_label()
 
         # The shown result's caveats (benchmark substitutions, flow coverage,
         # skipped variants), readable here instead of only in the saved report
@@ -270,36 +270,53 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
 
     # --------------------------------------------------------------- request
     def _selected_variants(self) -> tuple[str, ...]:
-        return tuple(vid for vid, cb in self.variant_cbs.items() if cb.isEnabled() and cb.isChecked())
+        """The variants a run will backtest, in VARIANTS order: the user's
+        choice minus the flow-dependent ones while Investor flows is off."""
+        flows_on = self.flows_cb.isChecked()
+        return tuple(vid for vid, v in VARIANTS.items()
+                     if vid in self._chosen_variants and (flows_on or not v.needs_flows))
 
-    def _sync_flow_variants(self, flows_on: bool):
-        """Disable (and untick) the variants that need investor flows while
-        Investor flows is off, remembering their state for when it is back on."""
-        for vid, cb in self.variant_cbs.items():
-            v = VARIANTS[vid]
-            if not v.needs_flows:
-                continue
-            if flows_on:
-                if not cb.isEnabled():
-                    cb.setEnabled(True)
-                    cb.setChecked(self._flow_variant_state.pop(vid, True))
-                cb.setToolTip(v.label)
-            else:
-                if cb.isEnabled():
-                    self._flow_variant_state[vid] = cb.isChecked()
-                    cb.setChecked(False)
-                    cb.setEnabled(False)
-                cb.setToolTip(f"{v.label}\nNeeds Investor flows: tick it to run this variant.")
+    def set_variant_choice(self, ids) -> None:
+        """Apply a choice from the variant picker. Flow-dependent variants the
+        picker could not show as ticked (flows off) keep their earlier state."""
+        chosen = {vid for vid in ids if vid in VARIANTS}
+        if not self.flows_cb.isChecked():
+            chosen |= {vid for vid in self._chosen_variants if VARIANTS[vid].needs_flows}
+        self._chosen_variants = chosen
+        self._update_variants_label()
 
-    def build_request(self) -> ResearchRequest:
-        start = self.start_edit.date().toPyDate()
-        end = self.end_edit.date().toPyDate()
-        params = StrategyParams(
+    def _update_variants_label(self, *_):
+        selected = self._selected_variants()
+        if len(selected) == len(VARIANTS):
+            text = f"All {len(VARIANTS)} variants"
+        elif not selected:
+            text = "No variants (event study only)"
+        else:
+            text = f"{', '.join(selected)}  ({len(selected)} of {len(VARIANTS)})"
+        waiting = [vid for vid, v in VARIANTS.items() if v.needs_flows and vid in self._chosen_variants
+                   and not self.flows_cb.isChecked()]
+        if waiting:
+            text += f" · {', '.join(waiting)} need Investor flows"
+        self.variants_lbl.setText(text)
+
+    def _on_variants_clicked(self):
+        dlg = VariantPickerDialog(self._selected_variants(), self.flows_cb.isChecked(),
+                                  params=self._form_params(), parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.set_variant_choice(dlg.selected_ids())
+
+    def _form_params(self) -> StrategyParams:
+        return StrategyParams(
             universe_size=int(self.universe_spin.value()),
             min_avg_trading_value=float(self.liquidity_spin.value()) * 1e8,
             max_positions=int(self.positions_spin.value()),
             check_weekday=int(self.weekday_combo.currentIndex()),
         )
+
+    def build_request(self) -> ResearchRequest:
+        start = self.start_edit.date().toPyDate()
+        end = self.end_edit.date().toPyDate()
+        params = self._form_params()
         mults = _COST_CHOICES[self.cost_combo.currentIndex()][1]
         return ResearchRequest(
             start=start, end=end, params=params, variant_ids=self._selected_variants(),

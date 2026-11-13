@@ -94,9 +94,11 @@ Dev tooling is in `requirements-dev.txt`
   no engine/UI caller yet; 9-20), `snapshot.py` (`save_snapshot`/`load_snapshot` of a `Dataset` under `cache/snapshots/` with a
   SHA-256 manifest, for byte-identical reruns), `run.py` (headless CLI: `--build-snapshot`,
   `--snapshot`, `--factor-ic`, `--robustness`, `--variants`, ...), `raw_check.py` (A5 sample check
-  of split-adjusted vs unadjusted prices). The Strategy tab runs the research matrix (one
-  checkbox per `VARIANTS` entry, C1-C3 included); factor IC and robustness reports come from
-  `run.py` only.
+  of split-adjusted vs unadjusted prices), `variant_info.py` (`describe_variant`: each matrix
+  row's rules in plain English, built from the `Variant` flags and `StrategyParams`). The
+  Strategy tab runs the research matrix; its variants are picked in `VariantPickerDialog`
+  (list + description of the highlighted row; A3-A5 untickable while Investor flows is off);
+  factor IC and robustness reports come from `run.py` only.
   Strategy code imports `data.*` directly (never `data_fetcher`); `data/` never imports it.
   Tests live in `src/tests/strategy/trend_following/` on synthetic price paths
   (`helpers.synthetic_dataset`).
@@ -121,7 +123,7 @@ Dev tooling is in `requirements-dev.txt`
   `QCalendarWidget` rules have no current caller and are kept for the next `QDateEdit`),
   `dialogs/` (one module per
   dialog group: `index_ma`, `stock_ma`, `trade_edit`, `trade_history`, `assets_graph`,
-  `holdings_summary`, `assets_report`, `stock_report`; import from `ui.dialogs`),
+  `holdings_summary`, `assets_report`, `stock_report`, `variant_picker`; import from `ui.dialogs`),
   `history_table.py` (cell factories, `fill_table_rows`, `SectionTable` + the column
   `SECTIONS` for the history grid), `history_calc.py` (pure P/L maths, no Qt:
   `compute_pl_fields`, `build_monthly_rows`, `summarize_positions`), `assets_report.py` (pure maths for the Total Assets graph's

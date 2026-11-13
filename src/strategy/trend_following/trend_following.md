@@ -463,6 +463,7 @@ class CostModel:
 | `schedule.py`, `data/krx_calendar.py`, `data/price_crosscheck.py` | 2-1, 5 | KIS 휴장일 API 기반 주간 점검일과 KIS vs Naver 일봉 대조(9-20). 엔진·UI에는 연결하지 않음 |
 | `data/flows.py`, `data/rates.py` | 5, 6-3 | 종목별 투자자 순매수 수집기(Naver frgn 페이지, `cache/investor_flows/` 캐시), CD91 수집기(ECOS API 키 → `cd91.csv` → 상수 3%) |
 | `ui/strategy_tab.py`, `ui/trend_following_tab.py`, `threads/strategy_threads.py` | 7 | Strategy 탭의 Trend Following 서브탭(폼 → 백그라운드 실행 → 스코어카드 표·NAV 차트·이벤트 스터디 표·리포트 저장) |
+| `variant_info.py`, `ui/dialogs/variant_picker.py` | 2, 3, 6-2 | 변형 선택 팝업(9-22): 목록에서 고른 변형의 규칙 설명을 `Variant` 플래그와 `StrategyParams` 값으로 조립해 표시 |
 | `ui/universe_tab.py`(Trend Score 버튼), `threads/strategy_threads.py::TrendScoreThread` | 2-5, 9-4 | Trading Universe의 KOSPI/KOSDAQ 행을 2-5로 채점해 지난 1주일 평균 총점 기준 상위 10·하위 10을 **Universe 표 맨 위에 고정**(상위 → 하위 → 나머지 기존 순서, 식별 셀에 `Top n (점수)` / `Bottom n (점수)` 태그); 버튼을 다시 누르면 기본 순서 복원 |
 
 ### 9-2. 구현 결정과 스펙 대비 차이 (다음 버전에서 재검토)
@@ -796,3 +797,11 @@ BM2·BM4와 개발 2구간(2021-22 / 2023-24)별 표, BM1 대비 알파·베타�
 - **BM4 Sharpe**: BM4의 초과수익은 0인데 부동소수점 잡음끼리 나눠 Sharpe ≈ 75가 찍히던 것을, 표준편차 1e-12 이하는 0으로 보도록 고쳤다.
 - **영향 실측**(`dev_2021_2024_nex23`, 비용 1×, 같은 NAV에 구·신 식 적용): 전략 10개는 첫 세션에 체결이 없어(`nav[0] = 1.0`) Sharpe 차이가 0.001 이하이고 MDD는 같다. 첫날 시가에 체결하는 BM1(첫날 +2.5%)은 Sharpe −0.29 → **−0.26**, BM2(+1.6%)는 0.04 → **0.06**. BM3·MDD는 그대로다. 9-19의 표는 구 식 기록으로 남기며 **J1 결론은 바뀌지 않는다**(H 기준 Sharpe ≥ 1.5에 여전히 모두 미달, BM1 대비 Sharpe 순서 불변). 홀드아웃은 열지 않았다.
 - **Strategy 탭**(S1·S3·S4·S8): Investor flows가 꺼져 있으면 수급이 필요한 변형(A3~A5)의 체크박스를 끄고 비활성화한다(다시 켜면 이전 선택 복원). 요청했지만 돌지 않은 변형은 `ResearchResult.skipped`에 이유와 함께 남고 리포트 머리말·상태 문구·Warnings 패널에 표시된다. 경고는 저장하지 않아도 탭의 Warnings 패널(`#warn`, `colors.WARN`)에서 읽는다. 두 결과 표에 `install_table_keys`(Ctrl+C TSV 복사)를 연결했다. Run 툴팁은 `VARIANTS` 전체를, End 라벨은 개발 구간 상한을 보여준다.
+
+### 9-22. 변형 선택 팝업과 변형 설명 (2026-11-13)
+
+전략 규칙·파라미터·엔진은 바뀌지 않았다(버전 v06 유지).
+
+- Strategy 탭의 변형 체크박스 10개 줄을 **Variants...** 버튼과 선택 요약 라벨로 바꿨다. 버튼은 `VariantPickerDialog`를 연다: 왼쪽은 A 계열·B·C 계열로 묶은 체크 목록(All/None), 오른쪽은 강조한 행의 설명이다.
+- 설명(`variant_info.describe_variant`)은 행마다 따로 쓰지 않고 `Variant`의 L1/V/F/FX·mode·`score_overrides`와 `StrategyParams` 값(폼의 유니버스·유동성·보유 수 반영)으로 조립한다. 2-1~2-5·3장의 규칙 문장을 옮겼으므로 규칙이 바뀌면 이 모듈도 같은 커밋에서 고친다. 행별 한 줄 요약(이 행이 매트릭스에서 답하는 질문)만 고정 문구다.
+- Investor flows가 꺼져 있으면 A3~A5는 목록에 회색으로 남아 설명은 읽을 수 있지만 체크할 수 없다. 사용자가 고른 A3~A5는 기억해 두었다가 flows를 켜면 다시 포함한다(9-21 S1과 같은 규칙).

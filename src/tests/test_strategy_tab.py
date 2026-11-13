@@ -4,7 +4,8 @@ import unittest
 from datetime import date
 from unittest.mock import patch
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QApplication, QDialog
 from PyQt6.QtGui import QPixmap
 
 app = QApplication.instance() or QApplication([])
@@ -63,7 +64,7 @@ class TestTrendFollowingTab(unittest.TestCase):
         tab.weekday_combo.setCurrentIndex(2)
         tab.cost_combo.setCurrentIndex(1)
         tab.flows_cb.setChecked(True)
-        tab.variant_cbs["A3"].setChecked(False)
+        tab.set_variant_choice([vid for vid in tab._selected_variants() if vid != "A3"])
         tab.event_cb.setChecked(False)
         req = tab.build_request()
         self.assertEqual(req.params.universe_size, 120)
@@ -79,26 +80,50 @@ class TestTrendFollowingTab(unittest.TestCase):
 
     def test_flow_variants_follow_the_flows_checkbox(self):
         """review_codex.md S1: without investor flows A3-A5 cannot run, so they
-        are disabled and left out of the request; ticking flows restores them."""
+        are left out of the request and the label says why; ticking flows
+        restores them, and a picker choice made with flows off keeps them."""
         from strategy.trend_following import VARIANTS
         flow_ids = [vid for vid, v in VARIANTS.items() if v.needs_flows]
         self.assertTrue(flow_ids)
         tab = TrendFollowingTab()
         self.assertFalse(tab.flows_cb.isChecked())
-        for vid in flow_ids:
-            self.assertFalse(tab.variant_cbs[vid].isEnabled())
-            self.assertFalse(tab.variant_cbs[vid].isChecked())
         req = tab.build_request()
         self.assertFalse(set(flow_ids) & set(req.variant_ids))
         self.assertIn("A0", req.variant_ids)
+        self.assertIn("need Investor flows", tab.variants_lbl.text())
 
         tab.flows_cb.setChecked(True)
-        self.assertTrue(all(tab.variant_cbs[v].isEnabled() and tab.variant_cbs[v].isChecked() for v in flow_ids))
-        tab.variant_cbs[flow_ids[0]].setChecked(False)
+        self.assertEqual(tab._selected_variants(), tuple(VARIANTS))
+        self.assertEqual(tab.variants_lbl.text(), f"All {len(VARIANTS)} variants")
+        tab.set_variant_choice([v for v in VARIANTS if v != flow_ids[0]])
         tab.flows_cb.setChecked(False)
-        tab.flows_cb.setChecked(True)          # the user's choice survives the round trip
-        self.assertFalse(tab.variant_cbs[flow_ids[0]].isChecked())
-        self.assertTrue(tab.variant_cbs[flow_ids[1]].isChecked())
+        tab.set_variant_choice(["A0", "B"])    # picker with flows off: flow rows untouched
+        tab.flows_cb.setChecked(True)
+        self.assertEqual(set(tab._selected_variants()), {"A0", "B"} | set(flow_ids[1:]))
+
+    def test_variants_button_opens_the_picker_and_applies_its_choice(self):
+        tab = TrendFollowingTab()
+        seen = {}
+
+        class _Dlg:
+            def __init__(self, selected, flows_on, params=None, parent=None):
+                seen.update(selected=tuple(selected), flows_on=flows_on, params=params)
+
+            def exec(self):
+                return QDialog.DialogCode.Accepted
+
+            def selected_ids(self):
+                return ("A1", "C1")
+
+        tab.positions_spin.setValue(8)
+        before = tab._selected_variants()
+        with patch("ui.trend_following_tab.VariantPickerDialog", _Dlg):
+            tab._on_variants_clicked()
+        self.assertEqual(seen["selected"], before)
+        self.assertFalse(seen["flows_on"])
+        self.assertEqual(seen["params"].max_positions, 8)     # descriptions quote the form's numbers
+        self.assertEqual(tab._selected_variants(), ("A1", "C1"))
+        self.assertIn("A1, C1", tab.variants_lbl.text())
 
     def test_skipped_variants_and_warnings_are_shown_without_saving(self):
         """review_codex.md S1/S3: a run that could not load flows names the
@@ -238,6 +263,38 @@ class TestTrendFollowingTab(unittest.TestCase):
             tab._on_run_clicked()
         warn.assert_called_once()
         self.assertEqual(_FakeThread.instances, [])
+
+
+class TestVariantPickerDialog(unittest.TestCase):
+    def test_lists_every_variant_and_shows_its_description(self):
+        from strategy.trend_following import VARIANTS
+        from ui.dialogs import VariantPickerDialog
+        dlg = VariantPickerDialog(["A0", "C1"], flows_on=True)
+        self.assertEqual(set(dlg._items), set(VARIANTS))
+        self.assertEqual(dlg.selected_ids(), ("A0", "C1"))
+        self.assertIn("A0", dlg.detail.toPlainText())              # first row shown on open
+        dlg.select("C2")
+        text = dlg.detail.toPlainText()
+        self.assertIn("C2", text)
+        self.assertIn("no volatility normalisation", text)
+        self.assertIn("2 of 10 selected", dlg.count_lbl.text())
+
+    def test_all_none_and_flow_rows_without_flows(self):
+        from strategy.trend_following import VARIANTS
+        from ui.dialogs import VariantPickerDialog
+        flow_ids = {vid for vid, v in VARIANTS.items() if v.needs_flows}
+        dlg = VariantPickerDialog(list(VARIANTS), flows_on=False)
+        self.assertFalse(flow_ids & set(dlg.selected_ids()))
+        a3 = dlg._items["A3"]
+        self.assertFalse(a3.flags() & Qt.ItemFlag.ItemIsUserCheckable)
+        self.assertIn("needs flows", a3.text())
+        dlg.select("A3")                                              # still readable
+        self.assertIn("investor-flow", dlg.detail.toPlainText())
+        dlg._set_all(False)
+        self.assertEqual(dlg.selected_ids(), ())
+        dlg._set_all(True)
+        self.assertEqual(set(dlg.selected_ids()), set(VARIANTS) - flow_ids)
+        self.assertEqual(list(dlg.selected_ids()), [v for v in VARIANTS if v not in flow_ids])   # matrix order
 
 
 class TestStrategyTab(unittest.TestCase):
