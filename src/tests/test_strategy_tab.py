@@ -380,6 +380,85 @@ class TestResultScreen(unittest.TestCase):
         self.assertEqual(tab.compare_table.rowCount(), 0)
 
 
+
+class TestWindowEndAndFormLayout(unittest.TestCase):
+    """docs/ui.md 8.12 / spec 9-23: the window ends today by default; a request
+    past DEV_END carries allow_holdout and the screen and report say so. The
+    unfolded form is two rows in the chips' place."""
+
+    def test_end_defaults_to_today_and_flags_the_holdout(self):
+        from PyQt6.QtCore import QDate
+        from strategy.trend_following import DEV_END
+        tab = TrendFollowingTab()
+        self.assertEqual(tab.end_edit.date(), QDate.currentDate())
+        self.assertEqual(tab.end_edit.maximumDate(), QDate.currentDate())
+        req = tab.build_request()
+        self.assertEqual(req.end, date.today())
+        self.assertTrue(req.allow_holdout)
+        self.assertTrue(tab.holdout_lbl.isVisibleTo(tab))
+        chip = next(c for c in tab.chips if c.text() == "홀드아웃 포함")
+        self.assertTrue(chip.property("warn"))
+
+        tab.end_edit.setDate(QDate(DEV_END.year, DEV_END.month, DEV_END.day))
+        self.assertFalse(tab.build_request().allow_holdout)
+        self.assertFalse(tab.holdout_lbl.isVisibleTo(tab))
+        self.assertNotIn("홀드아웃 포함", [c.text() for c in tab.chips if not c.isHidden()])
+
+    def test_holdout_result_is_marked_in_warnings_and_report(self):
+        import dataclasses
+        import os
+        import tempfile
+        result = _result(("A0",), (1.0,))
+        result.request = dataclasses.replace(result.request, allow_holdout=True)
+        tab = TrendFollowingTab()
+        tab._on_research_finished(result, "")
+        self.assertIn("홀드아웃 구간", tab.warn_lbl.text())
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "r.md")
+            with patch("ui.trend_following_tab.QFileDialog.getSaveFileName", return_value=(path, "")):
+                tab._on_save_clicked()
+            with open(path, encoding="utf-8") as f:
+                self.assertIn("홀드아웃 구간", f.read())
+
+    def test_thread_passes_the_holdout_switch_to_the_loader(self):
+        from threads.strategy_threads import TrendFollowingResearchThread
+        tab = TrendFollowingTab()
+        req = tab.build_request()
+        with patch("threads.strategy_threads.load_dataset", side_effect=RuntimeError("stop")) as load:
+            TrendFollowingResearchThread(req).run()
+        self.assertTrue(load.call_args.kwargs["allow_holdout"])
+
+    def test_form_takes_the_chips_place_in_two_rows(self):
+        tab = TrendFollowingTab()
+        tab.resize(1440, 900)
+        tab.show()
+        app.processEvents()
+        self.assertTrue(tab.form_box.isVisible())
+        self.assertFalse(tab.chips_box.isVisible())
+        rows = {w.mapTo(tab, w.rect().topLeft()).y() for w in
+                (tab.start_edit, tab.end_edit, tab.universe_spin, tab.liquidity_spin, tab.positions_spin,
+                 tab.weekday_combo, tab.cost_combo, tab.flows_cb, tab.event_cb, tab.variants_btn)}
+        self.assertLessEqual(len({y // 20 for y in rows}), 2)              # two lines of controls
+        self.assertTrue(tab.form_row2.isVisible())
+        self.assertTrue(tab.variants_lbl.width() > 300)                  # row 2 spans under the buttons
+        tab.edit_btn.click()
+        self.assertFalse(tab.form_box.isVisible())
+        self.assertFalse(tab.form_row2.isVisible())
+        self.assertTrue(tab.chips_box.isVisible())
+
+    def test_settings_do_not_widen_the_tab(self):
+        """Neither the long variant label nor the chip line sets the minimum
+        width; the unfolded form fits in the width the old grid needed."""
+        tab = TrendFollowingTab()
+        tab.show()
+        app.processEvents()
+        self.assertLessEqual(tab.minimumSizeHint().width(), 1226)
+        tab.edit_btn.click()
+        app.processEvents()
+        self.assertLessEqual(tab.minimumSizeHint().width(), 1226)
+        tab.hide()
+        tab.hide()
+
 class TestTargetsAndDrawdown(unittest.TestCase):
     def test_sharpe_and_mdd_badge_boundaries(self):
         from ui.strategy_widgets import sharpe_badge, mdd_badge, meets_targets

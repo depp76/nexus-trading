@@ -46,7 +46,7 @@ class TrendFollowingResearchThread(QThread):
             ds = load_dataset(
                 req.start, req.end, universe_size=req.params.universe_size,
                 include_flows=req.include_flows, params=req.params, progress=self.progress.emit,
-                should_stop=self.is_cancelled,
+                should_stop=self.is_cancelled, allow_holdout=req.allow_holdout,
             )
             result = run_research(ds, req, progress=self.progress.emit, should_stop=self.is_cancelled)
             self.finished.emit(result, "")

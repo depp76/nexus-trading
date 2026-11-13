@@ -177,4 +177,5 @@ def app_qss(font_css: str) -> str:
     QFrame#KpiCard QLabel#kpiValue {{ font-size: 16pt; }}   /* FONT_TITLE: a card holds one number */
     QLabel#kpiHelp {{ color: {TEXT_MUTED}; font-size: 8pt; }}
     QLabel#settingsChip {{ background: {HDR_BG}; color: {TEXT_SUB}; border-radius: 4px; padding: 2px 8px; }}
+    QLabel#settingsChip[warn="true"] {{ color: {WARN}; font-weight: 600; }}   /* hold-out included (8.12) */
     """

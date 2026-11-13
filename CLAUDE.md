@@ -25,7 +25,10 @@ modules to spec sections and records every implementation decision that deviates
 (current-constituent universe, year-end trim at the close, no weekly re-weighting, no sector
 cap, KODEX 200TR as BM1 data, CD91 from ECOS/CSV/constant). **Real-data results are recorded in
 spec 9-19** (development window 2021-2024): the J1 verdict is that no variant is adoptable, all
-ten were discarded, and the 2025 hold-out has not been opened. The scoring mode also feeds the
+ten were discarded, and the 2025 hold-out had not been opened as of that record. Since
+2026-11-13 the Strategy tab's end date defaults to today and a run past `DEV_END` passes
+`allow_holdout=True` and is labelled as including the hold-out (spec 9-23); running one
+counts as opening it. The scoring mode also feeds the
 Trading Universe tab's "Trend Score" button, which pins the weekly Top 10 / Bottom 10 to the top
 of its table (`TrendScoreThread`; Top rows, then Bottom rows, then the rest in the default
 order, with a `Top n (score)` / `Bottom n (score)` tag in the identity cell; the checkable

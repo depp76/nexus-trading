@@ -29,9 +29,9 @@ from html import escape
 from PyQt6.QtCore import Qt, QDate
 from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QCheckBox, QComboBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QComboBox,
     QSpinBox, QDateEdit, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QMessageBox,
-    QSplitter, QFrame, QDialog, QTabWidget, QScrollArea,
+    QSplitter, QFrame, QDialog, QTabWidget, QScrollArea, QSizePolicy, QGridLayout,
 )
 
 from matplotlib.figure import Figure
@@ -66,6 +66,9 @@ _ID_ROLE = Qt.ItemDataRole.UserRole + 1      # run id on every comparison-table 
 # Result tabs, in order (docs/ui_redesign_2026-11.md P1-1 item 5).
 TAB_COMPARISON, TAB_ALL, TAB_MONTHLY, TAB_TRADES, TAB_EVENTS, TAB_WARNINGS = range(6)
 
+_HOLDOUT_CHIP = "홀드아웃 포함"
+_HOLDOUT_NOTE = (f"홀드아웃 구간({DEV_END:%Y-%m-%d} 이후)이 포함된 결과입니다. 스펙 6-5의 홀드아웃은 이 실행으로 열린 것으로 "
+                 "봐야 합니다 (trend_following.md 9-23).")
 _TRADES_EMPTY = "리서치를 실행하면 선택한 변형의 매매 내역이 나옵니다"
 _TRADES_EMPTY_BM = "벤치마크는 매매 내역이 없습니다. 전략 변형을 고르세요"
 
@@ -115,8 +118,6 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
                              f"and the 6-1 event study.")
 
         root.addWidget(self._build_settings_card())
-        self.form_box = self._build_form()
-        root.addWidget(self.form_box)
         self.selector_row = self._build_selector_row()
         root.addWidget(self.selector_row)
 
@@ -167,21 +168,42 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self._update_variants_label()
 
     def _build_settings_card(self) -> QFrame:
-        """One line summing up the form as chips, then the tab's actions with
-        Run (the one primary) last (docs/ui.md 8.4)."""
+        """The run settings in one card: folded, a line of chips summing up the
+        form; unfolded ("설정 편집"), the form itself in two rows in the chips'
+        place. The tab's actions sit on the right either way, Run (the one
+        primary) last (docs/ui.md 8.4 / 8.12)."""
         card = QFrame()
         card.setObjectName("DashboardCard")
-        row = QHBoxLayout(card)
-        row.setContentsMargins(10, 6, 10, 6)
-        row.setSpacing(6)
+        grid = QGridLayout(card)
+        grid.setContentsMargins(10, 6, 10, 6)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
         title = QLabel("실행 설정")
         title.setObjectName("kpiLabel")
-        row.addWidget(title)
+        grid.addWidget(title, 0, 0, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
         self.chips: list[QLabel] = []
-        self._chips_layout = QHBoxLayout()
+        self.chips_box = QWidget()
+        # Chips summarise the form; on a narrow window the last ones are cut
+        # rather than widening the whole tab.
+        self.chips_box.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._chips_layout = QHBoxLayout(self.chips_box)
+        self._chips_layout.setContentsMargins(0, 0, 0, 0)
         self._chips_layout.setSpacing(4)
-        row.addLayout(self._chips_layout)
-        row.addStretch()
+        self._chips_layout.addStretch()
+        top.addWidget(self.chips_box, 1)
+        # Row 1 of the form sits in the chips' place, left of the buttons; row 2
+        # spans the card's full width under them.
+        self.form_box, self.form_row2 = self._build_form()
+        top.addWidget(self.form_box, 1)
+        grid.addLayout(top, 0, 1)
+        grid.addWidget(self.form_row2, 1, 1, 1, 2)
+        grid.setColumnStretch(1, 1)
+        buttons = QHBoxLayout()
+        buttons.setSpacing(8)
+
         # Open by default so a first run starts from the form; a result folds it
         # away (docs/ui.md 8.10).
         self.edit_btn = make_button("설정 편집", on_click=self._on_edit_toggled, checkable=True, checked=True,
@@ -193,35 +215,42 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.save_btn = make_button("리포트 저장", on_click=self._on_save_clicked)
         self.save_btn.setEnabled(False)
         for btn in (self.edit_btn, self.save_btn, self.stop_btn, self.run_btn):
-            row.addWidget(btn)
+            buttons.addWidget(btn)
+        grid.addLayout(buttons, 0, 2)
+        self.chips_box.setVisible(False)
         return card
 
-    def _build_form(self) -> QWidget:
-        box = QWidget()
-        outer = QVBoxLayout(box)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(6)
-        form = QGridLayout()
-        form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(6)
-
+    def _build_form(self) -> tuple[QWidget, QWidget]:
+        """Two rows (docs/ui.md 8.12): the window and the universe, then the
+        portfolio settings, costs, the two data switches and the variants."""
+        # The window ends today by default. Anything after DEV_END is the
+        # spec's hold-out (6-5): such a request carries allow_holdout and the
+        # chip, the form and the report say so (spec 9-23).
+        today = QDate.currentDate()
         self.start_edit = QDateEdit(QDate(2021, 1, 1))
-        self.end_edit = QDateEdit(QDate(DEV_END.year, DEV_END.month, DEV_END.day))
+        self.end_edit = QDateEdit(today)
         for de in (self.start_edit, self.end_edit):
             de.setCalendarPopup(True)
             de.setDisplayFormat("yyyy-MM-dd")
-            de.setMaximumDate(QDate(DEV_END.year, DEV_END.month, DEV_END.day))
+            de.setMaximumDate(today)
+        self.end_edit.setToolTip(f"{DEV_END:%Y-%m-%d} 이후는 홀드아웃 구간입니다 (trend_following.md 6-5). "
+                                 "넘기면 홀드아웃을 포함해 실행하고 결과에 표시합니다.")
+        self.holdout_lbl = QLabel("홀드아웃 포함")
+        self.holdout_lbl.setObjectName("warn")
+        self.holdout_lbl.setToolTip(self.end_edit.toolTip())
 
         self.universe_spin = QSpinBox()
         self.universe_spin.setRange(20, 300)
         self.universe_spin.setSingleStep(10)
         self.universe_spin.setValue(StrategyParams.universe_size)
+        self.universe_spin.setToolTip("시가총액 상위 N개 KOSPI 종목")
 
         self.liquidity_spin = QSpinBox()
         self.liquidity_spin.setRange(0, 5000)
         self.liquidity_spin.setSingleStep(10)
         self.liquidity_spin.setValue(int(StrategyParams.min_avg_trading_value / 1e8))
         self.liquidity_spin.setSuffix(" 억")
+        self.liquidity_spin.setToolTip("20일 평균 거래대금 하한")
 
         self.positions_spin = QSpinBox()
         self.positions_spin.setRange(3, 12)
@@ -230,10 +259,12 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.weekday_combo = QComboBox()
         self.weekday_combo.addItems(_WEEKDAYS)
         self.weekday_combo.setCurrentIndex(StrategyParams.check_weekday)
+        self.weekday_combo.setToolTip("주간 신호 점검 요일")
 
         self.cost_combo = QComboBox()
         for label, _ in _COST_CHOICES:
             self.cost_combo.addItem(label)
+        self.cost_combo.setToolTip("trend_following.md 4-1 비용 민감도")
 
         self.flows_cb = QCheckBox("투자자 수급")
         self.flows_cb.setToolTip("네이버 투자자별 매매 동향으로 F/FX 신호 계산. 처음 실행은 느림")
@@ -241,46 +272,53 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.event_cb.setToolTip("trend_following.md 6-1 돌파 이벤트 스터디")
         self.event_cb.setChecked(True)
 
-        def _lbl(text, tip=""):
-            lbl = QLabel(text)
-            if tip:
-                lbl.setToolTip(tip)
-            return lbl
-
-        # Three label/field pairs per row (docs/ui.md 8.6): the old 8-column
-        # grid with long labels made this the widest tab by far. Long
-        # explanations moved to tooltips.
-        fields = [
-            (_lbl("시작"), self.start_edit),
-            (_lbl(f"종료 (≤ {DEV_END:%Y-%m-%d})",
-                  "개발 구간 끝까지만 실행합니다. 그 뒤 홀드아웃 연도는 닫아 둡니다 (trend_following.md 6-5)"),
-             self.end_edit),
-            (_lbl("유니버스", "시가총액 상위 N개 KOSPI 종목"), self.universe_spin),
-            (_lbl("유동성 하한", "20일 평균 거래대금"), self.liquidity_spin),
-            (_lbl("최대 보유 종목"), self.positions_spin),
-            (_lbl("점검 요일", "주간 신호 점검 요일"), self.weekday_combo),
-            (_lbl("비용 시나리오", "trend_following.md 4-1 비용 민감도"), self.cost_combo),
-        ]
-        for i, (lbl, w) in enumerate(fields):
-            row, pair = divmod(i, 3)
-            form.addWidget(lbl, row, pair * 2)
-            form.addWidget(w, row, pair * 2 + 1)
-        form.addWidget(self.flows_cb, 2, 2, 1, 2)
-        form.addWidget(self.event_cb, 2, 4, 1, 2)
-        form.setColumnStretch(6, 1)
-        outer.addLayout(form)
-
         # The variants are picked in a dialog that also explains each one
-        # (ui.dialogs.VariantPickerDialog); the row shows what is selected.
-        variants_row = QHBoxLayout()
+        # (ui.dialogs.VariantPickerDialog); the label shows what is selected.
         self.variants_btn = make_button("변형 선택...", on_click=self._on_variants_clicked,
                                         tooltip="백테스트할 전략 변형을 고르고 각 규칙 설명을 봅니다")
-        variants_row.addWidget(self.variants_btn)
         self.variants_lbl = QLabel("")
-        variants_row.addWidget(self.variants_lbl)
-        variants_row.addStretch()
-        outer.addLayout(variants_row)
-        return box
+        # A long selection ("A0, A1, ... need flows") must not set the tab's
+        # minimum width; it is clipped and the full text is on the tooltip.
+        self.variants_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+
+        def _row(*groups):
+            line = QHBoxLayout()
+            line.setContentsMargins(0, 0, 0, 0)
+            line.setSpacing(6)
+            for i, group in enumerate(groups):
+                if i:
+                    line.addSpacing(14)
+                for w in group:
+                    if w is self.variants_lbl:
+                        line.addWidget(w, 1)      # takes the spare width (its size hint is ignored)
+                    else:
+                        line.addWidget(QLabel(w) if isinstance(w, str) else w)
+            if self.variants_lbl not in [w for g in groups for w in g]:
+                line.addStretch()
+            return line
+
+        row1, row2 = QWidget(), QWidget()
+        row1.setLayout(_row(
+            ("기간", self.start_edit, "~", self.end_edit, self.holdout_lbl),
+            ("유니버스", self.universe_spin),
+            ("유동성 하한", self.liquidity_spin),
+        ))
+        row2.setLayout(_row(
+            ("최대 보유", self.positions_spin),
+            ("점검 요일", self.weekday_combo),
+            ("비용", self.cost_combo),
+            (self.flows_cb, self.event_cb),
+            (self.variants_btn, self.variants_lbl),
+        ))
+        self.end_edit.dateChanged.connect(self._update_holdout)
+        self._update_holdout()
+        return row1, row2
+
+    def includes_holdout(self) -> bool:
+        return self.end_edit.date().toPyDate() > DEV_END
+
+    def _update_holdout(self, *_):
+        self.holdout_lbl.setVisible(self.includes_holdout())
 
     def _build_selector_row(self) -> QWidget:
         """Variant segments (one per run id of the shown cost) and the cost
@@ -437,6 +475,8 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             "비용 " + "/".join(f"{m:g}x" for m in mults),
             variants,
         ]
+        if self.includes_holdout():
+            chips.append(_HOLDOUT_CHIP)
         if self.flows_cb.isChecked():
             chips.append("투자자 수급")
         if not self.event_cb.isChecked():
@@ -448,15 +488,22 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         while len(self.chips) < len(texts):
             chip = QLabel()
             chip.setObjectName("settingsChip")
-            self._chips_layout.addWidget(chip)
+            self._chips_layout.insertWidget(len(self.chips), chip)   # before the trailing stretch
             self.chips.append(chip)
         for i, chip in enumerate(self.chips):
             chip.setVisible(i < len(texts))
             if i < len(texts):
                 chip.setText(texts[i])
+                warn = texts[i] == _HOLDOUT_CHIP
+                if bool(chip.property("warn")) != warn:
+                    chip.setProperty("warn", warn)
+                    chip.style().unpolish(chip)
+                    chip.style().polish(chip)
 
     def _on_edit_toggled(self, checked: bool):
         self.form_box.setVisible(checked)
+        self.form_row2.setVisible(checked)
+        self.chips_box.setVisible(not checked)
 
     # --------------------------------------------------------------- request
     def _selected_variants(self) -> tuple[str, ...]:
@@ -488,6 +535,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         if waiting:
             text += f" · {', '.join(waiting)}은(는) 투자자 수급 필요"
         self.variants_lbl.setText(text)
+        self.variants_lbl.setToolTip(text)
         self._update_chips()
 
     def _on_variants_clicked(self):
@@ -513,6 +561,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             start=start, end=end, params=params, variant_ids=self._selected_variants(),
             cost_multipliers=tuple(mults), include_flows=self.flows_cb.isChecked(),
             run_backtests=True, run_event_study=self.event_cb.isChecked(),
+            allow_holdout=end > DEV_END,
         )
 
     def _on_run_clicked(self):
@@ -567,6 +616,8 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         """Fill the Warnings tab from `result` (not from the current form)."""
         lines = [f"{escape(vid)} not run: {escape(why)}" for vid, why in result.skipped.items()]
         lines += [escape(w) for w in result.warnings]
+        if result.request.allow_holdout:
+            lines.insert(0, escape(_HOLDOUT_NOTE))
         self.warn_lbl.setText("<br>".join(f"• {line}" for line in lines) if lines else "경고 없음.")
         self.result_tabs.setTabText(TAB_WARNINGS, f"경고 ({len(lines)})")
         self.result_tabs.tabBar().setTabTextColor(TAB_WARNINGS, QColor(WARN if lines else TEXT_MUTED))
@@ -831,7 +882,8 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             return
         try:
             with open(path, "w", encoding="utf-8") as f:
-                f.write(self._result.to_markdown())
+                header = [f"- **{_HOLDOUT_NOTE}**"] if self._result.request.allow_holdout else None
+                f.write(self._result.to_markdown(header))
             self.status_lbl.setText(f"Report saved: {path}")
         except Exception as e:
             logger.warning("Failed to save the Trend Following report", exc_info=True)
