@@ -72,6 +72,13 @@ def _dark_pixels(tbl):
                if img.pixelColor(x, y).lightness() < 200)
 
 
+def _is_symbol(ch: str) -> bool:
+    """Arrows, math/technical symbols, shapes, dingbats and emoji (8.1 bans
+    them on buttons); Hangul and other letters are fine."""
+    cp = ord(ch)
+    return 0x2190 <= cp <= 0x2BFF or cp >= 0x1F000
+
+
 class TestTabButtons(unittest.TestCase):
     """Every push button a tab builds follows 8.1: no emoji label, at most one
     primary per tab."""
@@ -81,12 +88,12 @@ class TestTabButtons(unittest.TestCase):
         primaries = [b.text() for b in buttons if b.objectName() == "primary"]
         self.assertEqual(primaries, [primary_text])
         for b in buttons:
-            self.assertTrue(all(ord(ch) < 0x2190 for ch in b.text()), repr(b.text()))
+            self.assertFalse(any(_is_symbol(ch) for ch in b.text()), repr(b.text()))
 
     def test_strategy_tab(self):
         from ui.trend_following_tab import TrendFollowingTab
         tab = TrendFollowingTab()
-        self._check(tab, "Run Research")
+        self._check(tab, "리서치 실행")
         self.assertEqual(tab.stop_btn.objectName(), "")
 
     def test_assets_tab_has_no_delete_button(self):
@@ -96,7 +103,7 @@ class TestTabButtons(unittest.TestCase):
              patch("ui.assets_tab.TradingRecordTab._schedule_daily_sync"):
             from ui.assets_tab import TradingRecordTab
             tab = TradingRecordTab()
-            self._check(tab, "Add Record")
+            self._check(tab, "기록 추가")
             self.assertFalse(any("Delete" in b.text() for b in tab.findChildren(QPushButton)))
 
             # 8.5: informational results go to the status bar, not a modal box.

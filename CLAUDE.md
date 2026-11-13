@@ -250,6 +250,14 @@ not fixtures. Trading History principal/deposit/withdrawal live in `QSettings`
   the one-line explanations under the Strategy KPI cards and the Universe score cards
   (`ui/strategy_widgets.py` `KPI_CARDS`, `ui/trend_score_section.py`) and the E2/A5 tooltip,
   worded as in `docs/ui_redesign_2026-11.md` (2026-11-13).
+  Third and broadest (user direction, 2026-11-13): **visible UI labels are Korean** for
+  buttons, toolbar labels and placeholders, context menus, dialog buttons/titles/field labels
+  and message-box texts (docs/ui.md 8.11). Kept English: the four top-level tab names,
+  message-box titles (they are the tab names, 8.5), metric abbreviations (CAGR, MDD, Sharpe,
+  tPER, MA20 Div, RSI ...), the narrow numeric column headers, IDs (A0-C3, BM1-BM4) and
+  market names. Table column headers, the MA chart dialog and footer/status-bar messages
+  were not converted (yet). Qt's own dialogs get Korean from the bundled `qtbase_ko`
+  translator `main.py` installs.
 - UI 변경은 `docs/ui.md` 의 전역 규칙을 따른다.
 - One font family app-wide, Malgun Gothic Semilight (user direction, 2026-09-19): every
   widget goes through `create_font()` (sizes from the `FONT_*` scale in `ui/common.py`),

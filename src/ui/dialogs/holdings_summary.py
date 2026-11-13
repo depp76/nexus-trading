@@ -136,7 +136,7 @@ def build_holdings_summary(parent, closed_data: list, open_data: list):
     subtotal_lbl.setFont(create_font(FONT_SMALL, style_name="Semilight"))
     v.addWidget(subtotal_lbl)
 
-    close_btn = QPushButton("Close")
+    close_btn = QPushButton("닫기")
     close_btn.clicked.connect(dlg.accept)
     btn_row = QHBoxLayout()
     btn_row.addStretch()

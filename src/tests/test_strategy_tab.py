@@ -90,11 +90,11 @@ class TestTrendFollowingTab(unittest.TestCase):
         req = tab.build_request()
         self.assertFalse(set(flow_ids) & set(req.variant_ids))
         self.assertIn("A0", req.variant_ids)
-        self.assertIn("need Investor flows", tab.variants_lbl.text())
+        self.assertIn("투자자 수급 필요", tab.variants_lbl.text())
 
         tab.flows_cb.setChecked(True)
         self.assertEqual(tab._selected_variants(), tuple(VARIANTS))
-        self.assertEqual(tab.variants_lbl.text(), f"All {len(VARIANTS)} variants")
+        self.assertEqual(tab.variants_lbl.text(), f"변형 {len(VARIANTS)}개 전체")
         tab.set_variant_choice([v for v in VARIANTS if v != flow_ids[0]])
         tab.flows_cb.setChecked(False)
         tab.set_variant_choice(["A0", "B"])    # picker with flows off: flow rows untouched
@@ -138,11 +138,11 @@ class TestTrendFollowingTab(unittest.TestCase):
         from ui.colors import WARN
         from ui.trend_following_tab import TAB_WARNINGS
         tab = TrendFollowingTab()
-        self.assertEqual(tab.result_tabs.tabText(TAB_WARNINGS), "Warnings (0)")
+        self.assertEqual(tab.result_tabs.tabText(TAB_WARNINGS), "경고 (0)")
         tab._on_research_finished(result, "")
         n = len(result.warnings) + 1
         # ui_redesign_2026-11 P1-1 item 5: the toggle panel became a result tab.
-        self.assertEqual(tab.result_tabs.tabText(TAB_WARNINGS), f"Warnings ({n})")
+        self.assertEqual(tab.result_tabs.tabText(TAB_WARNINGS), f"경고 ({n})")
         self.assertEqual(tab.result_tabs.tabBar().tabTextColor(TAB_WARNINGS).name(), WARN)
         self.assertIn("A3 not run", tab.warn_lbl.text())
         self.assertIn("skipped A3", tab.status_lbl.text())
@@ -318,9 +318,9 @@ class TestResultScreen(unittest.TestCase):
         cards = tab.kpi_row.cards
         self.assertTrue(cards["sharpe"].badge.isHidden())
         self.assertTrue(cards["mdd"].badge.isHidden())
-        self.assertEqual(tab.target_card.badges["sharpe"].text(), "Benchmark")
+        self.assertEqual(tab.target_card.badges["sharpe"].text(), "벤치마크")
         self.assertEqual(tab.trades_table.rowCount(), 0)
-        self.assertIn("Benchmarks have no trades", tab.trades_table._empty_hint.text)
+        self.assertIn("벤치마크는 매매 내역이 없습니다", tab.trades_table._empty_hint.text)
 
     def test_comparison_row_click_selects_the_variant(self):
         tab = self._tab()
@@ -368,8 +368,8 @@ class TestResultScreen(unittest.TestCase):
         tab.universe_spin.setValue(120)
         tab.cost_combo.setCurrentIndex(1)
         texts = [c.text() for c in tab.chips if not c.isHidden()]
-        self.assertIn("KOSPI Top 120", texts)
-        self.assertIn("Costs 1x", texts)
+        self.assertIn("KOSPI 상위 120", texts)
+        self.assertIn("비용 1x", texts)
         tab.edit_btn.click()
         self.assertFalse(tab.form_box.isVisibleTo(tab))
 

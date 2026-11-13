@@ -59,15 +59,15 @@ from ui.strategy_widgets import (
 
 logger = logging.getLogger(__name__)
 
-_WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"]
-_COST_CHOICES = [("0x / 1x / 2x", COST_MULTIPLIERS), ("1x only", (1.0,))]
+_WEEKDAYS = ["월", "화", "수", "목", "금"]
+_COST_CHOICES = [("0x / 1x / 2x", COST_MULTIPLIERS), ("1x만", (1.0,))]
 _ID_ROLE = Qt.ItemDataRole.UserRole + 1      # run id on every comparison-table item
 
 # Result tabs, in order (docs/ui_redesign_2026-11.md P1-1 item 5).
 TAB_COMPARISON, TAB_ALL, TAB_MONTHLY, TAB_TRADES, TAB_EVENTS, TAB_WARNINGS = range(6)
 
-_TRADES_EMPTY = "Run Research to list the selected variant's trades"
-_TRADES_EMPTY_BM = "Benchmarks have no trades; pick a strategy variant"
+_TRADES_EMPTY = "리서치를 실행하면 선택한 변형의 매매 내역이 나옵니다"
+_TRADES_EMPTY_BM = "벤치마크는 매매 내역이 없습니다. 전략 변형을 고르세요"
 
 
 def _fmt_event(value, pct=True, digits=1) -> str:
@@ -174,7 +174,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         row = QHBoxLayout(card)
         row.setContentsMargins(10, 6, 10, 6)
         row.setSpacing(6)
-        title = QLabel("RUN SETTINGS")
+        title = QLabel("실행 설정")
         title.setObjectName("kpiLabel")
         row.addWidget(title)
         self.chips: list[QLabel] = []
@@ -184,13 +184,13 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         row.addStretch()
         # Open by default so a first run starts from the form; a result folds it
         # away (docs/ui.md 8.10).
-        self.edit_btn = make_button("Edit settings", on_click=self._on_edit_toggled, checkable=True, checked=True,
-                                    tooltip="Show or hide the run settings form")
+        self.edit_btn = make_button("설정 편집", on_click=self._on_edit_toggled, checkable=True, checked=True,
+                                    tooltip="실행 설정 입력란을 펼치거나 접습니다")
         # Stop cancels a run, it does not destroy anything, so it stays neutral (8.1).
-        self.run_btn = make_button("Run Research", "primary", self._on_run_clicked, tooltip=self._run_tooltip)
-        self.stop_btn = make_button("Stop", on_click=self._on_stop_clicked)
+        self.run_btn = make_button("리서치 실행", "primary", self._on_run_clicked, tooltip=self._run_tooltip)
+        self.stop_btn = make_button("중지", on_click=self._on_stop_clicked)
         self.stop_btn.setEnabled(False)
-        self.save_btn = make_button("Save Report", on_click=self._on_save_clicked)
+        self.save_btn = make_button("리포트 저장", on_click=self._on_save_clicked)
         self.save_btn.setEnabled(False)
         for btn in (self.edit_btn, self.save_btn, self.stop_btn, self.run_btn):
             row.addWidget(btn)
@@ -235,10 +235,10 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         for label, _ in _COST_CHOICES:
             self.cost_combo.addItem(label)
 
-        self.flows_cb = QCheckBox("Investor flows")
-        self.flows_cb.setToolTip("F/FX signals from Naver investor flows; slow on the first run")
-        self.event_cb = QCheckBox("Event study")
-        self.event_cb.setToolTip("trend_following.md 6-1 breakout event study")
+        self.flows_cb = QCheckBox("투자자 수급")
+        self.flows_cb.setToolTip("네이버 투자자별 매매 동향으로 F/FX 신호 계산. 처음 실행은 느림")
+        self.event_cb = QCheckBox("이벤트 스터디")
+        self.event_cb.setToolTip("trend_following.md 6-1 돌파 이벤트 스터디")
         self.event_cb.setChecked(True)
 
         def _lbl(text, tip=""):
@@ -251,15 +251,15 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         # grid with long labels made this the widest tab by far. Long
         # explanations moved to tooltips.
         fields = [
-            (_lbl("Start"), self.start_edit),
-            (_lbl(f"End (≤ {DEV_END:%Y-%m-%d})",
-                  "Runs stop at the end of the development window; the hold-out year after it stays "
-                  "closed (trend_following.md 6-5)"), self.end_edit),
-            (_lbl("Universe", "KOSPI top N by market cap"), self.universe_spin),
-            (_lbl("Liquidity floor", "20-day average trading value"), self.liquidity_spin),
-            (_lbl("Max positions"), self.positions_spin),
-            (_lbl("Check day", "Weekly signal check day"), self.weekday_combo),
-            (_lbl("Cost scenarios", "trend_following.md 4-1 cost sensitivity"), self.cost_combo),
+            (_lbl("시작"), self.start_edit),
+            (_lbl(f"종료 (≤ {DEV_END:%Y-%m-%d})",
+                  "개발 구간 끝까지만 실행합니다. 그 뒤 홀드아웃 연도는 닫아 둡니다 (trend_following.md 6-5)"),
+             self.end_edit),
+            (_lbl("유니버스", "시가총액 상위 N개 KOSPI 종목"), self.universe_spin),
+            (_lbl("유동성 하한", "20일 평균 거래대금"), self.liquidity_spin),
+            (_lbl("최대 보유 종목"), self.positions_spin),
+            (_lbl("점검 요일", "주간 신호 점검 요일"), self.weekday_combo),
+            (_lbl("비용 시나리오", "trend_following.md 4-1 비용 민감도"), self.cost_combo),
         ]
         for i, (lbl, w) in enumerate(fields):
             row, pair = divmod(i, 3)
@@ -273,8 +273,8 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         # The variants are picked in a dialog that also explains each one
         # (ui.dialogs.VariantPickerDialog); the row shows what is selected.
         variants_row = QHBoxLayout()
-        self.variants_btn = make_button("Variants...", on_click=self._on_variants_clicked,
-                                        tooltip="Choose the strategy variants to backtest and read what each does")
+        self.variants_btn = make_button("변형 선택...", on_click=self._on_variants_clicked,
+                                        tooltip="백테스트할 전략 변형을 고르고 각 규칙 설명을 봅니다")
         variants_row.addWidget(self.variants_btn)
         self.variants_lbl = QLabel("")
         variants_row.addWidget(self.variants_lbl)
@@ -289,14 +289,14 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         row = QHBoxLayout(box)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(6)
-        lbl = QLabel("Variant")
+        lbl = QLabel("변형")
         lbl.setObjectName("muted")
         row.addWidget(lbl)
         self.variant_seg = SegmentRow(width=52)
         self.variant_seg.selected.connect(self._on_variant_picked)
         row.addWidget(self.variant_seg)
         row.addStretch()
-        lbl = QLabel("Cost")
+        lbl = QLabel("비용")
         lbl.setObjectName("muted")
         row.addWidget(lbl)
         self.cost_seg = SegmentRow(width=40)
@@ -319,8 +319,8 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.readout_lbl.setFont(create_font(FONT_SMALL))
         self.readout_lbl.setTextFormat(Qt.TextFormat.RichText)
         self.readout_lbl.setWordWrap(True)
-        self.show_all_cb = QCheckBox("Show all")
-        self.show_all_cb.setToolTip("Also draw every other variant and benchmark at this cost, thin and grey")
+        self.show_all_cb = QCheckBox("전체 표시")
+        self.show_all_cb.setToolTip("이 비용의 다른 변형과 벤치마크도 회색 가는 선으로 그립니다")
         self.show_all_cb.toggled.connect(self._redraw_chart)
         head = QHBoxLayout()
         head.addWidget(self.readout_lbl, 1)
@@ -340,7 +340,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.result_tabs.setProperty("warn", False)
 
         self.compare_table = setup_table(QTableWidget(0, len(COMPARISON_HEADERS)),
-                                         empty_text="Run Research to compare the variants")
+                                         empty_text="리서치를 실행하면 변형을 비교합니다")
         self.compare_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.compare_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.compare_table.setHorizontalHeaderLabels(COMPARISON_HEADERS)
@@ -352,11 +352,11 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.compare_table.setItemDelegateForColumn(SHARPE_COL, self._sharpe_delegate)
         self.compare_table.currentCellChanged.connect(self._on_compare_row_changed)
         install_table_keys(self.compare_table)
-        self.result_tabs.addTab(self.compare_table, "Variant comparison")
+        self.result_tabs.addTab(self.compare_table, "변형 비교")
 
         # Every scorecard column for every run and cost (the table this tab had
         # before the 2026-11 redesign, unchanged).
-        self.table = setup_table(QTableWidget(), empty_text="Run Research to fill the scorecard")
+        self.table = setup_table(QTableWidget(), empty_text="리서치를 실행하면 성과표가 채워집니다")
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         headers = ["ID", "Cost"] + [h for h, _ in SUMMARY_COLUMNS[1:]]
         self.table.setColumnCount(len(headers))
@@ -366,16 +366,16 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.table.setColumnWidth(0, 60)
         self.table.setColumnWidth(1, 50)
         install_table_keys(self.table)      # Ctrl+C copies the selected rows as TSV (docs/ui.md 8.6)
-        self.result_tabs.addTab(self.table, "All metrics")
+        self.result_tabs.addTab(self.table, "전체 지표")
 
         self.monthly_table = setup_table(QTableWidget(0, len(MONTH_HEADERS)),
-                                         empty_text="Run Research to see the selected variant's monthly returns (%)")
+                                         empty_text="리서치를 실행하면 선택한 변형의 월별 수익률(%)이 나옵니다")
         self.monthly_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.monthly_table.setHorizontalHeaderLabels(MONTH_HEADERS)
         self.monthly_table.horizontalHeader().setDefaultSectionSize(58)
         self.monthly_table.setColumnWidth(len(MONTH_HEADERS) - 1, 80)
         install_table_keys(self.monthly_table)
-        self.result_tabs.addTab(self.monthly_table, "Monthly returns")
+        self.result_tabs.addTab(self.monthly_table, "월별 수익률")
 
         self.trades_table = setup_table(QTableWidget(0, len(TRADE_HEADERS)), empty_text=_TRADES_EMPTY)
         self.trades_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -384,21 +384,21 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             self.trades_table.setColumnWidth(c, w)
         self.trades_table.horizontalHeader().setStretchLastSection(True)
         install_table_keys(self.trades_table)
-        self.result_tabs.addTab(self.trades_table, "Trades")
+        self.result_tabs.addTab(self.trades_table, "매매 내역")
 
-        self.event_table = setup_table(QTableWidget(), empty_text="The 6-1 event study appears here after a run")
+        self.event_table = setup_table(QTableWidget(), empty_text="실행하면 6-1 이벤트 스터디가 여기에 나옵니다")
         self.event_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         ev_headers = ["Breakout group", "n"] + [f"{s} {h}d" for h in HORIZONS for s in ("mean", "hit", "vs KOSPI")]
         self.event_table.setColumnCount(len(ev_headers))
         self.event_table.setHorizontalHeaderLabels(ev_headers)
         self.event_table.setColumnWidth(0, 300)
         install_table_keys(self.event_table)
-        self.result_tabs.addTab(self.event_table, "Event study")
+        self.result_tabs.addTab(self.event_table, "이벤트 스터디")
 
         # The shown result's caveats (benchmark substitutions, flow coverage,
         # skipped variants), readable here instead of only in the saved report
         # (review_codex.md S3).
-        self.warn_lbl = QLabel("No warnings.")
+        self.warn_lbl = QLabel("경고 없음.")
         self.warn_lbl.setObjectName("warn")
         self.warn_lbl.setWordWrap(True)
         self.warn_lbl.setTextFormat(Qt.TextFormat.RichText)
@@ -409,7 +409,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setWidget(self.warn_lbl)
-        self.result_tabs.addTab(scroll, "Warnings (0)")
+        self.result_tabs.addTab(scroll, "경고 (0)")
         return self.result_tabs
 
     def _draw_empty_chart(self):
@@ -417,7 +417,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             ax.clear()
             ax.set_axis_off()
         # Empty state (docs/ui.md 8.2): a hint instead of a bare 0-1 axis.
-        self.ax.text(0.5, 0.5, "Run Research to plot the selected variant's NAV and drawdown against BM1",
+        self.ax.text(0.5, 0.5, "리서치를 실행하면 선택한 변형의 NAV와 낙폭을 BM1과 함께 그립니다",
                      ha="center", va="center", transform=self.ax.transAxes, color=TEXT_FAINT,
                      fontsize=FONT_SMALL)
 
@@ -427,20 +427,20 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         end = self.end_edit.date().toPyDate()
         mults = _COST_CHOICES[self.cost_combo.currentIndex()][1]
         n = len(self._selected_variants())
-        variants = f"All {len(VARIANTS)} variants" if n == len(VARIANTS) else f"{n} of {len(VARIANTS)} variants"
+        variants = f"변형 {len(VARIANTS)}개 전체" if n == len(VARIANTS) else f"변형 {len(VARIANTS)}개 중 {n}개"
         chips = [
             f"{start:%Y-%m-%d} → {end:%Y-%m-%d}",
-            f"KOSPI Top {self.universe_spin.value()}",
-            f"Liquidity ≥ {self.liquidity_spin.value()}억",
-            f"Max {self.positions_spin.value()} positions",
-            f"Check: {self.weekday_combo.currentText()}",
-            "Costs " + "/".join(f"{m:g}x" for m in mults),
+            f"KOSPI 상위 {self.universe_spin.value()}",
+            f"유동성 ≥ {self.liquidity_spin.value()}억",
+            f"최대 {self.positions_spin.value()}종목",
+            f"점검: {self.weekday_combo.currentText()}",
+            "비용 " + "/".join(f"{m:g}x" for m in mults),
             variants,
         ]
         if self.flows_cb.isChecked():
-            chips.append("Investor flows")
+            chips.append("투자자 수급")
         if not self.event_cb.isChecked():
-            chips.append("No event study")
+            chips.append("이벤트 스터디 제외")
         return chips
 
     def _update_chips(self, *_):
@@ -478,15 +478,15 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
     def _update_variants_label(self, *_):
         selected = self._selected_variants()
         if len(selected) == len(VARIANTS):
-            text = f"All {len(VARIANTS)} variants"
+            text = f"변형 {len(VARIANTS)}개 전체"
         elif not selected:
-            text = "No variants (event study only)"
+            text = "변형 없음 (이벤트 스터디만)"
         else:
-            text = f"{', '.join(selected)}  ({len(selected)} of {len(VARIANTS)})"
+            text = f"{', '.join(selected)}  ({len(VARIANTS)}개 중 {len(selected)}개)"
         waiting = [vid for vid, v in VARIANTS.items() if v.needs_flows and vid in self._chosen_variants
                    and not self.flows_cb.isChecked()]
         if waiting:
-            text += f" · {', '.join(waiting)} need Investor flows"
+            text += f" · {', '.join(waiting)}은(는) 투자자 수급 필요"
         self.variants_lbl.setText(text)
         self._update_chips()
 
@@ -517,10 +517,10 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
 
     def _on_run_clicked(self):
         if self.start_edit.date() >= self.end_edit.date():
-            QMessageBox.warning(self, "Strategy", "Start must be before End.")
+            QMessageBox.warning(self, "Strategy", "시작일이 종료일보다 앞이어야 합니다.")
             return
         if not self._selected_variants() and not self.event_cb.isChecked():
-            QMessageBox.warning(self, "Strategy", "Select at least one variant or the event study.")
+            QMessageBox.warning(self, "Strategy", "변형을 하나 이상 고르거나 이벤트 스터디를 켜세요.")
             return
         req = self.build_request()
         thread = TrendFollowingResearchThread(req)
@@ -567,8 +567,8 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         """Fill the Warnings tab from `result` (not from the current form)."""
         lines = [f"{escape(vid)} not run: {escape(why)}" for vid, why in result.skipped.items()]
         lines += [escape(w) for w in result.warnings]
-        self.warn_lbl.setText("<br>".join(f"• {line}" for line in lines) if lines else "No warnings.")
-        self.result_tabs.setTabText(TAB_WARNINGS, f"Warnings ({len(lines)})")
+        self.warn_lbl.setText("<br>".join(f"• {line}" for line in lines) if lines else "경고 없음.")
+        self.result_tabs.setTabText(TAB_WARNINGS, f"경고 ({len(lines)})")
         self.result_tabs.tabBar().setTabTextColor(TAB_WARNINGS, QColor(WARN if lines else TEXT_MUTED))
         # The app QSS sets every tab's color, which wins over setTabTextColor; a
         # property rule on the last tab (QTabBar::tab:last) carries the WARN color.

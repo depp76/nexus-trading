@@ -117,10 +117,10 @@ class AssetsReportDialog(QDialog):
 
         btns = QHBoxLayout()
         btns.addStretch()
-        export_btn = QPushButton("Export CSV")
+        export_btn = QPushButton("CSV 내보내기")
         export_btn.clicked.connect(self._export_csv)
         btns.addWidget(export_btn)
-        close_btn = QPushButton("Close")
+        close_btn = QPushButton("닫기")
         close_btn.clicked.connect(self.accept)
         btns.addWidget(close_btn)
         v.addLayout(btns)
@@ -294,4 +294,4 @@ class AssetsReportDialog(QDialog):
                         "; ".join(f"{h['company']} {h['qty']:.0f} ({h['value']:,.0f})" for h in row["holdings"]),
                     ])
         except OSError as e:
-            QMessageBox.warning(self, "Export", f"Failed to save:\n{e}")
+            QMessageBox.warning(self, "Total Assets", f"저장하지 못했습니다:\n{e}")

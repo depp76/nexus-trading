@@ -38,7 +38,7 @@ def show_stock_report_result(parent, ticker: str, name: str, result_text: str):
     disclaimer_lbl.setStyleSheet(f"color:{TEXT_MUTED};")
     v.addWidget(disclaimer_lbl)
 
-    close_btn = QPushButton("Close")
+    close_btn = QPushButton("닫기")
     close_btn.clicked.connect(result_dlg.accept)
     btn_row = QHBoxLayout()
     btn_row.addStretch()

@@ -217,7 +217,7 @@ class StockMaDialog(QDialog):
         if self.scrollbar is not None:
             chart_v.addWidget(self.scrollbar)
 
-        close_btn = QPushButton("Close")
+        close_btn = QPushButton("닫기")
         close_btn.clicked.connect(self.accept)
         root.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignRight)
 

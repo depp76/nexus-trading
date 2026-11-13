@@ -43,8 +43,8 @@ FIELD_BY_KEY = {f.key: f for f in RANGE_FIELDS}
 # The spec's own examples (docs/ui.md 2.6: "저PER", "신고가 근접"); always
 # listed, never deleted. Held/Target are the toolbar's status button.
 BUILTIN_VIEWS = (
-    {"name": "Low tPER", "market": "ALL", "status": "", "search": "", "ranges": {"tper": [0.0, 12.0]}},
-    {"name": "Near 52W High", "market": "ALL", "status": "", "search": "", "ranges": {"range52w": [90.0, None]}},
+    {"name": "저PER", "market": "ALL", "status": "", "search": "", "ranges": {"tper": [0.0, 12.0]}},
+    {"name": "52주 신고가 근접", "market": "ALL", "status": "", "search": "", "ranges": {"range52w": [90.0, None]}},
 )
 
 
@@ -121,7 +121,7 @@ def describe_view(state: dict) -> str:
     if s["market"] != "ALL":
         parts.append(s["market"])
     if s["status"]:
-        parts.append({"On": "Held", "Tg": "Target"}.get(s["status"], s["status"]))
+        parts.append({"On": "보유", "Tg": "관심"}.get(s["status"], s["status"]))
     if s["search"]:
         parts.append(f'"{s["search"]}"')
     if s["ranges"]:

@@ -120,7 +120,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         bar = QHBoxLayout()
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search name or ticker")
+        self.search_input.setPlaceholderText("종목명 또는 코드 검색")
         self.search_input.setMinimumWidth(160)
         self.search_input.setMaximumWidth(260)
         self.search_input.textChanged.connect(self.filter_table)
@@ -143,18 +143,17 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         # (user direction 2026-09-29); fixed width so the label change never
         # resizes it. Blank = unchecked, Held/Target = checked.
         self.tg_filter_btn = self._filter_button(self._STATUS_FILTER_STATES[0][1])
-        self.tg_filter_btn.setToolTip("Status filter: none / Held / Target")
+        self.tg_filter_btn.setToolTip("상태 필터: 없음 / 보유 / 관심")
         self.tg_filter_btn.clicked.connect(self._on_status_filter_clicked)
         bar.addWidget(self.tg_filter_btn)
 
         # Numeric range filters and saved views (docs/ui.md 2.6 / 8.9).
         bar.addSpacing(8)
-        self.filters_btn = make_button("Filters", checkable=True, on_click=self._open_range_filters)
+        self.filters_btn = make_button("필터", checkable=True, on_click=self._open_range_filters)
         bar.addWidget(self.filters_btn)
         self.views_combo = QComboBox()
         self.views_combo.setMinimumWidth(170)
-        self.views_combo.setToolTip("Saved views: a market / status / search / range-filter combination, "
-                                    "with the number of rows it shows")
+        self.views_combo.setToolTip("저장된 보기: 시장·상태·검색어·범위 필터 조합과 그 보기의 종목 수")
         self.views_combo.activated.connect(self._on_view_activated)
         bar.addWidget(self.views_combo)
 
@@ -167,12 +166,12 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         bar.addWidget(self.market_combo)
 
         self.ticker_input = QLineEdit()
-        self.ticker_input.setPlaceholderText("Ticker, e.g. 005930")
+        self.ticker_input.setPlaceholderText("코드 예: 005930")
         self.ticker_input.setFixedWidth(140)
         self.ticker_input.returnPressed.connect(self.add_ticker)
         bar.addWidget(self.ticker_input)
 
-        self.add_ticker_btn = make_button("Add Ticker", on_click=self.add_ticker)
+        self.add_ticker_btn = make_button("종목 추가", on_click=self.add_ticker)
         bar.addWidget(self.add_ticker_btn)
         bar.addSpacing(8)
 
@@ -180,15 +179,14 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         # (trend_following.md 2-5; scoring.py via TrendScoreThread). Checked
         # while a run's Top/Bottom rows are pinned to the top of the table;
         # clicking it again restores the default order (user direction 2026-09-29).
-        self.trend_score_btn = make_button("Trend Score", checkable=True)
-        self.trend_score_btn.setToolTip("Score the KOSPI/KOSDAQ rows with trend_following.md 2-5 and pin the "
-                                        "weekly Top 10 / Bottom 10 to the top of the table; click again to "
-                                        "restore the default order")
+        self.trend_score_btn = make_button("추세 점수", checkable=True)
+        self.trend_score_btn.setToolTip("KOSPI/KOSDAQ 종목을 추세 + 눌림 점수(trend_following.md 2-5)로 채점해 "
+                                        "주간 상위 10 / 하위 10을 표 맨 위에 고정합니다. 다시 누르면 원래 순서로 돌아갑니다.")
         self.trend_score_btn.clicked.connect(self._on_trend_score_clicked)
         bar.addWidget(self.trend_score_btn)
 
         # Refresh is this tab's one primary action (docs/ui.md 1.6 / 8.1).
-        self.refresh_btn = make_button("Refresh", "primary", self.refresh_data)
+        self.refresh_btn = make_button("새로고침", "primary", self.refresh_data)
         bar.addWidget(self.refresh_btn)
 
         universe_layout.addLayout(bar)
@@ -219,7 +217,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     # (highlight status to show, button label): "" = no status filter. The
     # status values are the ones custom_settings.json stores ("On" = Held,
     # "Tg" = Target; docs/ui.md 1.7).
-    _STATUS_FILTER_STATES = (("", ""), ("On", "Held"), ("Tg", "Target"))
+    _STATUS_FILTER_STATES = (("", ""), ("On", "보유"), ("Tg", "관심"))
 
     @classmethod
     def _filter_button(cls, text: str, checked: bool = False) -> QPushButton:
@@ -280,7 +278,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     def delete_stock(self, ticker):
         reply = QMessageBox.question(
             self, _TITLE,
-            f"Remove '{ticker}' from the universe?",
+            f"'{ticker}'을(를) 유니버스에서 제거할까요?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
@@ -478,7 +476,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
     def _update_filters_button(self):
         n = len(self._ranges)
-        self.filters_btn.setText(f"Filters ({n})" if n else "Filters")
+        self.filters_btn.setText(f"필터 ({n})" if n else "필터")
         self.filters_btn.setChecked(bool(n))
         self.filters_btn.setToolTip(describe_ranges(self._ranges) if n else
                                     "Numeric range filters: Cap, PER, change, 52W position, MA Div, momentum")
@@ -510,7 +508,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         combo = self.views_combo
         combo.blockSignals(True)
         combo.clear()
-        combo.addItem("Views", None)
+        combo.addItem("저장된 보기", None)
         active = 0
         for v in self._all_views():
             combo.addItem(f"{v['name']}  ({count_matches(rows, v)})", ("view", v["name"]))
@@ -520,10 +518,10 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
                 active = combo.count() - 1
         combo.insertSeparator(combo.count())
         if is_filtered:
-            combo.addItem("Show all (clear filters)", ("clear",))
-            combo.addItem("Save current filters as a view...", ("save",))
+            combo.addItem("전체 보기 (필터 해제)", ("clear",))
+            combo.addItem("현재 필터를 보기로 저장...", ("save",))
         if self._user_views():
-            combo.addItem("Delete a saved view...", ("delete",))
+            combo.addItem("저장된 보기 삭제...", ("delete",))
         combo.setCurrentIndex(active)
         combo.blockSignals(False)
 
@@ -548,17 +546,17 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._refresh_views_combo()
 
     def _save_current_view(self):
-        name, ok = QInputDialog.getText(self, _TITLE, "Name for this view:")
+        name, ok = QInputDialog.getText(self, _TITLE, "보기 이름:")
         name = (name or "").strip()
         if not ok or not name:
             return
         if any(v["name"] == name for v in BUILTIN_VIEWS):
-            QMessageBox.warning(self, _TITLE, f"'{name}' is a built-in view. Choose another name.")
+            QMessageBox.warning(self, _TITLE, f"'{name}'은(는) 기본 보기 이름입니다. 다른 이름을 입력하세요.")
             return
         views = self._user_views()
         existing = next((i for i, v in enumerate(views) if v["name"] == name), None)
         if existing is not None:
-            reply = QMessageBox.question(self, _TITLE, f"Replace the saved view '{name}'?",
+            reply = QMessageBox.question(self, _TITLE, f"저장된 보기 '{name}'을(를) 덮어쓸까요?",
                                          QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                                          QMessageBox.StandardButton.No)
             if reply != QMessageBox.StandardButton.Yes:
@@ -575,10 +573,10 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         names = [v["name"] for v in self._user_views()]
         if not names:
             return
-        name, ok = QInputDialog.getItem(self, _TITLE, "Delete which saved view?", names, 0, False)
+        name, ok = QInputDialog.getItem(self, _TITLE, "삭제할 보기:", names, 0, False)
         if not ok or not name:
             return
-        reply = QMessageBox.question(self, _TITLE, f"Delete the saved view '{name}'?",
+        reply = QMessageBox.question(self, _TITLE, f"저장된 보기 '{name}'을(를) 삭제할까요?",
                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                                      QMessageBox.StandardButton.No)
         if reply != QMessageBox.StandardButton.Yes:
@@ -605,7 +603,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     def _on_ai_report_requested(self, ticker: str):
         item = next((d for d in self.all_data if d.get('ticker') == ticker), None)
         if item is None:
-            QMessageBox.warning(self, _TITLE, f"AI Stock Report: no data found for {ticker}.")
+            QMessageBox.warning(self, _TITLE, f"AI 종목 리포트: {ticker}의 데이터를 찾지 못했습니다.")
             return
         name = item.get('name', ticker)
         self.status_text_changed.emit(f"Generating AI report for {name} ({ticker})...")
@@ -616,7 +614,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     def _on_stock_report_ready(self, ticker: str, name: str, result_text: str, error: str):
         if error:
             self.status_text_changed.emit(f"AI report failed for {name} ({ticker}).")
-            QMessageBox.warning(self, _TITLE, f"AI Stock Report failed:\n{error}")
+            QMessageBox.warning(self, _TITLE, f"AI 종목 리포트 생성 실패:\n{error}")
             return
         self.status_text_changed.emit(f"AI report ready for {name} ({ticker}).")
         show_stock_report_result(self, ticker, name, result_text)
@@ -658,7 +656,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         if rec is None:
             self.trend_score_btn.setChecked(False)
             if error != CANCELLED_MESSAGE:
-                QMessageBox.warning(self, _TITLE, f"Trend Score failed:\n{error}")
+                QMessageBox.warning(self, _TITLE, f"추세 점수 계산 실패:\n{error}")
             self.status_text_changed.emit(f"Trend Score: {error}")
             return
         order = {}

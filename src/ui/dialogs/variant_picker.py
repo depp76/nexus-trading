@@ -51,7 +51,7 @@ class VariantPickerDialog(QDialog):
 
     def __init__(self, selected, flows_on: bool, params: StrategyParams | None = None, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Strategy Variants")
+        self.setWindowTitle("전략 변형 선택")
         self.resize(880, 540)
         self._flows_on = flows_on
         self._params = params
@@ -96,11 +96,11 @@ class VariantPickerDialog(QDialog):
         root.addWidget(self.count_lbl)
 
         buttons = QHBoxLayout()
-        buttons.addWidget(make_button("All", on_click=lambda: self._set_all(True)))
-        buttons.addWidget(make_button("None", on_click=lambda: self._set_all(False)))
+        buttons.addWidget(make_button("전체", on_click=lambda: self._set_all(True)))
+        buttons.addWidget(make_button("해제", on_click=lambda: self._set_all(False)))
         buttons.addStretch()
-        buttons.addWidget(make_button("Cancel", on_click=self.reject))
-        self.ok_btn = make_button("OK", "primary", self.accept)
+        buttons.addWidget(make_button("취소", on_click=self.reject))
+        self.ok_btn = make_button("확인", "primary", self.accept)
         buttons.addWidget(self.ok_btn)
         root.addLayout(buttons)
 

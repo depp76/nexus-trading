@@ -39,7 +39,7 @@ from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_EMPTY, LINE_STRONG
 # ---------------------------------------------------------------------------
 TARGET_SHARPE = 1.5
 TARGET_MDD = 0.15
-TARGET_SOURCE = "Target from the user's performance bar (Nexus README, criterion H)"
+TARGET_SOURCE = "사용자 성과 기준 (Nexus README, 기준 H)"
 
 _RIGHT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 _LEFT = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
@@ -69,16 +69,16 @@ def meets_targets(metrics: dict) -> bool | None:
 def sharpe_badge(sharpe) -> tuple[str, str]:
     ok = sharpe_ok(sharpe)
     if ok is None:
-        return "na", "No value"
-    return ("ok", "✓ Target met") if ok else ("fail", f"✕ Below {TARGET_SHARPE:g}")
+        return "na", "값 없음"
+    return ("ok", "✓ 목표 충족") if ok else ("fail", f"✕ {TARGET_SHARPE:g} 미만")
 
 
 def mdd_badge(mdd) -> tuple[str, str]:
     ok = mdd_ok(mdd)
     if ok is None:
-        return "na", "No value"
+        return "na", "값 없음"
     pct = f"{TARGET_MDD * 100:g}%"
-    return ("ok", f"✓ Within {pct}") if ok else ("fail", f"✕ Over {pct}")
+    return ("ok", f"✓ {pct} 이내") if ok else ("fail", f"✕ {pct} 초과")
 
 
 def drawdown_series(nav, base: float = 1.0) -> np.ndarray:
@@ -245,9 +245,9 @@ class TargetCheckCard(QFrame):
 
     ROWS = [
         ("sharpe", f"Sharpe ≥ {TARGET_SHARPE:g}"),
-        ("mdd", f"|MDD| ≤ {TARGET_MDD * 100:g}% (whole window)"),
-        ("both", "Both targets (H)"),
-        ("robust", "Robustness (E2) · Look-ahead (A5)"),
+        ("mdd", f"|MDD| ≤ {TARGET_MDD * 100:g}% (전체 구간)"),
+        ("both", "두 목표 동시 충족 (H)"),
+        ("robust", "강건성 (E2) · 미래정보 (A5)"),
     ]
 
     def __init__(self, parent=None):
@@ -256,7 +256,7 @@ class TargetCheckCard(QFrame):
         box = QVBoxLayout(self)
         box.setContentsMargins(12, 10, 12, 10)
         box.setSpacing(8)
-        title = QLabel("Target check")
+        title = QLabel("목표 점검")
         title.setObjectName("kpiLabel")
         box.addWidget(title)
         self.subject = QLabel("-")
@@ -274,7 +274,7 @@ class TargetCheckCard(QFrame):
             box.addLayout(row)
             self.badges[key] = badge
             self.labels[key] = lbl
-        set_badge(self.badges["robust"], "na", "Not run here")
+        set_badge(self.badges["robust"], "na", "앱에서 미실행")
         self.badges["robust"].setToolTip("독립 검증은 Validation 리포트(NEX-59 등)에서 확인")
         self.badges["sharpe"].setToolTip(TARGET_SOURCE)
         self.badges["mdd"].setToolTip(TARGET_SOURCE)
@@ -286,19 +286,19 @@ class TargetCheckCard(QFrame):
             set_badge(self.badges[key], "na", "-")
 
     def show_run(self, run):
-        self.subject.setText(f"{run.id} · {run.cost_mult:g}x costs")
+        self.subject.setText(f"{run.id} · 비용 {run.cost_mult:g}x")
         if run.kind != "strategy":
             for key in ("sharpe", "mdd", "both"):
-                set_badge(self.badges[key], "na", "Benchmark")
+                set_badge(self.badges[key], "na", "벤치마크")
             return
         m = run.metrics
         set_badge(self.badges["sharpe"], *sharpe_badge(m.get("sharpe")))
         set_badge(self.badges["mdd"], *mdd_badge(m.get("mdd")))
         both = meets_targets(m)
         if both is None:
-            set_badge(self.badges["both"], "na", "No value")
+            set_badge(self.badges["both"], "na", "값 없음")
         else:
-            set_badge(self.badges["both"], *(("ok", "✓ Met") if both else ("fail", "✕ Not met")))
+            set_badge(self.badges["both"], *(("ok", "✓ 충족") if both else ("fail", "✕ 미충족")))
 
 
 # ---------------------------------------------------------------------------

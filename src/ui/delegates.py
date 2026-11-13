@@ -120,8 +120,8 @@ class CellDelegate(QStyledItemDelegate):
 # cell reflowing. (label, text, border, fill); fill None = outline only.
 STATUS_BUTTON = {
     "-": ("", TEXT_FAINT, LINE, None),
-    "On": ("Held", ACCENT_TEXT, ACCENT, ACCENT_BG),
-    "Tg": ("Target", SURFACE, ACCENT, ACCENT),
+    "On": ("보유", ACCENT_TEXT, ACCENT, ACCENT_BG),
+    "Tg": ("관심", SURFACE, ACCENT, ACCENT),
 }
 STATUS_MARKER = {"On": ACCENT, "Tg": ACCENT}
 

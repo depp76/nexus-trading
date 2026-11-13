@@ -61,7 +61,7 @@ class TestMatches(unittest.TestCase):
         self.assertTrue(same_state(a, dict(a, name="mine")))
         self.assertEqual(describe_ranges({"tper": [0, 12], "range52w": [90, None]}),
                          "tPER 0–12 · 52W position ≥ 90")
-        self.assertEqual(describe_view({"status": "On", "ranges": {}}), "Held")
+        self.assertEqual(describe_view({"status": "On", "ranges": {}}), "보유")
         self.assertEqual(describe_view(empty_state()), "No filter")
 
 
@@ -103,17 +103,17 @@ class TestTableFiltering(_TabCase):
         self.assertIsNone(vals["C"]["range52w"])              # no 52W range yet -> no value
         tab._on_ranges_applied({"range52w": [85, None]})
         self.assertEqual(self._visible(tab), ["A"])
-        self.assertEqual(tab.filters_btn.text(), "Filters (1)")
+        self.assertEqual(tab.filters_btn.text(), "필터 (1)")
         self.assertTrue(tab.filters_btn.isChecked())
         tab._on_ranges_applied({})
         self.assertEqual(self._visible(tab), ["A", "B", "C"])
-        self.assertEqual(tab.filters_btn.text(), "Filters")
+        self.assertEqual(tab.filters_btn.text(), "필터")
 
     def test_tper_filter_and_low_per_view_count(self):
         tab = self._tab([_stock("A", per=8.0), _stock("B", per=25.0), _stock("C")])
         tab._on_ranges_applied({"tper": [0, 12]})
         self.assertEqual(self._visible(tab), ["A"])
-        self.assertIn("Low tPER  (1)", [tab.views_combo.itemText(i) for i in range(tab.views_combo.count())])
+        self.assertIn("저PER  (1)", [tab.views_combo.itemText(i) for i in range(tab.views_combo.count())])
 
 
 class TestViews(_TabCase):
@@ -124,13 +124,13 @@ class TestViews(_TabCase):
     def test_counts_and_applying_a_builtin_view(self):
         tab = self._tab([_stock("A", price=99, low=50, high=100), _stock("B", price=60, low=50, high=100)])
         texts = self._texts(tab)
-        self.assertIn("Near 52W High  (1)", texts)
-        self.assertIn("Low tPER  (0)", texts)
-        idx = texts.index("Near 52W High  (1)")
+        self.assertIn("52주 신고가 근접  (1)", texts)
+        self.assertIn("저PER  (0)", texts)
+        idx = texts.index("52주 신고가 근접  (1)")
         tab._on_view_activated(idx)
         self.assertEqual(self._visible(tab), ["A"])
-        self.assertEqual(tab.views_combo.currentText(), "Near 52W High  (1)")  # the active view is selected
-        clear = self._texts(tab).index("Show all (clear filters)")
+        self.assertEqual(tab.views_combo.currentText(), "52주 신고가 근접  (1)")  # the active view is selected
+        clear = self._texts(tab).index("전체 보기 (필터 해제)")
         tab._on_view_activated(clear)
         self.assertEqual(self._visible(tab), ["A", "B"])
         self.assertEqual(tab.views_combo.currentIndex(), 0)
@@ -139,7 +139,7 @@ class TestViews(_TabCase):
         tab = self._tab([_stock("A", market="KOSPI"), _stock("B", market="KOSDAQ")])
         tab._on_market_filter_changed("KOSDAQ")
         with patch("ui.universe_tab.QInputDialog.getText", return_value=("Kosdaq only", True)):
-            tab._on_view_activated(self._texts(tab).index("Save current filters as a view..."))
+            tab._on_view_activated(self._texts(tab).index("현재 필터를 보기로 저장..."))
         self.assertEqual(tab.custom_settings["views"][0]["name"], "Kosdaq only")
         self.assertEqual(tab.custom_settings["views"][0]["market"], "KOSDAQ")
         self.assertIn("Kosdaq only  (1)", self._texts(tab))
@@ -147,16 +147,16 @@ class TestViews(_TabCase):
         self.assertEqual(self._visible(tab), ["A", "B"])
         with patch("ui.universe_tab.QInputDialog.getItem", return_value=("Kosdaq only", True)), \
              patch("ui.universe_tab.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
-            tab._on_view_activated(self._texts(tab).index("Delete a saved view..."))
+            tab._on_view_activated(self._texts(tab).index("저장된 보기 삭제..."))
         self.assertEqual(tab.custom_settings["views"], [])
         self.assertFalse(any(t.startswith("Kosdaq only") for t in self._texts(tab)))
 
     def test_builtin_names_are_reserved(self):
         tab = self._tab([_stock("A")])
         tab._on_market_filter_changed("KOSPI")
-        with patch("ui.universe_tab.QInputDialog.getText", return_value=("Low tPER", True)), \
+        with patch("ui.universe_tab.QInputDialog.getText", return_value=("저PER", True)), \
              patch("ui.universe_tab.QMessageBox.warning") as warn:
-            tab._on_view_activated(self._texts(tab).index("Save current filters as a view..."))
+            tab._on_view_activated(self._texts(tab).index("현재 필터를 보기로 저장..."))
         warn.assert_called_once()
         self.assertEqual(tab.custom_settings.get("views", []), [])
 

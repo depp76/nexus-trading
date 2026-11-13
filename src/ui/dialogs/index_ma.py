@@ -80,6 +80,6 @@ class IndexMaDialog(QDialog):
         canvas = FigureCanvas(fig)
         layout.addWidget(canvas)
 
-        close_btn = QPushButton("Close")
+        close_btn = QPushButton("닫기")
         close_btn.clicked.connect(self.accept)
         layout.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignRight)

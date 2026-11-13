@@ -234,12 +234,12 @@ class FilterPopup(QFrame):
         # Search inside popup
         self._search = QLineEdit()
         self._search.setFont(create_font(FONT_SMALL, style_name="Semilight"))
-        self._search.setPlaceholderText("Search...")
+        self._search.setPlaceholderText("검색...")
         self._search.textChanged.connect(self._on_search)
         layout.addWidget(self._search)
 
         # Select All
-        self._all_cb = QCheckBox("(Select All)")
+        self._all_cb = QCheckBox("(전체 선택)")
         self._all_cb.setFont(create_font(FONT_SMALL, style_name="Semilight"))
         self._all_cb.setTristate(True)
         layout.addWidget(self._all_cb)
@@ -270,10 +270,10 @@ class FilterPopup(QFrame):
 
         # Buttons
         btn_layout = QHBoxLayout()
-        ok_btn = QPushButton("OK")
+        ok_btn = QPushButton("확인")
         ok_btn.setObjectName("primary")
         ok_btn.clicked.connect(self._apply)
-        clear_btn = QPushButton("Clear")
+        clear_btn = QPushButton("지우기")
         clear_btn.clicked.connect(self._clear)
         btn_layout.addWidget(clear_btn)
         btn_layout.addWidget(ok_btn)
@@ -344,10 +344,10 @@ class RangeFilterPopup(QFrame):
         v = QVBoxLayout(self)
         v.setContentsMargins(12, 10, 12, 10)
         v.setSpacing(6)
-        title = QLabel("Range filters")
+        title = QLabel("범위 필터")
         title.setFont(create_font(FONT_SMALL, QFont.Weight.Bold))
         v.addWidget(title)
-        hint = QLabel("Blank = no limit. Rows with no value in a filtered column are hidden.")
+        hint = QLabel("빈 칸은 제한 없음. 필터를 건 열에 값이 없는 종목은 숨깁니다.")
         hint.setObjectName("muted")
         hint.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
         hint.setWordWrap(True)
@@ -363,7 +363,7 @@ class RangeFilterPopup(QFrame):
             unit = QLabel(f.unit)
             unit.setObjectName("faint")
             lo_e, hi_e = QLineEdit(), QLineEdit()
-            for e, val, ph in ((lo_e, lo, "min"), (hi_e, hi, "max")):
+            for e, val, ph in ((lo_e, lo, "최소"), (hi_e, hi, "최대")):
                 e.setPlaceholderText(ph)
                 e.setFixedWidth(80)
                 e.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -381,8 +381,8 @@ class RangeFilterPopup(QFrame):
 
         btns = QHBoxLayout()
         btns.addStretch()
-        clear_btn = make_button("Clear", on_click=self._clear)
-        apply_btn = make_button("Apply", "primary", self._apply)
+        clear_btn = make_button("지우기", on_click=self._clear)
+        apply_btn = make_button("적용", "primary", self._apply)
         btns.addWidget(clear_btn)
         btns.addWidget(apply_btn)
         v.addLayout(btns)
@@ -784,12 +784,12 @@ class StockTable(QTableWidget):
 
         menu = QMenu(self)
         status = data.get("status", "-")
-        toggle_label = {"On": "Set as Target", "Tg": "Clear Held/Target"}.get(status, "Mark as Held")
+        toggle_label = {"On": "관심으로 표시", "Tg": "보유/관심 해제"}.get(status, "보유로 표시")
         toggle_action = menu.addAction(toggle_label)
-        ma_action = menu.addAction("View MA Chart")
-        report_action = menu.addAction("AI Stock Report")
+        ma_action = menu.addAction("이평 차트 보기")
+        report_action = menu.addAction("AI 종목 리포트")
         menu.addSeparator()
-        delete_action = menu.addAction("Remove from Universe...")
+        delete_action = menu.addAction("유니버스에서 제거...")
 
         chosen = menu.exec(event.globalPos())
         if chosen is toggle_action:
