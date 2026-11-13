@@ -300,6 +300,7 @@ class TestResultScreen(unittest.TestCase):
     def test_variant_pick_updates_cards_target_check_and_tabs(self):
         from ui.strategy_widgets import fmt_num, fmt_pct
         tab = self._tab()
+        tab.select_variant("BM1")                    # A0 is not the focus before the click
         tab.variant_seg.buttons["A0"].click()
         a0 = next(r for r in self.result.runs_at(1.0) if r.id == "A0")
         cards = tab.kpi_row.cards
@@ -598,6 +599,105 @@ class TestMarketChoice(unittest.TestCase):
             TrendFollowingResearchThread(tab.build_request()).run()
         self.assertEqual(load.call_args.kwargs["markets"], ("KOSPI", "NYSE"))
 
+
+
+class TestMultiSelect(unittest.TestCase):
+    """docs/ui.md 8.14: several strategies and benchmarks at once; one focus."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.result = _result(("A0", "A1"), (0.0, 1.0, 2.0))
+
+    def _tab(self):
+        tab = TrendFollowingTab()
+        tab._on_research_finished(self.result, "")
+        return tab
+
+    def _best(self):
+        return max(self.result.runs_at(1.0, "strategy"), key=lambda r: r.metrics["sharpe"]).id
+
+    def _other(self):
+        return next(r.id for r in self.result.runs_at(1.0, "strategy") if r.id != self._best())
+
+    def test_default_is_the_best_strategy_and_bm1(self):
+        tab = self._tab()
+        self.assertEqual(tab._sel_ids, [self._best(), "BM1"])
+        self.assertEqual(tab._sel_id, self._best())
+        self.assertEqual(set(tab.variant_seg.checked_keys()), {self._best(), "BM1"})
+        self.assertTrue(tab.variant_seg.buttons[self._best()].property("segFocus"))
+
+    def test_segment_clicks_add_focus_and_remove(self):
+        tab = self._tab()
+        other = self._other()
+        tab.variant_seg.buttons[other].click()            # unselected -> added and focused
+        tab.variant_seg.buttons["BM3"].click()
+        self.assertEqual(tab._sel_ids, [self._best(), "BM1", other, "BM3"])
+        self.assertEqual(tab._sel_id, "BM3")
+        self.assertTrue(tab.kpi_row.cards["sharpe"].badge.isHidden())       # cards follow the focus (a BM)
+        colors = {sr[0]: sr[1] for sr in tab._chart_series}
+        tab.variant_seg.buttons[other].click()            # selected, not the focus -> focus
+        self.assertEqual(tab._sel_id, other)
+        self.assertEqual(tab._sel_ids, [self._best(), "BM1", other, "BM3"])     # order (and colours) kept
+        self.assertEqual({sr[0]: sr[1] for sr in tab._chart_series}, colors)
+        self.assertTrue(tab.variant_seg.buttons[other].isChecked())
+        self.assertIn(other, tab.target_card.subject.text())
+        tab.variant_seg.buttons[other].click()            # the focus -> removed, focus moves on
+        self.assertNotIn(other, tab._sel_ids)
+        self.assertFalse(tab.variant_seg.buttons[other].isChecked())
+        self.assertEqual(tab._sel_id, "BM3")
+
+    def test_the_last_run_cannot_be_removed(self):
+        tab = self._tab()
+        tab.variant_seg.buttons[self._best()].click()     # focus off -> BM1 remains
+        self.assertEqual(tab._sel_ids, ["BM1"])
+        tab.variant_seg.buttons["BM1"].click()
+        self.assertEqual(tab._sel_ids, ["BM1"])
+        self.assertTrue(tab.variant_seg.buttons["BM1"].isChecked())
+
+    def test_chart_draws_every_selected_run_in_its_own_colour(self):
+        from ui.colors import SERIES_BENCH
+        tab = self._tab()
+        for vid in (self._other(), "BM2"):
+            tab.variant_seg.buttons[vid].click()
+        ids = [sr[0] for sr in tab._chart_series]
+        self.assertEqual(ids[0], tab._sel_id)                     # readout: the focus first
+        self.assertEqual(set(ids), {self._best(), self._other(), "BM1", "BM2"})
+        colors = {sr[0]: sr[1] for sr in tab._chart_series}
+        self.assertEqual(len(set(colors.values())), 4)
+        self.assertEqual(colors["BM1"], SERIES_BENCH)
+        styles = {ln.get_label(): ln.get_linestyle() for ln in tab.ax.lines if not ln.get_label().startswith("_")}
+        self.assertEqual(styles["BM2"], "--")
+        self.assertEqual(styles[self._best()], "-")
+        self.assertEqual(tab.ax.get_legend().get_texts()[-1].get_text(), tab._sel_id)   # focus drawn last
+        curves = [ln for ln in tab.ax_dd.lines if len(ln.get_xdata()) > 2]
+        self.assertEqual(len(curves), 4)                      # a drawdown curve per selected run
+        self.assertIn("BM2", tab.readout_lbl.text())
+
+    def test_comparison_table_selection_follows_and_drives(self):
+        tab = self._tab()
+        table = tab.compare_table
+        selected = lambda: sorted(table.item(r, 0).text() for r in {i.row() for i in table.selectedIndexes()})   # noqa: E731
+        self.assertEqual(selected(), sorted([self._best(), "BM1"]))
+        row = {table.item(r, 0).text(): r for r in range(table.rowCount())}
+        from PyQt6.QtCore import QItemSelectionModel
+        model = table.selectionModel()
+        model.select(table.model().index(row["BM4"], 0),
+                     QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows)
+        self.assertIn("BM4", tab._sel_ids)
+        self.assertEqual(set(tab.variant_seg.checked_keys()), {self._best(), "BM1", "BM4"})
+        table.setCurrentCell(row["BM2"], 1)                   # plain click: that row only
+        self.assertEqual(tab._sel_ids, ["BM2"])
+        self.assertEqual(tab.variant_seg.checked_keys(), ["BM2"])
+
+    def test_cost_switch_keeps_the_selection(self):
+        tab = self._tab()
+        tab.variant_seg.buttons["BM2"].click()
+        before = list(tab._sel_ids)
+        tab.cost_seg.buttons["2"].click()
+        self.assertEqual(tab._sel_ids, before)
+        self.assertEqual(tab._sel_id, "BM2")
+        self.assertTrue(all(r.cost_mult == 2.0 for r in tab.selected_runs()))
+        self.assertEqual(set(tab.variant_seg.checked_keys()), set(before))
 
 class TestTradeList(unittest.TestCase):
     """docs/ui.md 8.13: the 매매 내역 tab (centred dates, fill prices, summary)

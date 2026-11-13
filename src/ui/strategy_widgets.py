@@ -124,20 +124,27 @@ def entry_label(run) -> str:
 # Segmented selector
 # ---------------------------------------------------------------------------
 class SegmentRow(QWidget):
-    """Fixed-width toggle buttons, exactly one checked (docs/ui.md 8.1 allows a
-    fixed width for a segmented row). `selected(key)` fires on a user click
-    and on select(); disabled keys cannot be chosen."""
+    """Fixed-width toggle buttons (docs/ui.md 8.1 allows a fixed width for a
+    segmented row); disabled keys cannot be chosen.
+
+    Single mode: exactly one checked; `selected(key)` fires on a user click and
+    on select(). Multi mode (`multi=True`, docs/ui.md 8.14): any number checked;
+    a click emits `toggled_key(key, checked)`, and one checked key can be
+    marked as the focus (`set_focus`, drawn with a stronger border)."""
 
     selected = pyqtSignal(str)
+    toggled_key = pyqtSignal(str, bool)
 
-    def __init__(self, width: int = 44, parent=None):
+    def __init__(self, width: int = 44, parent=None, multi: bool = False):
         super().__init__(parent)
         self._width = width
+        self._multi = multi
+        self._focus: str | None = None
         self._layout = QHBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(2)
         self._group = QButtonGroup(self)
-        self._group.setExclusive(True)
+        self._group.setExclusive(not multi)
         self.buttons: dict[str, object] = {}
 
     def set_keys(self, keys, labels: dict | None = None, enabled=None, tooltips: dict | None = None):
@@ -149,16 +156,41 @@ class SegmentRow(QWidget):
             btn = make_button((labels or {}).get(key, key), width=self._width, checkable=True,
                               tooltip=(tooltips or {}).get(key, ""))
             btn.setEnabled(enabled is None or key in enabled)
-            btn.clicked.connect(lambda _checked, k=key: self.selected.emit(k))
+            if self._multi:
+                btn.clicked.connect(lambda checked, k=key: self.toggled_key.emit(k, checked))
+            else:
+                btn.clicked.connect(lambda _checked, k=key: self.selected.emit(k))
             self._group.addButton(btn)
             self._layout.addWidget(btn)
             self.buttons[key] = btn
 
     def current(self) -> str | None:
+        """The checked key (single mode) or the focused one (multi mode)."""
+        if self._multi and self._focus in self.buttons and self.buttons[self._focus].isChecked():
+            return self._focus
         for key, btn in self.buttons.items():
             if btn.isChecked():
                 return key
         return None
+
+    def checked_keys(self) -> list[str]:
+        return [k for k, b in self.buttons.items() if b.isChecked()]
+
+    def set_checked(self, keys) -> None:
+        """Multi mode: check exactly `keys` (no signal)."""
+        keys = set(keys)
+        for k, b in self.buttons.items():
+            b.setChecked(k in keys)
+
+    def set_focus(self, key: str | None) -> None:
+        """Multi mode: mark `key` as the focus (QSS QPushButton[segFocus="true"]; "focus" is QWidget's read-only hasFocus)."""
+        self._focus = key
+        for k, b in self.buttons.items():
+            want = k == key
+            if bool(b.property("segFocus")) != want:
+                b.setProperty("segFocus", want)
+                b.style().unpolish(b)
+                b.style().polish(b)
 
     def select(self, key: str, emit: bool = False) -> bool:
         btn = self.buttons.get(key)

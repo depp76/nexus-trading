@@ -49,7 +49,7 @@ from ui.common import (
     create_font, make_button, setup_table, make_footer_label, install_table_keys, ThreadOwnerMixin,
     TAB_MARGINS, TAB_SPACING, FONT_SMALL, FlowLayout, BTN_H,
 )
-from ui.colors import LOSS, WARN, SERIES_SELECTED, SERIES_BENCH, SERIES_TARGET, DRAWDOWN_ALPHA
+from ui.colors import LOSS, WARN, SERIES_BENCH, SERIES_TARGET, DRAWDOWN_ALPHA, SERIES_PALETTE
 from ui.theme import TEXT, TEXT_MUTED, TEXT_FAINT, TEXT_EMPTY, LINE
 from ui.strategy_widgets import (
     TARGET_MDD, SegmentRow, KpiRow, TargetCheckCard, SharpeBarDelegate, COMPARISON_HEADERS, SHARPE_COL,
@@ -100,6 +100,10 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self._research_thread = None
         # What the result screen shows: one cost multiplier and one run id of it.
         self._mult: float | None = None
+        # Several runs may be selected (docs/ui.md 8.14): `_sel_ids` in selection
+        # order for the chart and the comparison table; `_sel_id` is the focus
+        # the cards, the target check and the monthly / trade tabs show.
+        self._sel_ids: list[str] = []
         self._sel_id: str | None = None
         self._syncing = False
         # Hover readout state: (label, color, x as matplotlib date numbers, y) per plotted series.
@@ -354,9 +358,13 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         row.setSpacing(6)
         lbl = QLabel("변형")
         lbl.setObjectName("muted")
+        lbl.setToolTip("여러 개를 고를 수 있습니다(전략과 BM 모두). 차트·비교표에 함께 표시되고, 진한 테두리의 "
+                       "기준 변형이 카드·목표 점검·월별 수익률·매매 내역에 보입니다. "
+                       "선택 안 된 버튼: 추가하고 기준으로 · 선택된 버튼: 기준으로 · 기준 버튼: 선택 해제. "
+                       "비교표에서는 Ctrl/Shift 클릭으로 여러 행을 고릅니다.")
         row.addWidget(lbl)
-        self.variant_seg = SegmentRow(width=52)
-        self.variant_seg.selected.connect(self._on_variant_picked)
+        self.variant_seg = SegmentRow(width=52, multi=True)
+        self.variant_seg.toggled_key.connect(self._on_variant_toggled)
         row.addWidget(self.variant_seg)
         row.addStretch()
         lbl = QLabel("비용")
@@ -405,7 +413,8 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.compare_table = setup_table(QTableWidget(0, len(COMPARISON_HEADERS)),
                                          empty_text="리서치를 실행하면 변형을 비교합니다")
         self.compare_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.compare_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        # Ctrl / Shift-click selects several rows: the same selection as the segments.
+        self.compare_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.compare_table.setHorizontalHeaderLabels(COMPARISON_HEADERS)
         for c, w in enumerate((50, 190, 70, 64, 170, 70, 60, 84, 76)):
             self.compare_table.setColumnWidth(c, w)
@@ -413,7 +422,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.compare_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self._sharpe_delegate = SharpeBarDelegate(self.compare_table)
         self.compare_table.setItemDelegateForColumn(SHARPE_COL, self._sharpe_delegate)
-        self.compare_table.currentCellChanged.connect(self._on_compare_row_changed)
+        self.compare_table.itemSelectionChanged.connect(self._on_compare_selection_changed)
         install_table_keys(self.compare_table)
         self.result_tabs.addTab(self.compare_table, "변형 비교")
 
@@ -680,7 +689,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
                                enabled={_mult_key(m) for m in mults})
         self.selector_row.setVisible(bool(result.runs))
         if not result.runs:
-            self._mult, self._sel_id = None, None
+            self._mult, self._sel_id, self._sel_ids = None, None, []
             self.kpi_row.clear()
             self.target_card.clear()
             self.compare_table.setRowCount(0)
@@ -691,13 +700,21 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             self._update_readout(None)
             self.canvas.draw_idle()
             return
-        self._sel_id = None
+        self._sel_id, self._sel_ids = None, []
         self.set_cost(1.0 if 1.0 in mults else mults[0])
 
     def selected_run(self):
+        """The focused run (cards, target check, monthly / trade tabs)."""
         if self._result is None or self._mult is None:
             return None
         return next((r for r in self._result.runs_at(self._mult) if r.id == self._sel_id), None)
+
+    def selected_runs(self) -> list:
+        """Every selected run at the shown cost, in selection order."""
+        if self._result is None or self._mult is None:
+            return []
+        by_id = {r.id: r for r in self._result.runs_at(self._mult)}
+        return [by_id[i] for i in self._sel_ids if i in by_id]
 
     def set_cost(self, mult: float):
         """Show the runs at `mult`; keep the selected id when it ran at that
@@ -715,9 +732,13 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         finally:
             self._syncing = False
         ids = [r.id for r in rows]
-        sel = self._sel_id if self._sel_id in ids else self._default_id(rows)
-        self._sel_id = None
-        self.select_variant(sel)
+        keep = [i for i in self._sel_ids if i in ids]
+        if keep:
+            self.set_selection(keep, self._sel_id if self._sel_id in keep else keep[-1], force=True)
+        else:
+            best = self._default_id(rows)
+            first = [best] + (["BM1"] if "BM1" in ids and best != "BM1" else [])
+            self.set_selection(first, best, force=True)
 
     @staticmethod
     def _default_id(rows) -> str:
@@ -730,24 +751,70 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         return next((r.id for r in rows if r.id == "BM1"), rows[0].id)
 
     def select_variant(self, run_id: str):
-        """Show one run of the current cost in the cards, chart and the
-        per-variant tabs; the segment and the comparison row follow."""
+        """Make `run_id` the focus, adding it to the end of the selection when it is
+        new. An already selected run keeps its place, so its chart colour stays."""
         if self._result is None or run_id == self._sel_id:
             return
-        if not any(r.id == run_id for r in self._result.runs_at(self._mult)):
+        ids = self._sel_ids if run_id in self._sel_ids else self._sel_ids + [run_id]
+        self.set_selection(ids, run_id)
+
+    def toggle_variant(self, run_id: str, on: bool):
+        """A segment click: an unselected run is added and focused, a selected
+        one that is not the focus becomes the focus, and the focus is removed
+        (never the last selected run)."""
+        if on:
+            self.select_variant(run_id)
             return
-        self._sel_id = run_id
-        run = self.selected_run()
-        self.variant_seg.select(run_id)
+        if run_id != self._sel_id:
+            self.select_variant(run_id)
+            self._sync_selection_widgets()      # the click unchecked it; it stays selected
+            return
+        rest = [i for i in self._sel_ids if i != run_id]
+        if not rest:
+            self._sync_selection_widgets()      # undo the button's own uncheck
+            return
+        self.set_selection(rest, self._sel_id if self._sel_id in rest else rest[-1])
+
+    def set_selection(self, ids, focus: str | None = None, force: bool = False):
+        """Select `ids` (runs of the shown cost) with `focus` as the run the cards
+        and per-variant tabs show; segments, table rows and chart follow."""
+        if self._result is None or self._mult is None:
+            return
+        avail = {r.id for r in self._result.runs_at(self._mult)}
+        ids = [i for i in dict.fromkeys(ids) if i in avail]
+        if not ids:
+            return
+        focus = focus if focus in ids else ids[-1]
+        focus_changed = focus != self._sel_id or force
+        self._sel_ids, self._sel_id = ids, focus
+        self._sync_selection_widgets()
+        if focus_changed:
+            self._show_focus(self.selected_run())
+        self._redraw_chart()
+
+    def _sync_selection_widgets(self):
+        self.variant_seg.set_checked(self._sel_ids)
+        self.variant_seg.set_focus(self._sel_id)
+        table = self.compare_table
+        model = table.selectionModel()
         self._syncing = True
         try:
-            for row in range(self.compare_table.rowCount()):
-                item = self.compare_table.item(row, 0)
-                if item is not None and item.data(_ID_ROLE) == run_id:
-                    self.compare_table.setCurrentCell(row, max(self.compare_table.currentColumn(), 0))
-                    break
+            table.clearSelection()
+            for row in range(table.rowCount()):
+                item = table.item(row, 0)
+                if item is None:
+                    continue
+                rid = item.data(_ID_ROLE)
+                if rid in self._sel_ids:
+                    idx = table.model().index(row, 0)
+                    model.select(idx, model.SelectionFlag.Select | model.SelectionFlag.Rows)
+                    if rid == self._sel_id:
+                        model.setCurrentIndex(table.model().index(row, max(table.currentColumn(), 0)),
+                                              model.SelectionFlag.NoUpdate)
         finally:
             self._syncing = False
+
+    def _show_focus(self, run):
         self.kpi_row.show_run(run)
         self.target_card.show_run(run)
         fill_monthly(self.monthly_table, run)
@@ -756,7 +823,6 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         trades = sorted_trades(run)
         self.trades_summary_lbl.setText(trade_summary(trades) if run.kind == "strategy" else "")
         self.trades_detail_btn.setEnabled(bool(trades))
-        self._redraw_chart()
 
     # ------------------------------------------------------- trade list popup
     def open_trades_dialog(self, *_, row: int | None = None):
@@ -779,18 +845,25 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
     def _on_trade_activated(self, row: int, _col: int = 0):
         self.open_trades_dialog(row=row)
 
-    def _on_variant_picked(self, run_id: str):
-        self.select_variant(run_id)
+    def _on_variant_toggled(self, run_id: str, checked: bool):
+        self.toggle_variant(run_id, checked)
 
     def _on_cost_picked(self, key: str):
         self.set_cost(float(key))
 
-    def _on_compare_row_changed(self, row, _col, _prev_row, _prev_col):
-        if self._syncing or row < 0:
+    def _on_compare_selection_changed(self):
+        """Rows picked in the comparison table (Ctrl / Shift for several) become
+        the selection; the current row is the focus."""
+        if self._syncing:
             return
-        item = self.compare_table.item(row, 0)
-        if item is not None:
-            self.select_variant(item.data(_ID_ROLE))
+        table = self.compare_table
+        rows = sorted({i.row() for i in table.selectedIndexes()})
+        ids = [table.item(r, 0).data(_ID_ROLE) for r in rows if table.item(r, 0) is not None]
+        if not ids:
+            return
+        cur = table.item(table.currentRow(), 0) if table.currentRow() >= 0 else None
+        focus = cur.data(_ID_ROLE) if cur is not None and cur.data(_ID_ROLE) in ids else ids[-1]
+        self.set_selection(ids, focus)
 
     def _fill_summary(self, result: ResearchResult):
         rows = sorted(result.runs, key=lambda r: (r.cost_mult, r.kind != "strategy", r.id))
@@ -813,6 +886,11 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
 
     # ----------------------------------------------------------------- chart
     def _redraw_chart(self, *_):
+        """NAV (top) and drawdown (bottom) of every selected run (docs/ui.md 8.14):
+        strategies solid, benchmarks dashed, BM1 in SERIES_BENCH, the rest one
+        SERIES_PALETTE hue each in selection order; the focus is thickest, drawn
+        last and filled in the drawdown panel. "전체 표시" adds the unselected
+        runs as thin grey lines."""
         run = self.selected_run()
         if run is None:
             return
@@ -824,34 +902,48 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self._chart_series = []
         self._crosshair = self._crosshair_dd = None
         runs = self._result.runs_at(self._mult)
-        bm1 = next((r for r in runs if r.id == "BM1" and r.id != run.id), None)
+        chosen = self.selected_runs()
+        self.series_colors = self._series_colors(chosen)
+        series = []
 
         def plot(r, color, width, style="-", legend=True):
             if len(r.nav) == 0:
                 return
             line, = ax.plot(r.dates, r.nav * 100.0, linestyle=style, linewidth=width, color=color,
                             label=r.id if legend else f"_{r.id}")
-            self._chart_series.append((r.id, line.get_color(), np.asarray(date2num(r.dates), dtype=float),
-                                       np.asarray(r.nav, dtype=float) * 100.0))
+            series.append((r.id, line.get_color(), np.asarray(date2num(r.dates), dtype=float),
+                           np.asarray(r.nav, dtype=float) * 100.0))
 
         if self.show_all_cb.isChecked():
             for r in runs:
-                if r is not run and r is not bm1:
+                if r.id not in self.series_colors:
                     plot(r, TEXT_EMPTY, 0.9, legend=False)
-        if bm1 is not None:
-            plot(bm1, SERIES_BENCH, 1.3, "--")
-        plot(run, SERIES_SELECTED, 2.2)
-        # The readout lists the selected run first, then BM1, then the rest.
-        self._chart_series.reverse()
+        others = [r for r in chosen if r is not run]
+        for r in others:
+            plot(r, self.series_colors[r.id], 1.5, "--" if r.kind != "strategy" else "-")
+        plot(run, self.series_colors[run.id], 2.4, "--" if run.kind != "strategy" else "-")
+        # The readout lists the focus first, then the other selected runs, then the rest.
+        by_id = {sr[0]: sr for sr in series}
+        order = [run.id] + [r.id for r in others]
+        self._chart_series = [by_id[i] for i in order if i in by_id] + [sr for sr in series if sr[0] not in order]
 
-        ax.set_title(f"NAV rebased to 100 · {self._mult:g}x costs", fontsize=FONT_SMALL, loc="left", color=TEXT)
-        ax.legend(fontsize=FONT_SMALL - 1, frameon=False, loc="upper left")
-
+        dd_low = -TARGET_MDD * 100
+        for r in others:
+            if len(r.nav):
+                dd = drawdown_series(r.nav) * 100.0
+                ax_dd.plot(r.dates, dd, color=self.series_colors[r.id], linewidth=0.9,
+                           linestyle="--" if r.kind != "strategy" else "-")
+                dd_low = min(dd_low, float(np.nanmin(dd)))
         if len(run.nav):
             dd = drawdown_series(run.nav) * 100.0
             ax_dd.fill_between(run.dates, dd, 0.0, color=LOSS, alpha=DRAWDOWN_ALPHA, linewidth=0)
             ax_dd.plot(run.dates, dd, color=LOSS, linewidth=0.8)
-            ax_dd.set_ylim(min(float(np.nanmin(dd)), -TARGET_MDD * 100) * 1.15, 1.0)
+            dd_low = min(dd_low, float(np.nanmin(dd)))
+        ax_dd.set_ylim(dd_low * 1.15, 1.0)
+
+        ax.set_title(f"NAV rebased to 100 · {self._mult:g}x costs", fontsize=FONT_SMALL, loc="left", color=TEXT)
+        ax.legend(fontsize=FONT_SMALL - 1, frameon=False, loc="upper left",
+                  ncol=max(1, min(4, (len(chosen) + 3) // 4)))
         ax_dd.axhline(-TARGET_MDD * 100, color=SERIES_TARGET, linestyle="--", linewidth=1.0)
         ax_dd.set_ylabel("Drawdown %", fontsize=FONT_SMALL - 1, color=TEXT_MUTED)
 
@@ -871,6 +963,18 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
                                                label="_nolegend_", visible=False)
         self._update_readout(None)
         self.canvas.draw_idle()
+
+    @staticmethod
+    def _series_colors(chosen) -> dict:
+        """Run id -> line colour: BM1 SERIES_BENCH, the others SERIES_PALETTE in selection order."""
+        out, k = {}, 0
+        for r in chosen:
+            if r.id == "BM1":
+                out[r.id] = SERIES_BENCH
+            else:
+                out[r.id] = SERIES_PALETTE[k % len(SERIES_PALETTE)]
+                k += 1
+        return out
 
     # ----------------------------------------------------------- chart hover
     def _on_chart_motion(self, event):

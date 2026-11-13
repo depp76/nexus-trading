@@ -71,6 +71,8 @@ def app_qss(font_css: str) -> str:
     QPushButton:checked {{
         background: {ACCENT_BG}; color: {ACCENT_TEXT}; border-color: {ACCENT}; font-weight: 600;
     }}
+    /* A multi-select segment's focused button (Strategy variants, docs/ui.md 8.14). */
+    QPushButton[segFocus="true"]:checked {{ border: 2px solid {ACCENT_TEXT}; }}
     QPushButton#primary {{
         background: {SURFACE}; color: {ACCENT_TEXT}; border: 1px solid {ACCENT};
     }}

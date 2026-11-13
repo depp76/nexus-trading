@@ -44,6 +44,10 @@ SERIES_SELECTED = "#9184d9"   # = theme.ACCENT, solid
 SERIES_BENCH = "#9397ab"      # = theme.TEXT_FAINT, dashed
 SERIES_TARGET = WARN          # target lines (Sharpe 1.5, -15% drawdown), dashed
 DRAWDOWN_ALPHA = 0.18         # LOSS fill under the drawdown curve
+# Several runs on one chart (docs/ui.md 8.14): one hue per selected run, in
+# selection order, the accent first. Pure blue/red are left out so a series
+# colour never reads as PROFIT/LOSS; BM1 keeps SERIES_BENCH.
+SERIES_PALETTE = ("#9184d9", "#2a9d8f", "#e07a1f", "#5b8c2a", "#c2549d", "#a68a2e", "#5c6f82", "#8d6e63")
 
 # MA divergence (price / MA x 100): within +-MA_DIV_NEUTRAL_PCT of 100 is
 # "neutral". The MA chart's three background bands (StockMaDialog) and the
