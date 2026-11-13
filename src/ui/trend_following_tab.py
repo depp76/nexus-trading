@@ -204,8 +204,9 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
 
-        # Open by default so a first run starts from the form; a result folds it
-        # away (docs/ui.md 8.10).
+        # Open by default, and it stays open after a run so the next choice is
+        # one click away (user direction 2026-11-13; docs/ui.md 8.12). The
+        # user folds it to the chip line with this button.
         self.edit_btn = make_button("설정 편집", on_click=self._on_edit_toggled, checkable=True, checked=True,
                                     tooltip="실행 설정 입력란을 펼치거나 접습니다")
         # Stop cancels a run, it does not destroy anything, so it stays neutral (8.1).
@@ -418,7 +419,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.trades_table = setup_table(QTableWidget(0, len(TRADE_HEADERS)), empty_text=_TRADES_EMPTY)
         self.trades_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.trades_table.setHorizontalHeaderLabels(TRADE_HEADERS)
-        for c, w in enumerate((90, 90, 80, 70, 50)):
+        for c, w in enumerate((90, 90, 140, 70, 70, 50)):
             self.trades_table.setColumnWidth(c, w)
         self.trades_table.horizontalHeader().setStretchLastSection(True)
         install_table_keys(self.trades_table)
@@ -603,8 +604,6 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.save_btn.setEnabled(True)
         self.populate(result)
         self._show_warnings(result)
-        self.edit_btn.setChecked(False)       # the result takes the form's place
-        self._on_edit_toggled(False)
         n_runs = len(result.runs)
         skipped = f" · skipped {', '.join(result.skipped)}" if result.skipped else ""
         self.status_lbl.setText(
@@ -712,7 +711,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.target_card.show_run(run)
         fill_monthly(self.monthly_table, run)
         self.trades_table._empty_hint.text = _TRADES_EMPTY if run.kind == "strategy" else _TRADES_EMPTY_BM
-        fill_trades(self.trades_table, run)
+        fill_trades(self.trades_table, run, self._result.dataset_info.get("names"))
         self._redraw_chart()
 
     def _on_variant_picked(self, run_id: str):

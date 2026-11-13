@@ -152,6 +152,7 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
         events = run_event_study(ds, feats, p)
 
     info = dict(ds.info)
+    info["names"] = dict(ds.stocks.names)      # display only (the Strategy tab's trade list, spec 9-24)
     info["flow_coverage"] = feats.flow_coverage
     info["regime_on_share"] = float(np.mean(feats.regime_on[ds.start_idx:])) if ds.stocks.T > ds.start_idx else 0.0
     return ResearchResult(SPEC_VERSION, datetime.now(), req, info, runs, events, [w for w in warnings if w],

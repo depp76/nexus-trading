@@ -427,11 +427,12 @@ def fill_monthly(table: QTableWidget, run) -> None:
         table.setUpdatesEnabled(True)
 
 
-TRADE_HEADERS = ["Entry", "Exit", "Ticker", "Return", "Days", "Reason"]
+TRADE_HEADERS = ["Entry", "Exit", "Name", "Ticker", "Return", "Days", "Reason"]
 
 
-def fill_trades(table: QTableWidget, run) -> None:
-    """One row per closed trade of a strategy run, newest exit first."""
+def fill_trades(table: QTableWidget, run, names: dict | None = None) -> None:
+    """One row per closed trade of a strategy run, newest exit first; `names`
+    maps a ticker to its company name (blank when unknown)."""
     table.setUpdatesEnabled(False)
     try:
         trades = list(getattr(run, "trades", None) or []) if run is not None and run.kind == "strategy" else []
@@ -442,6 +443,7 @@ def fill_trades(table: QTableWidget, run) -> None:
             cells = [
                 _item(f"{t.entry_date:%Y-%m-%d}", _LEFT),
                 _item(f"{t.exit_date:%Y-%m-%d}", _LEFT),
+                _item((names or {}).get(t.ticker, ""), _LEFT),
                 _item(t.ticker, _LEFT),
                 _item(f"{t.ret_pct:+.1f}%", color=_hex(ret)),
                 _item(str(t.holding_days)),

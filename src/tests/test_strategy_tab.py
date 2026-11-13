@@ -293,8 +293,9 @@ class TestResultScreen(unittest.TestCase):
         self.assertEqual(tab.variant_seg.current(), best.id)
         self.assertEqual(tab.cost_seg.current(), "1")
         self.assertTrue(tab.selector_row.isVisibleTo(tab))
-        self.assertFalse(tab.form_box.isVisibleTo(tab))       # a result folds the form away
-        self.assertFalse(tab.edit_btn.isChecked())
+        # The form stays open after a run (back to choosing, docs/ui.md 8.12).
+        self.assertTrue(tab.form_box.isVisibleTo(tab))
+        self.assertTrue(tab.edit_btn.isChecked())
 
     def test_variant_pick_updates_cards_target_check_and_tabs(self):
         from ui.strategy_widgets import fmt_num, fmt_pct
@@ -310,6 +311,10 @@ class TestResultScreen(unittest.TestCase):
         self.assertEqual(tab.compare_table.item(tab.compare_table.currentRow(), 0).text(), "A0")
         self.assertEqual(tab.monthly_table.rowCount(), len({d.year for d in a0.dates}))
         self.assertEqual(tab.trades_table.rowCount(), len(a0.trades))
+        if a0.trades:                                            # name column next to the ticker
+            t = max(a0.trades, key=lambda t: (t.exit_date, t.entry_date))
+            self.assertEqual(tab.trades_table.item(0, 3).text(), t.ticker)
+            self.assertEqual(tab.trades_table.item(0, 2).text(), self.result.dataset_info["names"].get(t.ticker, ""))
         self.assertEqual(tab.ax.get_legend().get_texts()[-1].get_text(), "A0")
 
     def test_benchmark_hides_the_badges(self):
