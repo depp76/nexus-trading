@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QFont, QPainter, QColor, QKeySequence
 
-from ui.theme import TEXT, TEXT_FAINT
+from ui.theme import TEXT, TEXT_FAINT, TEXT_MUTED
 from ui.colors import OK, DANGER, DANGER_BG
 
 logger = logging.getLogger(__name__)
@@ -36,13 +36,16 @@ logger = logging.getLogger(__name__)
 # monospace face" rule was dropped for this).
 FONT_FAMILIES = ["Malgun Gothic Semilight", "맑은 고딕 Semilight", "Malgun Gothic"]
 
-# Point-size scale. Anything not on it is a one-off to justify.
-FONT_TITLE = 16     # tab titles
-FONT_KPI = 13       # KPI-card values
-FONT_HEADING = 11   # section headings
-FONT_BODY = 10      # default (QApplication font)
+# Point-size scale. Anything not on it is a one-off to justify. Soft Slate
+# (docs/ui.md 8.16, proposal 2026-11-14): a larger title, a smaller body --
+# mockup px x 0.75, rounded (22px title, 16px headings, 18px KPI, 12px body,
+# 11px captions).
+FONT_TITLE = 17     # the app title in the window header
+FONT_KPI = 13       # KPI values
+FONT_HEADING = 12   # section headings, dialog titles
+FONT_BODY = 9       # default (QApplication font): body, inputs, buttons
 FONT_SMALL = 9      # table cells, status lines
-FONT_CAPTION = 8    # sub-labels, footnotes
+FONT_CAPTION = 8    # KPI labels, sub-labels, footnotes
 
 
 def create_font(
@@ -102,6 +105,9 @@ def make_button(text: str, role: str | None = None, on_click: Callable | None = 
                 checked: bool = False) -> QPushButton:
     btn = QPushButton(text)
     btn.setFixedHeight(BTN_H)
+    # No implicit default button (docs/ui.md 8.17): in a dialog, Enter in a
+    # number or date field must never commit a save or start a run.
+    btn.setAutoDefault(False)
     if width:
         btn.setFixedWidth(width)
     if role:
@@ -114,6 +120,59 @@ def make_button(text: str, role: str | None = None, on_click: Callable | None = 
     if on_click is not None:
         btn.clicked.connect(on_click)
     return btn
+
+
+def button_row(*buttons: QPushButton, leading: tuple = ()) -> QHBoxLayout:
+    """A dialog's bottom button row (docs/ui.md 8.17): `leading` widgets on
+    the left, then a stretch, then `buttons` right-aligned in the order
+    given -- 취소 → 저장 for an edit dialog, 취소 → 확인 for a pick dialog,
+    내보내기 → 닫기 for a view dialog."""
+    row = QHBoxLayout()
+    row.setSpacing(8)
+    for w in leading:
+        row.addWidget(w)
+    row.addStretch()
+    for b in buttons:
+        row.addWidget(b)
+    return row
+
+
+def fit_to_screen(widget: QWidget, width: int, height: int, margin: int = 40) -> None:
+    """Resize `widget` to `width` x `height`, capped by its screen's
+    available area (task bar excluded) minus `margin`, so a large dialog
+    never opens past the screen edge on 1366x768 or at 150% scaling
+    (docs/ui.md 8.17). An initial size only -- the dialog stays resizable."""
+    screen = widget.screen() or QApplication.primaryScreen()
+    if screen is not None:
+        avail = screen.availableGeometry()
+        width = min(width, max(200, avail.width() - margin))
+        height = min(height, max(150, avail.height() - margin))
+    widget.resize(width, height)
+
+
+_SETTINGS_SCOPE = ("PortfolioManagement", "PortfolioManagement")
+
+
+def remember_splitter(splitter, key: str, default_sizes: list[int]) -> None:
+    """Restore `splitter`'s last sizes from QSettings (`ui/splitter/<key>`),
+    else `default_sizes`, and save them whenever the user drags the handle
+    (docs/ui.md 8.17). A stored value that does not fit (wrong pane count,
+    a zero-size pane) is ignored, so a saved ratio can never hide a pane."""
+    from PyQt6.QtCore import QSettings
+    settings = QSettings(*_SETTINGS_SCOPE)
+    name = f"ui/splitter/{key}"
+    sizes = default_sizes
+    raw = settings.value(name)
+    if raw:
+        try:
+            stored = [int(v) for v in (raw if isinstance(raw, (list, tuple)) else str(raw).split(","))]
+            if len(stored) == splitter.count() and all(v > 0 for v in stored):
+                sizes = stored
+        except (TypeError, ValueError):
+            pass
+    splitter.setSizes(sizes)
+    splitter.splitterMoved.connect(
+        lambda *_: settings.setValue(name, ",".join(str(v) for v in splitter.sizes())))
 
 
 # ---------------------------------------------------------------------------
@@ -415,21 +474,26 @@ class KpiStrip(QFrame):
         self._layout.setSpacing(0)
         self.cells: dict = {}
 
-    def add(self, key: str, label: str, sub: str = "", widget: QWidget | None = None):
+    def add(self, key: str, label: str, sub: str = "", widget: QWidget | None = None,
+            primary: bool = True):
+        """One cell. `primary=False` is a supporting figure (docs/ui.md 8.16):
+        same cell, a body-size value instead of the KPI size, so the
+        headline numbers lead and the rest stay one glance away."""
         box = QVBoxLayout()
         box.setSpacing(2)
         lbl = QLabel(label.upper())
         lbl.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
-        lbl.setStyleSheet(f"color:{TEXT_FAINT}; letter-spacing:.05em;")
+        lbl.setStyleSheet(f"color:{TEXT_MUTED}; letter-spacing:.05em;")
         box.addWidget(lbl)
         value_lbl = None
+        value_font = create_font(FONT_KPI if primary else FONT_BODY, style_name="Semilight")
         if widget is not None:
-            widget.setFont(create_font(FONT_KPI, style_name="Semilight"))
+            widget.setFont(value_font)
             widget.setStyleSheet("border:none; padding:0px; background:transparent;")
             box.addWidget(widget)
         else:
             value_lbl = QLabel("-")
-            value_lbl.setFont(create_font(FONT_KPI, style_name="Semilight"))
+            value_lbl.setFont(value_font)
             box.addWidget(value_lbl)
         sub_lbl = QLabel(sub)
         sub_lbl.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
@@ -439,6 +503,15 @@ class KpiStrip(QFrame):
         cell_widget = QWidget()
         cell_widget.setLayout(box)
         self._layout.addWidget(cell_widget, 1)
+
+    def add_divider(self):
+        """A thin vertical line between the headline cells and the rest."""
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.VLine)
+        line.setObjectName("kpiDivider")
+        self._layout.addSpacing(8)
+        self._layout.addWidget(line)
+        self._layout.addSpacing(16)
 
     def set_value(self, key: str, text: str, color: str | None = None, tooltip: str | None = None):
         value_lbl, _ = self.cells[key]
@@ -492,19 +565,20 @@ class KpiCard(QFrame):
         super().__init__(parent)
         self.setObjectName("KpiCard")
         grid = QGridLayout(self)
-        grid.setContentsMargins(12, 8, 12, 8)
+        grid.setContentsMargins(12, 6, 12, 6)
         grid.setHorizontalSpacing(6)
-        grid.setVerticalSpacing(2)
+        grid.setVerticalSpacing(1)
         self.label = QLabel(label.upper())
         self.label.setObjectName("kpiLabel")
         self.badge = make_badge("na", "")
         self.badge.hide()
         self.value = QLabel("-")
         self.value.setObjectName("kpiValue")
-        self.value.setFont(create_font(FONT_TITLE, style_name="Semilight"))
+        self.value.setFont(create_font(FONT_KPI, style_name="Semilight"))
         self.help = QLabel(help_text)
         self.help.setObjectName("kpiHelp")
         self.help.setWordWrap(True)
+        self.setToolTip(help_text)   # the long explanation also on hover (8.16)
         grid.addWidget(self.label, 0, 0)
         grid.addWidget(self.badge, 0, 1, Qt.AlignmentFlag.AlignRight)
         grid.addWidget(self.value, 1, 0, 1, 2)
@@ -525,6 +599,7 @@ class KpiCard(QFrame):
             self.badge.show()
         if help is not None:
             self.help.setText(help)
+            self.setToolTip(help)
 
 # Status text colors (roadmap 7-2c) — e.g. a risk-gate PASS/FAIL cell. Reserved
 # for status display only (roadmap 7-4d): an action button must not reuse these,

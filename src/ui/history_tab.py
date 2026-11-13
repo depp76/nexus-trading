@@ -170,17 +170,21 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._kpi_labels = card.cells  # key -> (value QLabel | None, sub QLabel)
         cell = card.add
 
+        # Headline figures first at the KPI size, then the supporting ones
+        # (and the three inputs) at body size after a divider (docs/ui.md
+        # 8.16): every value and input stays in the strip.
         cell("total_asset", "Total Assets", "Valuation + cash")
-        cell("cumulative_asset", "Cumulative Assets", "Live NAV + withdrawals")
         cell("total_pl", "Total P/L", "Realized + unrealized")
         cell("total_pl_pct", "Total P/L (%)", "vs Principal")
+        card.add_divider()
+        cell("cumulative_asset", "Cumulative Assets", "Live NAV + withdrawals", primary=False)
         self._principal_edit = self._make_money_input("e.g. 50,000,000")
-        cell("principal", "Principal", "Deposits − withdrawals", self._principal_edit)
-        cell("cost_basis", "Cost Basis", "Open positions cost")
+        cell("principal", "Principal", "Deposits − withdrawals", self._principal_edit, primary=False)
+        cell("cost_basis", "Cost Basis", "Open positions cost", primary=False)
         self._deposit_edit = self._make_money_input("e.g. 10,000,000")
-        cell("deposit", "Deposit", "", self._deposit_edit)
+        cell("deposit", "Deposit", "", self._deposit_edit, primary=False)
         self._withdrawal_edit = self._make_money_input("e.g. 5,000,000")
-        cell("withdrawal", "Withdrawal", "Cumulative", self._withdrawal_edit)
+        cell("withdrawal", "Withdrawal", "Cumulative", self._withdrawal_edit, primary=False)
 
         # Every cell has the same stretch factor, so the columns come out
         # equal whenever the window is wide enough; when it is not, each cell
@@ -197,16 +201,25 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         edit.textEdited.connect(lambda t, e=edit: _fmt_num_edit(e, t))
         return edit
 
-    def _build_controls_row(self) -> QHBoxLayout:
+    def _build_controls_row(self) -> QVBoxLayout:
         """The tab's one toolbar row (docs/ui.md 8.4): table filters on the
         left -- holdings jump, company search, period, grouping, the 30-day
         rule -- and actions on the right with Add Trade, the primary, last.
         (Consolidated from two dashboard cards and a separate controls row on
         2026-09-20; reordered to the shared filters-left/actions-right layout
         on 2026-10-25.)"""
+        # Two rows (docs/ui.md 8.17): finding a stock | the actions with Add
+        # Trade last, then how the table is cut (period, grouping, stale
+        # prices). One row needed ~1,600px and squeezed the inputs.
+        rows = QVBoxLayout()
+        rows.setSpacing(6)
+        rows.setContentsMargins(0, 0, 0, 0)
         row = QHBoxLayout()
         row.setSpacing(8)
         row.setContentsMargins(0, 0, 0, 0)
+        view_row = QHBoxLayout()
+        view_row.setSpacing(8)
+        view_row.setContentsMargins(0, 0, 0, 0)
 
         self._open_stocks_combo = QComboBox()
         self._open_stocks_combo.addItem("보유 종목...")
@@ -219,12 +232,11 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._search_stock_pl_edit = QLineEdit()
         self._search_stock_pl_edit.setPlaceholderText("종목 검색")
         self._search_stock_pl_edit.setFixedHeight(_BTN_H)
-        self._search_stock_pl_edit.setMinimumWidth(150)
+        self._search_stock_pl_edit.setMinimumWidth(180)
         self._search_stock_pl_edit.setMaximumWidth(250)
         self._search_stock_pl_edit.returnPressed.connect(self._on_search_stock_pl)
         row.addWidget(self._search_stock_pl_edit)
         row.addWidget(make_button("검색", on_click=self._on_search_stock_pl))
-        row.addSpacing(8)
 
         # Period filter (mockup "periods": 1M/3M/YTD/All), by buy date.
         self._period_filter = "All"
@@ -232,9 +244,9 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         for label in ("1M", "3M", "YTD", "All"):
             btn = make_button(_PERIOD_LABELS.get(label, label), width=48, checkable=True, checked=(label == "All"))
             btn.clicked.connect(lambda checked, p=label: self._on_period_filter_changed(p))
-            row.addWidget(btn)
+            view_row.addWidget(btn)
             self._period_buttons[label] = btn
-        row.addSpacing(8)
+        view_row.addSpacing(14)
 
         # Row grouping: by status (closed, then open) or by month (all trades
         # newest first with a month summary row after each month). A view
@@ -247,9 +259,9 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         for key, label in (("status", "상태별"), ("month", "월별")):
             btn = make_button(label, width=84, checkable=True, checked=(key == "status"))
             btn.clicked.connect(lambda _c, k=key: self._on_grouping_changed(k))
-            row.addWidget(btn)
+            view_row.addWidget(btn)
             self._group_buttons[key] = btn
-        row.addSpacing(8)
+        view_row.addSpacing(14)
 
         # docs/ui.md 3.5: the 30-day rule used to be hardcoded with no UI
         # trace of it, so a user seeing a blank current-price cell had no
@@ -259,7 +271,8 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             "오래된 시세 숨김", tooltip="매도 후 30일이 지난 거래의 현재가를 숨깁니다",
             checkable=True, checked=True)
         self._stale_toggle_btn.toggled.connect(self._on_stale_toggle_changed)
-        row.addWidget(self._stale_toggle_btn)
+        view_row.addWidget(self._stale_toggle_btn)
+        view_row.addStretch()
 
         row.addStretch()
 
@@ -269,7 +282,9 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         row.addWidget(self._fetch_dep_btn)
         row.addWidget(make_button("다시 읽기", on_click=self._reload_current))
         row.addWidget(make_button("거래 추가", "primary", self._show_add_trade_dialog))
-        return row
+        rows.addLayout(row)
+        rows.addLayout(view_row)
+        return rows
 
     def _on_grouping_changed(self, key: str):
         self._sort_by_date = key == "month"

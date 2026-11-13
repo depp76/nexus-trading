@@ -227,3 +227,137 @@ class TestUniverseRowFitsRangeBar(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSoftSlateTheme(unittest.TestCase):
+    """docs/ui.md 8.16: no default black text on the dark surfaces."""
+
+    def test_palette_text_roles_are_the_theme_text(self):
+        from PyQt6.QtGui import QPalette
+        from ui.theme import app_palette, TEXT, SURFACE, TEXT_EMPTY
+        pal = app_palette()
+        for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text, QPalette.ColorRole.ButtonText,
+                     QPalette.ColorRole.ToolTipText, QPalette.ColorRole.HighlightedText):
+            self.assertEqual(pal.color(role).name(), TEXT)
+        self.assertEqual(pal.color(QPalette.ColorRole.Base).name(), SURFACE)
+        self.assertEqual(pal.color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text).name(), TEXT_EMPTY)
+
+    def test_text_tokens_keep_4_5_to_1_on_the_surfaces(self):
+        from ui import theme, colors
+
+        def lum(h):
+            def ch(v):
+                v /= 255
+                return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+            r, g, b = (int(h[i:i + 2], 16) for i in (1, 3, 5))
+            return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b)
+
+        def ratio(a, b):
+            la, lb = sorted((lum(a), lum(b)), reverse=True)
+            return (la + 0.05) / (lb + 0.05)
+
+        for bg in (theme.SURFACE, theme.ACCENT_BG, theme.HDR_BG):
+            for fg in (theme.TEXT, theme.TEXT_MUTED, colors.PROFIT, colors.LOSS, colors.OK, colors.WARN):
+                self.assertGreaterEqual(ratio(fg, bg), 4.5, (fg, bg))
+        self.assertGreaterEqual(ratio(theme.PRIMARY_TEXT, theme.PRIMARY_BG), 4.5)
+
+    def test_matplotlib_theme_colors_text_and_faces(self):
+        from matplotlib import rcParams
+        from ui.theme import apply_matplotlib_theme, SURFACE, TEXT
+        saved = dict(rcParams)
+        try:
+            apply_matplotlib_theme()
+            self.assertEqual(rcParams["axes.facecolor"], SURFACE)
+            self.assertEqual(rcParams["text.color"], TEXT)
+        finally:
+            rcParams.update(saved)
+
+    def test_spin_box_arrow_icons_exist(self):
+        import os
+        from ui.theme import ARROW_UP_ICON, ARROW_DOWN_ICON
+        self.assertTrue(os.path.isfile(ARROW_UP_ICON))
+        self.assertTrue(os.path.isfile(ARROW_DOWN_ICON))
+
+
+class TestButtonOrderAndSizing(unittest.TestCase):
+    """docs/ui.md 8.17: dialog button order, no implicit default button,
+    initial sizes inside the screen, remembered splitters, toolbar rows."""
+
+    def _row_texts(self, layout):
+        return [layout.itemAt(i).widget().text() for i in range(layout.count())
+                if layout.itemAt(i).widget() is not None]
+
+    def test_make_button_is_never_an_implicit_default(self):
+        self.assertFalse(make_button("저장", "primary").autoDefault())
+
+    def test_button_row_is_right_aligned_in_the_given_order(self):
+        from ui.common import button_row
+        row = button_row(make_button("취소"), make_button("저장", "primary"), leading=(make_button("전체"),))
+        self.assertEqual(self._row_texts(row), ["전체", "취소", "저장"])
+        self.assertIsNotNone(row.itemAt(1).spacerItem())       # the stretch sits before the right group
+
+    def test_edit_dialogs_put_cancel_before_save_and_enter_does_not_save(self):
+        from ui.dialogs.trade_edit import BuyEditDialog, SellEditDialog, TradeEntryDialog
+        for dlg in (BuyEditDialog({"buy_date": "2026-01-02", "buy_price": 1, "qty": 1}),
+                    SellEditDialog({"buy_date": "2026-01-02", "qty": 1}), TradeEntryDialog()):
+            buttons = [b for b in dlg.findChildren(QPushButton) if b.text() in ("취소", "저장")]
+            self.assertEqual(sorted(b.text() for b in buttons), ["저장", "취소"])
+            cancel = next(b for b in buttons if b.text() == "취소")
+            save = next(b for b in buttons if b.text() == "저장")
+            dlg.show()
+            app.processEvents()
+            self.assertLess(cancel.mapTo(dlg, cancel.rect().topLeft()).x(), save.mapTo(dlg, save.rect().topLeft()).x())
+            self.assertFalse(any(b.isDefault() or b.autoDefault() for b in buttons))
+            self.assertGreaterEqual(dlg.minimumWidth(), 380)
+            dlg.close()
+
+    def test_variant_picker_bulk_buttons_on_top_and_cancel_ok_below(self):
+        from ui.dialogs.variant_picker import VariantPickerDialog
+        dlg = VariantPickerDialog(("A0",), flows_on=False)
+        dlg.show()
+        app.processEvents()
+        pos = {b.text(): b.mapTo(dlg, b.rect().topLeft()) for b in dlg.findChildren(QPushButton)}
+        self.assertLess(pos["전체 선택"].y(), dlg.list.mapTo(dlg, dlg.list.rect().topLeft()).y())
+        self.assertGreater(pos["확인"].y(), dlg.list.mapTo(dlg, dlg.list.rect().bottomLeft()).y())
+        self.assertLess(pos["취소"].x(), pos["확인"].x())
+        dlg.close()
+
+    def test_fit_to_screen_caps_the_initial_size(self):
+        from PyQt6.QtWidgets import QDialog
+        from ui.common import fit_to_screen
+        dlg = QDialog()
+        fit_to_screen(dlg, 100_000, 100_000)
+        avail = (dlg.screen() or app.primaryScreen()).availableGeometry()
+        self.assertLessEqual(dlg.width(), avail.width())
+        self.assertLessEqual(dlg.height(), avail.height())
+
+    def test_remember_splitter_ignores_a_stored_value_that_does_not_fit(self):
+        from PyQt6.QtCore import QSettings
+        from PyQt6.QtWidgets import QSplitter, QWidget
+        from ui.common import remember_splitter, _SETTINGS_SCOPE
+        settings = QSettings(*_SETTINGS_SCOPE)
+        key = "ui/splitter/_test_only"
+        try:
+            for stored in ("300,0", "1,2,3", "x,y"):
+                settings.setValue(key, stored)
+                sp = QSplitter(Qt.Orientation.Vertical)
+                sp.addWidget(QWidget())
+                sp.addWidget(QWidget())
+                sp.resize(100, 1000)
+                remember_splitter(sp, "_test_only", [550, 450])
+                self.assertTrue(all(s > 0 for s in sp.sizes()), (stored, sp.sizes()))
+        finally:
+            settings.remove(key)
+
+    def test_universe_add_ticker_has_its_own_row(self):
+        from ui.universe_tab import UniverseTab
+        with patch.object(UniverseTab, "refresh_data"),              patch("ui.universe_tab.safe_load_json", return_value=None):
+            tab = UniverseTab()
+        tab.resize(1500, 800)
+        tab.show()
+        app.processEvents()
+        y = lambda w: w.mapTo(tab, w.rect().center()).y()   # noqa: E731
+        self.assertEqual(y(tab.refresh_btn), y(tab.search_input))       # filters | analysis + primary
+        self.assertGreater(y(tab.add_ticker_btn), y(tab.refresh_btn))   # the add group below
+        self.assertEqual(y(tab.market_combo), y(tab.add_ticker_btn))
+        tab.hide()

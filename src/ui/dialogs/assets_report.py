@@ -3,8 +3,8 @@
 next to the KOSPI close (rows from ui.assets_report.build_report), with a
 Positions % / vs KOSPI line chart (left/right y axes) above the table."""
 from PyQt6.QtWidgets import (
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QHeaderView, QLabel,
-    QPushButton, QSplitter, QFileDialog, QMessageBox,
+    QDialog, QWidget, QVBoxLayout, QTableWidget, QHeaderView, QLabel,
+    QSplitter, QFileDialog, QMessageBox,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -13,9 +13,9 @@ import mplcursors
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
-from ui.common import create_font, FONT_SMALL, FONT_HEADING
+from ui.common import create_font, FONT_SMALL, FONT_HEADING, make_button, button_row, fit_to_screen
 from ui.colors import QC_PROFIT, QC_LOSS, QC_FLAT
-from ui.theme import ACCENT, ACCENT_TEXT, TEXT, TEXT_MUTED, TEXT_FAINT, LINE
+from ui.theme import ACCENT, ACCENT_TEXT, TEXT, TEXT_MUTED, TEXT_FAINT, LINE, HDR_BG
 from ui.widgets import NumericItem
 
 _SUMMARY_HEADERS = ["Date", "KOSPI", "KOSPI Cum %", "Positions", "Cash", "Total",
@@ -73,7 +73,7 @@ class AssetsReportDialog(QDialog):
         self._rows = rows
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint)
         self.setWindowTitle("Total Assets — Early / Mid-Month Report")
-        self.resize(1300, 900)
+        fit_to_screen(self, 1300, 900)
 
         v = QVBoxLayout(self)
         v.setContentsMargins(12, 10, 12, 10)
@@ -115,15 +115,9 @@ class AssetsReportDialog(QDialog):
         if rows:
             self.summary.selectRow(len(rows) - 1)
 
-        btns = QHBoxLayout()
-        btns.addStretch()
-        export_btn = QPushButton("CSV 내보내기")
-        export_btn.clicked.connect(self._export_csv)
-        btns.addWidget(export_btn)
-        close_btn = QPushButton("닫기")
-        close_btn.clicked.connect(self.accept)
-        btns.addWidget(close_btn)
-        v.addLayout(btns)
+        # View dialog: 내보내기 → 닫기, bottom right (docs/ui.md 8.17).
+        v.addLayout(button_row(make_button("CSV 내보내기", on_click=self._export_csv),
+                               make_button("닫기", on_click=self.accept)))
 
     def _build_chart(self):
         """Positions % (left y axis) and vs KOSPI %p (right y axis) as two
@@ -195,7 +189,7 @@ class AssetsReportDialog(QDialog):
                 f"{r['date']}\nPositions {weights[i]:.1f}%  ({r['value']:,.0f})\n"
                 f"Total {r['total']:,.0f}\nvs KOSPI " + ("-" if ex is None else f"{ex:+.1f}%p")
             )
-            sel.annotation.get_bbox_patch().set(fc="white", alpha=0.95, edgecolor=LINE)
+            sel.annotation.get_bbox_patch().set(fc=HDR_BG, alpha=0.95, edgecolor=LINE)
 
         self.canvas.mpl_connect("button_press_event", self._on_chart_clicked)
 

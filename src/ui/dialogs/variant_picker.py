@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 )
 
 from strategy.trend_following import VARIANTS, StrategyParams, describe_variant
-from ui.common import make_button
+from ui.common import make_button, button_row, fit_to_screen
 from ui.theme import TEXT, TEXT_MUTED, TEXT_SUB
 
 # List groups, in VARIANTS order within each (spec 6-2).
@@ -52,12 +52,20 @@ class VariantPickerDialog(QDialog):
     def __init__(self, selected, flows_on: bool, params: StrategyParams | None = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("전략 변형 선택")
-        self.resize(880, 540)
+        fit_to_screen(self, 880, 540)
         self._flows_on = flows_on
         self._params = params
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 10, 12, 10)
+        # Bulk selection sits on the list it acts on; the bottom row is only
+        # 취소 → 확인 (docs/ui.md 8.17).
+        bulk = QHBoxLayout()
+        bulk.setSpacing(6)
+        bulk.addWidget(make_button("전체 선택", on_click=lambda: self._set_all(True)))
+        bulk.addWidget(make_button("전체 해제", on_click=lambda: self._set_all(False)))
+        bulk.addStretch()
+        root.addLayout(bulk)
         root.setSpacing(8)
 
         self.list = QListWidget()
@@ -95,14 +103,8 @@ class VariantPickerDialog(QDialog):
         self.count_lbl.setObjectName("muted")
         root.addWidget(self.count_lbl)
 
-        buttons = QHBoxLayout()
-        buttons.addWidget(make_button("전체", on_click=lambda: self._set_all(True)))
-        buttons.addWidget(make_button("해제", on_click=lambda: self._set_all(False)))
-        buttons.addStretch()
-        buttons.addWidget(make_button("취소", on_click=self.reject))
         self.ok_btn = make_button("확인", "primary", self.accept)
-        buttons.addWidget(self.ok_btn)
-        root.addLayout(buttons)
+        root.addLayout(button_row(make_button("취소", on_click=self.reject), self.ok_btn))
 
         self.list.currentItemChanged.connect(self._on_current_changed)
         self.list.itemChanged.connect(self._update_count)

@@ -300,8 +300,12 @@ class TestResultScreen(unittest.TestCase):
     def test_variant_pick_updates_cards_target_check_and_tabs(self):
         from ui.strategy_widgets import fmt_num, fmt_pct
         tab = self._tab()
-        tab.select_variant("BM1")                    # A0 is not the focus before the click
-        tab.variant_seg.buttons["A0"].click()
+        tab.select_variant("BM1")                    # A0 is not the focus before the pick
+        if "A0" not in tab._sel_ids:
+            tab.variant_seg.buttons["A0"].click()    # 비교 대상: added, the focus stays (8.17)
+        self.assertEqual(tab._sel_id, "BM1")
+        self.assertIn("A0", tab._sel_ids)
+        tab.focus_combo.activated.emit(tab.focus_combo.findData("A0"))   # 상세 기준
         a0 = next(r for r in self.result.runs_at(1.0) if r.id == "A0")
         cards = tab.kpi_row.cards
         self.assertEqual(cards["sharpe"].value.text(), fmt_num(a0.metrics["sharpe"]))
@@ -317,6 +321,39 @@ class TestResultScreen(unittest.TestCase):
             self.assertEqual(tab.trades_table.item(0, 3).text(), t.ticker)
             self.assertEqual(tab.trades_table.item(0, 2).text(), self.result.dataset_info["names"].get(t.ticker, ""))
         self.assertEqual(tab.ax.get_legend().get_texts()[-1].get_text(), "A0")
+
+    def test_result_basis_line_comes_from_the_result_not_the_form(self):
+        # docs/ui.md 8.16: what the shown result was computed with.
+        tab = self._tab()
+        text = tab.basis_lbl.text()
+        self.assertTrue(tab.basis_lbl.isVisibleTo(tab))
+        self.assertTrue(text.startswith("표시 중인 결과: "))
+        self.assertIn(str(self.result.dataset_info["eval_start"]), text)
+        self.assertIn("비용 1x", text)
+        self.assertIn(f"상세 기준 {tab._sel_id}", text)
+        tab.universe_spin.setValue(tab.universe_spin.value() + 50)   # editing the next run's form
+        tab.target_spin.setValue(2.5)
+        self.assertEqual(tab.basis_lbl.text(), text)
+        tab.select_variant("BM1")
+        self.assertIn("상세 기준 BM1", tab.basis_lbl.text())
+        # Saving belongs to the shown result: on the result row, not the settings card (8.17).
+        self.assertTrue(tab.selector_row.isAncestorOf(tab.save_btn))
+        self.assertTrue(tab.save_btn.isEnabled())
+
+    def test_target_check_is_a_summary_line_with_expandable_detail(self):
+        # docs/ui.md 8.16: verdict badges on one line, the four rows on demand.
+        tab = self._tab()
+        card = tab.target_card
+        self.assertFalse(card.detail.isVisibleTo(tab))
+        self.assertTrue(card.robust_note.isVisibleTo(tab))
+        for key in ("sharpe", "mdd", "both"):
+            self.assertEqual(card.summary[key].objectName(), card.badges[key].objectName())
+        card.detail_btn.click()
+        self.assertTrue(card.detail.isVisibleTo(tab))
+        self.assertEqual(card.badges["robust"].text(), "앱에서 미실행")   # the not-run note stays in the detail
+        self.assertEqual(card.detail_btn.text(), "접기")
+        tab.select_variant("BM1")
+        self.assertEqual(card.summary["sharpe"].text(), "Sharpe 벤치마크")
 
     def test_benchmark_hides_the_badges(self):
         tab = self._tab()
@@ -375,9 +412,11 @@ class TestResultScreen(unittest.TestCase):
         tab.cost_combo.setCurrentIndex(1)
         texts = [c.text() for c in tab.chips if not c.isHidden()]
         self.assertIn("KOSPI 상위 120", texts)
-        self.assertIn("비용 1x", texts)
+        self.assertIn("실행 비용 1x", texts)
+        self.assertEqual(tab.edit_btn.text(), "설정 접기")
         tab.edit_btn.click()
         self.assertFalse(tab.form_box.isVisibleTo(tab))
+        self.assertEqual(tab.edit_btn.text(), "설정 펼치기")   # names the action it will do (8.17)
 
     def test_empty_state(self):
         tab = TrendFollowingTab()
@@ -470,7 +509,7 @@ class TestWindowEndAndFormLayout(unittest.TestCase):
         self.assertGreaterEqual(tab.variants_lbl.width(), _VARIANTS_LBL_MIN_W)
         # the first line stops short of the buttons laid over the corner
         first_right = max(i.widget().mapTo(tab, i.widget().rect().topRight()).x() for i in lines[0])
-        self.assertLess(first_right, tab.edit_btn.mapTo(tab, tab.edit_btn.rect().topLeft()).x())
+        self.assertLess(first_right, tab.stop_btn.mapTo(tab, tab.stop_btn.rect().topLeft()).x())
         tab.edit_btn.click()
         self.assertFalse(tab.form_box.isVisible())
         self.assertTrue(tab.chips_box.isVisible())
@@ -490,8 +529,8 @@ class TestWindowEndAndFormLayout(unittest.TestCase):
         lines = tab.form_flow.lines(tab.form_box.width())
         self.assertGreater(len(lines), wide_lines)
         card_right = tab.form_box.mapTo(tab, tab.form_box.rect().topRight()).x()
-        btn_left = tab.edit_btn.mapTo(tab, tab.edit_btn.rect().topLeft()).x()
-        btn_bottom = tab.edit_btn.mapTo(tab, tab.edit_btn.rect().bottomLeft()).y()
+        btn_left = tab.stop_btn.mapTo(tab, tab.stop_btn.rect().topLeft()).x()
+        btn_bottom = tab.stop_btn.mapTo(tab, tab.stop_btn.rect().bottomLeft()).y()
         for g in tab.form_groups:
             if g is tab.variants_lbl or g.isHidden():
                 continue
@@ -626,25 +665,33 @@ class TestMultiSelect(unittest.TestCase):
         self.assertEqual(set(tab.variant_seg.checked_keys()), {self._best(), "BM1"})
         self.assertTrue(tab.variant_seg.buttons[self._best()].property("segFocus"))
 
-    def test_segment_clicks_add_focus_and_remove(self):
+    def test_segments_pick_the_comparison_and_the_combo_the_detail(self):
+        # docs/ui.md 8.17: 비교 대상 (segments, many) and 상세 기준 (combo, one) are separate.
         tab = self._tab()
         other = self._other()
-        tab.variant_seg.buttons[other].click()            # unselected -> added and focused
+        tab.variant_seg.buttons[other].click()            # unselected -> added, focus unchanged
         tab.variant_seg.buttons["BM3"].click()
         self.assertEqual(tab._sel_ids, [self._best(), "BM1", other, "BM3"])
+        self.assertEqual(tab._sel_id, self._best())
+        self.assertEqual([tab.focus_combo.itemData(i) for i in range(tab.focus_combo.count())], tab._sel_ids)
+        tab.focus_combo.activated.emit(tab.focus_combo.findData("BM3"))
         self.assertEqual(tab._sel_id, "BM3")
         self.assertTrue(tab.kpi_row.cards["sharpe"].badge.isHidden())       # cards follow the focus (a BM)
+        self.assertTrue(tab.variant_seg.buttons["BM3"].property("segFocus"))
         colors = {sr[0]: sr[1] for sr in tab._chart_series}
-        tab.variant_seg.buttons[other].click()            # selected, not the focus -> focus
+        tab.focus_combo.activated.emit(tab.focus_combo.findData(other))
         self.assertEqual(tab._sel_id, other)
         self.assertEqual(tab._sel_ids, [self._best(), "BM1", other, "BM3"])     # order (and colours) kept
         self.assertEqual({sr[0]: sr[1] for sr in tab._chart_series}, colors)
-        self.assertTrue(tab.variant_seg.buttons[other].isChecked())
         self.assertIn(other, tab.target_card.subject.text())
+        tab.variant_seg.buttons["BM1"].click()            # selected, not the focus -> removed, focus stays
+        self.assertNotIn("BM1", tab._sel_ids)
+        self.assertEqual(tab._sel_id, other)
         tab.variant_seg.buttons[other].click()            # the focus -> removed, focus moves on
         self.assertNotIn(other, tab._sel_ids)
         self.assertFalse(tab.variant_seg.buttons[other].isChecked())
         self.assertEqual(tab._sel_id, "BM3")
+        self.assertEqual(tab.focus_combo.currentData(), "BM3")
 
     def test_the_last_run_cannot_be_removed(self):
         tab = self._tab()
@@ -692,6 +739,7 @@ class TestMultiSelect(unittest.TestCase):
     def test_cost_switch_keeps_the_selection(self):
         tab = self._tab()
         tab.variant_seg.buttons["BM2"].click()
+        tab.focus_combo.activated.emit(tab.focus_combo.findData("BM2"))
         before = list(tab._sel_ids)
         tab.cost_seg.buttons["2"].click()
         self.assertEqual(tab._sel_ids, before)

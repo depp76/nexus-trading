@@ -251,7 +251,9 @@ class KpiRow(QWidget):
 
     def set_target_sharpe(self, target: float):
         self.target_sharpe = float(target)
-        self.cards["sharpe"].help.setText(f"위험 1단위당 초과수익 · 목표 ≥ {fmt_target(self.target_sharpe)}")
+        text = f"위험 1단위당 초과수익 · 목표 ≥ {fmt_target(self.target_sharpe)}"
+        self.cards["sharpe"].help.setText(text)
+        self.cards["sharpe"].setToolTip(text)
 
     def _reflow(self, cols: int):
         if cols == self._cols:
@@ -296,7 +298,14 @@ class TargetCheckCard(QFrame):
     """The judgements the app can make itself for the selected run: Sharpe,
     MDD, both (criterion H). Robustness (E2) and the look-ahead check (A5)
     are not computed here, so that row always says so instead of quoting a
-    fixed verdict from an earlier validation report."""
+    fixed verdict from an earlier validation report.
+
+    One summary line (title, subject, a short badge per judgement, a note
+    that E2/A5 are not run, a "상세" toggle) over the full rows, which are
+    collapsed by default (docs/ui.md 8.16: the KPI badges already carry the
+    verdicts, so the card no longer takes a third of the chart's width)."""
+
+    SHORT = {"sharpe": "Sharpe", "mdd": "MDD", "both": "H"}
 
     ROWS = [
         ("sharpe", f"Sharpe ≥ {fmt_target(DEFAULT_TARGET_SHARPE)}"),
@@ -309,14 +318,39 @@ class TargetCheckCard(QFrame):
         super().__init__(parent)
         self.setObjectName("DashboardCard")
         box = QVBoxLayout(self)
-        box.setContentsMargins(12, 10, 12, 10)
-        box.setSpacing(8)
+        box.setContentsMargins(12, 6, 12, 6)
+        box.setSpacing(6)
+
+        head = QHBoxLayout()
+        head.setSpacing(8)
         title = QLabel("목표 점검")
         title.setObjectName("kpiLabel")
-        box.addWidget(title)
+        head.addWidget(title)
         self.subject = QLabel("-")
         self.subject.setObjectName("muted")
-        box.addWidget(self.subject)
+        head.addWidget(self.subject)
+        head.addSpacing(6)
+        self.summary: dict[str, QLabel] = {}
+        for key in ("sharpe", "mdd", "both"):
+            badge = make_badge("na", f"{self.SHORT[key]} -")
+            badge.setToolTip(TARGET_SOURCE)
+            head.addWidget(badge)
+            self.summary[key] = badge
+        self.robust_note = QLabel("E2·A5 앱에서 미실행")
+        self.robust_note.setObjectName("faint")
+        self.robust_note.setToolTip("독립 검증은 Validation 리포트(NEX-59 등)에서 확인")
+        head.addSpacing(6)
+        head.addWidget(self.robust_note)
+        head.addStretch()
+        self.detail_btn = make_button("상세", tooltip="판정 기준과 미실행 검증 안내를 펼칩니다", checkable=True)
+        self.detail_btn.toggled.connect(self.set_expanded)
+        head.addWidget(self.detail_btn)
+        box.addLayout(head)
+
+        self.detail = QWidget()
+        detail = QVBoxLayout(self.detail)
+        detail.setContentsMargins(0, 0, 0, 0)
+        detail.setSpacing(4)
         self.badges: dict[str, QLabel] = {}
         self.labels: dict[str, QLabel] = {}
         for key, text in self.ROWS:
@@ -326,15 +360,29 @@ class TargetCheckCard(QFrame):
             badge = make_badge("na", "-")
             row.addWidget(lbl, 1)
             row.addWidget(badge, 0, Qt.AlignmentFlag.AlignRight)
-            box.addLayout(row)
+            detail.addLayout(row)
             self.badges[key] = badge
             self.labels[key] = lbl
         set_badge(self.badges["robust"], "na", "앱에서 미실행")
         self.badges["robust"].setToolTip("독립 검증은 Validation 리포트(NEX-59 등)에서 확인")
         self.badges["sharpe"].setToolTip(TARGET_SOURCE)
         self.badges["mdd"].setToolTip(TARGET_SOURCE)
+        box.addWidget(self.detail)
+        self.detail.setVisible(False)
         self.target_sharpe = DEFAULT_TARGET_SHARPE
-        box.addStretch()
+
+    def set_expanded(self, on: bool):
+        """Show or hide the full judgement rows under the summary line."""
+        self.detail.setVisible(on)
+        self.detail_btn.setText("접기" if on else "상세")
+        if self.detail_btn.isChecked() != on:
+            self.detail_btn.setChecked(on)
+
+    def _set(self, key: str, kind, text: str):
+        """One judgement: the detail row's badge and its summary badge."""
+        set_badge(self.badges[key], kind, text)
+        mark = {"ok": "✓", "fail": "✕"}.get(kind, text if text in ("-", "벤치마크") else "-")
+        set_badge(self.summary[key], kind, f"{self.SHORT[key]} {mark}")
 
     def set_target_sharpe(self, target: float):
         self.target_sharpe = float(target)
@@ -343,22 +391,22 @@ class TargetCheckCard(QFrame):
     def clear(self):
         self.subject.setText("-")
         for key in ("sharpe", "mdd", "both"):
-            set_badge(self.badges[key], "na", "-")
+            self._set(key, "na", "-")
 
     def show_run(self, run):
         self.subject.setText(f"{run.id} · 비용 {run.cost_mult:g}x")
         if run.kind != "strategy":
             for key in ("sharpe", "mdd", "both"):
-                set_badge(self.badges[key], "na", "벤치마크")
+                self._set(key, "na", "벤치마크")
             return
         m = run.metrics
-        set_badge(self.badges["sharpe"], *sharpe_badge(m.get("sharpe"), self.target_sharpe))
-        set_badge(self.badges["mdd"], *mdd_badge(m.get("mdd")))
+        self._set("sharpe", *sharpe_badge(m.get("sharpe"), self.target_sharpe))
+        self._set("mdd", *mdd_badge(m.get("mdd")))
         both = meets_targets(m, self.target_sharpe)
         if both is None:
-            set_badge(self.badges["both"], "na", "값 없음")
+            self._set("both", "na", "값 없음")
         else:
-            set_badge(self.badges["both"], *(("ok", "✓ 충족") if both else ("fail", "✕ 미충족")))
+            self._set("both", *(("ok", "✓ 충족") if both else ("fail", "✕ 미충족")))
 
 
 # ---------------------------------------------------------------------------

@@ -26,7 +26,7 @@ from collections import Counter
 from datetime import datetime
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLineEdit,
+    QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLineEdit, QLabel,
     QPushButton, QMessageBox, QInputDialog,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
@@ -121,7 +121,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("종목명 또는 코드 검색")
-        self.search_input.setMinimumWidth(160)
+        self.search_input.setMinimumWidth(180)
         self.search_input.setMaximumWidth(260)
         self.search_input.textChanged.connect(self.filter_table)
         bar.addWidget(self.search_input)
@@ -159,21 +159,30 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
         bar.addStretch()
 
-        # Add a ticker: market + code + button, one action group.
+        # Add a ticker: its own row under the filters (docs/ui.md 8.17), so the
+        # first row is filters | analysis + primary, and the market picked here
+        # ("추가할 시장") is never confused with the market filter above.
+        add_row = QHBoxLayout()
+        add_row.setSpacing(6)
+        add_lbl = QLabel("추가할 시장")
+        add_lbl.setObjectName("muted")
+        add_row.addWidget(add_lbl)
         self.market_combo = QComboBox()
         self.market_combo.addItems(["KOSPI", "KOSDAQ"]) #, "NASDAQ 100", "S&P500"])
-        self.market_combo.setFixedWidth(100)
-        bar.addWidget(self.market_combo)
+        self.market_combo.setMinimumWidth(100)
+        self.market_combo.setToolTip("추가할 종목의 시장(위의 시장 필터와 별개)")
+        add_row.addWidget(self.market_combo)
 
         self.ticker_input = QLineEdit()
         self.ticker_input.setPlaceholderText("코드 예: 005930")
-        self.ticker_input.setFixedWidth(140)
+        self.ticker_input.setMinimumWidth(140)
+        self.ticker_input.setMaximumWidth(180)
         self.ticker_input.returnPressed.connect(self.add_ticker)
-        bar.addWidget(self.ticker_input)
+        add_row.addWidget(self.ticker_input)
 
         self.add_ticker_btn = make_button("종목 추가", on_click=self.add_ticker)
-        bar.addWidget(self.add_ticker_btn)
-        bar.addSpacing(8)
+        add_row.addWidget(self.add_ticker_btn)
+        add_row.addStretch()
 
         # Weekly "trend + pullback" Top/Bottom recommendation
         # (trend_following.md 2-5; scoring.py via TrendScoreThread). Checked
@@ -190,6 +199,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         bar.addWidget(self.refresh_btn)
 
         universe_layout.addLayout(bar)
+        universe_layout.addLayout(add_row)
 
         self.table = StockTable()
         self.table.col_filter_changed.connect(self.filter_table)

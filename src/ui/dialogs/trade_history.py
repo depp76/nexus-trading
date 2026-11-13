@@ -4,13 +4,13 @@ Split out of the former single ui/dialogs.py (2026-09-17)."""
 import logging
 
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QStyledItemDelegate,
+    QDialog, QVBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView, QStyledItemDelegate,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QPen
 
 from ui.colors import QC_PROFIT, QC_LOSS
-from ui.common import setup_table
+from ui.common import setup_table, make_button, button_row, fit_to_screen
 from ui.theme import LINE_GROUP, TEXT_MUTED, TEXT_FAINT
 
 
@@ -26,7 +26,7 @@ class StockTradeHistoryDialog(QDialog):
         super().__init__(parent)
         title = f"[{company}] Current Holdings" if is_open_position else f"[{company}] Detailed Trading History"
         self.setWindowTitle(title)
-        self.resize(1000, 600)
+        fit_to_screen(self, 1000, 600)
 
         layout = QVBoxLayout(self)
 
@@ -255,16 +255,10 @@ class StockTradeHistoryDialog(QDialog):
 
         layout.addWidget(tbl)
 
-        close_btn = QPushButton("닫기")
-        close_btn.clicked.connect(self.accept)
-
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
-        btn_layout.addWidget(close_btn)
-        layout.addLayout(btn_layout)
+        layout.addLayout(button_row(make_button("닫기", on_click=self.accept)))
 
         # Resizable like every other dialog (docs/ui.md 8.5); it used to be
         # pinned at 1000x600 with the scroll bar switched on or off by a
         # height estimate for that fixed size.
         tbl.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.resize(1000, 600)
+        fit_to_screen(self, 1000, 600)
