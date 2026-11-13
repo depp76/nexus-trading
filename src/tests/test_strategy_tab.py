@@ -433,37 +433,141 @@ class TestWindowEndAndFormLayout(unittest.TestCase):
             TrendFollowingResearchThread(req).run()
         self.assertTrue(load.call_args.kwargs["allow_holdout"])
 
-    def test_form_takes_the_chips_place_in_two_rows(self):
+    # The layout checks below are relative to the widgets' own size hints, never
+    # a pixel constant: font metrics differ between the Windows platform, the
+    # offscreen platform and the app theme (review_codex.md, the two UI failures).
+    @staticmethod
+    def _two_line_width(tab) -> int:
+        """A tab width at which the form is guaranteed to fit on two lines."""
+        flow = tab.form_flow
+        widths = [flow._width(flow.itemAt(i)) for i in range(flow.count())
+                  if not flow.itemAt(i).widget().isHidden()]
+        need = (sum(widths) + flow._h * len(widths) + flow._inset + max(widths)) // 2 + 60
+        return need + (tab.width() - tab.form_box.width())
+
+    def _settle(self, tab, width):
+        tab.resize(width, 900)
+        for _ in range(3):
+            app.processEvents()
+
+    def test_form_takes_the_chips_place_in_two_lines(self):
         tab = TrendFollowingTab()
-        tab.resize(1440, 900)
         tab.show()
-        app.processEvents()
+        self._settle(tab, 1440)
+        self._settle(tab, self._two_line_width(tab))
         self.assertTrue(tab.form_box.isVisible())
         self.assertFalse(tab.chips_box.isVisible())
-        rows = {w.mapTo(tab, w.rect().topLeft()).y() for w in
+        lines = tab.form_flow.lines(tab.form_box.width())
+        self.assertLessEqual(len(lines), 2)
+        rows = {w.mapTo(tab, w.rect().center()).y() for w in
                 (tab.start_edit, tab.end_edit, tab.universe_spin, tab.liquidity_spin, tab.positions_spin,
-                 tab.weekday_combo, tab.cost_combo, tab.flows_cb, tab.event_cb, tab.variants_btn)}
-        self.assertLessEqual(len({y // 20 for y in rows}), 2)              # two lines of controls
-        self.assertTrue(tab.form_row2.isVisible())
-        self.assertGreaterEqual(tab.variants_lbl.width(), 150)          # row 2 spans under the buttons
+                 tab.weekday_combo, tab.cost_combo, tab.flows_cb, tab.event_cb, tab.variants_btn,
+                 *tab.market_buttons.values())}
+        self.assertLessEqual(len({y // 12 for y in rows}), 2)             # two lines of controls
+        # the summary label keeps at least its floor and takes the rest of its line
+        from ui.trend_following_tab import _VARIANTS_LBL_MIN_W
+        self.assertGreaterEqual(tab.variants_lbl.width(), _VARIANTS_LBL_MIN_W)
+        # the first line stops short of the buttons laid over the corner
+        first_right = max(i.widget().mapTo(tab, i.widget().rect().topRight()).x() for i in lines[0])
+        self.assertLess(first_right, tab.edit_btn.mapTo(tab, tab.edit_btn.rect().topLeft()).x())
         tab.edit_btn.click()
         self.assertFalse(tab.form_box.isVisible())
-        self.assertFalse(tab.form_row2.isVisible())
         self.assertTrue(tab.chips_box.isVisible())
+        tab.hide()
 
-    def test_settings_do_not_widen_the_tab(self):
-        """Neither the long variant label nor the chip line sets the minimum
-        width; the unfolded form fits in the width the old grid needed."""
+    def test_form_wraps_instead_of_widening_the_tab(self):
+        """At the tab's own minimum width the form takes more lines and every
+        control is still fully inside the card and clear of the buttons."""
+        tab = TrendFollowingTab()
+        tab.show()
+        self._settle(tab, 1440)
+        wide_lines = len(tab.form_flow.lines(tab.form_box.width()))
+        min_w = tab.minimumSizeHint().width()
+        self.assertLess(min_w, self._two_line_width(tab))                  # narrower than the two-line layout
+        self._settle(tab, min_w)
+        self.assertEqual(tab.width(), min_w)
+        lines = tab.form_flow.lines(tab.form_box.width())
+        self.assertGreater(len(lines), wide_lines)
+        card_right = tab.form_box.mapTo(tab, tab.form_box.rect().topRight()).x()
+        btn_left = tab.edit_btn.mapTo(tab, tab.edit_btn.rect().topLeft()).x()
+        btn_bottom = tab.edit_btn.mapTo(tab, tab.edit_btn.rect().bottomLeft()).y()
+        for g in tab.form_groups:
+            if g is tab.variants_lbl or g.isHidden():
+                continue
+            right = g.mapTo(tab, g.rect().topRight()).x()
+            top = g.mapTo(tab, g.rect().topLeft()).y()
+            self.assertLessEqual(right, card_right)                        # nothing cut at the card edge
+            if top < btn_bottom:
+                self.assertLess(right, btn_left)                           # nothing under the buttons
+
+    def test_form_minimum_width_is_one_group_not_a_row(self):
         tab = TrendFollowingTab()
         tab.show()
         app.processEvents()
-        self.assertLessEqual(tab.minimumSizeHint().width(), 1226)
+        flow = tab.form_flow
+        widths = [flow._width(flow.itemAt(i)) for i in range(flow.count())
+                  if not flow.itemAt(i).widget().isHidden()]
+        self.assertEqual(tab.form_box.minimumSizeHint().width(), max(max(widths), widths[0] + flow._inset))
+        # a long variant summary does not change it
+        before = tab.minimumSizeHint().width()
+        tab.variants_lbl.setText("A0, A1, A2, A3, A4, A5, B, C1, C2, C3 " * 6)
+        app.processEvents()
+        self.assertEqual(tab.minimumSizeHint().width(), before)
+        # folded: the chip line does not set the width either
         tab.edit_btn.click()
         app.processEvents()
-        self.assertLessEqual(tab.minimumSizeHint().width(), 1226)
-        tab.hide()
+        self.assertLessEqual(tab.minimumSizeHint().width(), before)
         tab.hide()
 
+
+class TestFlowLayout(unittest.TestCase):
+    def _flow(self, widths, inset=0, stretchy_last=False):
+        from PyQt6.QtWidgets import QSizePolicy, QWidget
+        from ui.common import FlowLayout
+        host = QWidget()
+        flow = FlowLayout(host, h_spacing=10, v_spacing=4)
+        flow.set_first_line_inset(inset)
+        items = []
+        for k, w in enumerate(widths):
+            item = QWidget()
+            if stretchy_last and k == len(widths) - 1:
+                item.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+                item.setMinimumSize(w, 20)
+            else:
+                item.setFixedSize(w, 20)
+            flow.addWidget(item)
+            items.append(item)
+        return host, flow, items
+
+    def test_wraps_by_width_and_reports_its_height(self):
+        host, flow, _ = self._flow([100, 100, 100])
+        self.assertEqual([len(line) for line in flow.lines(330)], [3])
+        self.assertEqual([len(line) for line in flow.lines(250)], [2, 1])
+        self.assertEqual([len(line) for line in flow.lines(100)], [1, 1, 1])
+        self.assertEqual(flow.heightForWidth(330), 20)
+        self.assertEqual(flow.heightForWidth(250), 44)
+        self.assertEqual(flow.minimumSize().width(), 100)
+
+    def test_first_line_inset(self):
+        host, flow, items = self._flow([100, 100, 100], inset=130)
+        self.assertEqual([len(line) for line in flow.lines(330)], [1, 2])      # 200 left on line one: one item
+        self.assertEqual([len(line) for line in flow.lines(340)], [2, 1])      # 210: two items fit exactly
+        self.assertEqual(flow.minimumSize().width(), 230)
+        host.resize(330, 100)
+        host.show()
+        app.processEvents()
+        self.assertEqual(items[0].y(), 0)
+        self.assertEqual((items[1].y(), items[2].y()), (24, 24))
+        host.hide()
+
+    def test_ignored_policy_item_stretches_to_the_line_end(self):
+        host, flow, items = self._flow([100, 60], stretchy_last=True)
+        host.resize(400, 50)
+        host.show()
+        app.processEvents()
+        self.assertEqual(items[1].x(), 110)
+        self.assertEqual(items[1].width(), 290)
+        host.hide()
 
 class TestMarketChoice(unittest.TestCase):
     """Spec 9-25: KOSPI / KOSDAQ / NASDAQ / NYSE, any combination, at least one."""

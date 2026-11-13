@@ -44,7 +44,7 @@ class ScoringPolicy(TrendFollowingPolicy):
         orders: list[Order] = []
         weekly = bool(f.check_day[t])
 
-        exiting = {o.ticker for o in eng.pending if o.side == "sell"}
+        exiting, trimming = self.pending_sells(eng)     # only a full exit skips the checks (C2)
         for tk, pos in eng.positions.items():
             if tk in exiting:
                 continue
@@ -60,11 +60,13 @@ class ScoringPolicy(TrendFollowingPolicy):
             elif weekly and sb.gate[t, j] and sb.total_rank[t, j] < p.score_sell_pct:
                 reason = REASON_RANK
             if reason:
-                orders.append(Order(tk, "sell", None, reason))
+                orders.append(self.full_exit(eng, tk, reason))
                 exiting.add(tk)
+                trimming.discard(tk)
 
         if weekly:
-            orders.extend(self._weight_trims(t, eng, exiting))     # names already being sold are skipped there
+            # names being sold, or with a trim still pending, are skipped there
+            orders.extend(self._weight_trims(t, eng, exiting | trimming))
 
         entry_ok = entry_regime(f, t, eng.book.N)     # each name's own market regime (spec 9-25)
         if not weekly or not entry_ok.any():

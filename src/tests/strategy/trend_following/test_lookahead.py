@@ -305,9 +305,9 @@ def run_recorded(ds, params: StrategyParams, variant, cm: CostModel | None = Non
         fills.append(("buy", t, ticker, qty, price, reason))
         return buy(self, t, ticker, qty, price, reason, stop_offset)
 
-    def rec_sell(self, t, pos, qty, price, reason):
+    def rec_sell(self, t, pos, qty, price, reason, at_open=False):
         fills.append(("sell", t, pos.ticker, qty, price, reason))
-        return sell(self, t, pos, qty, price, reason)
+        return sell(self, t, pos, qty, price, reason, at_open=at_open)
 
     with patch.object(Engine, "_execute_buy", rec_buy), patch.object(Engine, "_execute_sell", rec_sell):
         res = run_backtest(ds, feats, params, variant, cm)

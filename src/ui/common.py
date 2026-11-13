@@ -14,10 +14,10 @@ import logging
 import datetime as _dt
 from typing import Any, Callable, Literal
 
-from PyQt6.QtCore import QObject, QEvent, Qt
+from PyQt6.QtCore import QObject, QEvent, Qt, QRect, QSize, QPoint
 from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QTableWidget, QHeaderView, QLabel, QFrame, QHBoxLayout, QVBoxLayout,
-    QWidget, QApplication, QGridLayout,
+    QWidget, QApplication, QGridLayout, QLayout, QSizePolicy,
 )
 from PyQt6.QtGui import QFont, QPainter, QColor, QKeySequence
 
@@ -176,6 +176,123 @@ def make_footer_label(text: str = "") -> QLabel:
     lbl.setFont(create_font(FONT_SMALL, style_name="Semilight"))
     lbl.setWordWrap(True)
     return lbl
+
+
+class FlowLayout(QLayout):
+    """Items left to right, wrapping onto a new line when the width runs out
+    (docs/ui.md 8.12). A form built from it never needs more width than its
+    widest item, whatever the font or platform: a row that does not fit takes
+    another line instead of widening the window.
+
+    An item whose widget has an Ignored horizontal size policy counts as its
+    minimum width when placed and is then stretched to the end of its line (a
+    summary label that may be cut rather than push things around).
+
+    `set_first_line_inset(px)` keeps that much of the first line's right end
+    free, for widgets laid over the corner (a button row); later lines use
+    the full width."""
+
+    def __init__(self, parent=None, h_spacing: int = 14, v_spacing: int = 6):
+        super().__init__(parent)
+        self._items: list = []
+        self._h, self._v = h_spacing, v_spacing
+        self._inset = 0
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def set_first_line_inset(self, px: int) -> None:
+        px = max(0, int(px))
+        if px != self._inset:
+            self._inset = px
+            self.invalidate()
+
+    # -- QLayout interface ---------------------------------------------------
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._place(QRect(0, 0, width, 0), apply=False)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._place(rect, apply=True)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        m = self.contentsMargins()
+        items = self._visible()
+        w = max((self._width(i) for i in items), default=0)
+        if items:
+            w = max(w, self._width(items[0]) + self._inset)      # the first line is shorter
+        h = max((i.sizeHint().height() for i in items), default=0)
+        return QSize(w + m.left() + m.right(), h + m.top() + m.bottom())
+
+    # -- placement -----------------------------------------------------------
+    def _visible(self):
+        return [i for i in self._items if i.widget() is None or not i.widget().isHidden()]
+
+    @staticmethod
+    def _stretchy(item) -> bool:
+        w = item.widget()
+        return w is not None and w.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Ignored
+
+    def _width(self, item) -> int:
+        return item.minimumSize().width() if self._stretchy(item) else item.sizeHint().width()
+
+    def lines(self, width: int) -> list[list]:
+        """The items grouped into the lines they take at `width`."""
+        m = self.contentsMargins()
+        avail = width - m.left() - m.right()
+        out: list[list] = []
+        x = 0
+        for item in self._visible():
+            w = self._width(item)
+            if out and x + w <= avail - (self._inset if len(out) == 1 else 0):
+                out[-1].append(item)
+            else:
+                out.append([item])
+                x = 0
+            x += w + self._h
+        return out
+
+    def _place(self, rect: QRect, apply: bool) -> int:
+        m = self.contentsMargins()
+        left, right = rect.x() + m.left(), rect.right() + 1 - m.right()
+        y = rect.y() + m.top()
+        lines = self.lines(rect.width())
+        for n, line in enumerate(lines):
+            line_h = max(i.sizeHint().height() for i in line)
+            line_right = right - (self._inset if n == 0 else 0)
+            x = left
+            for k, item in enumerate(line):
+                w = self._width(item)
+                stretchy = self._stretchy(item)
+                if stretchy and k == len(line) - 1:
+                    w = max(w, line_right - x)
+                if apply:
+                    h = line_h if stretchy else min(item.sizeHint().height(), line_h)
+                    item.setGeometry(QRect(QPoint(x, y + (line_h - h) // 2), QSize(w, h)))
+                x += w + self._h
+            y += line_h + self._v
+        if lines:
+            y -= self._v
+        return y - rect.y() + m.bottom()
 
 
 # ---------------------------------------------------------------------------

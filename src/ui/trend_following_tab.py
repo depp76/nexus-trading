@@ -47,7 +47,7 @@ from threads.strategy_threads import TrendFollowingResearchThread, CANCELLED_MES
 from ui.dialogs.variant_picker import VariantPickerDialog
 from ui.common import (
     create_font, make_button, setup_table, make_footer_label, install_table_keys, ThreadOwnerMixin,
-    TAB_MARGINS, TAB_SPACING, FONT_SMALL,
+    TAB_MARGINS, TAB_SPACING, FONT_SMALL, FlowLayout, BTN_H,
 )
 from ui.colors import LOSS, WARN, SERIES_SELECTED, SERIES_BENCH, SERIES_TARGET, DRAWDOWN_ALPHA
 from ui.theme import TEXT, TEXT_MUTED, TEXT_FAINT, TEXT_EMPTY, LINE
@@ -66,6 +66,7 @@ _ID_ROLE = Qt.ItemDataRole.UserRole + 1      # run id on every comparison-table 
 # Result tabs, in order (docs/ui_redesign_2026-11.md P1-1 item 5).
 TAB_COMPARISON, TAB_ALL, TAB_MONTHLY, TAB_TRADES, TAB_EVENTS, TAB_WARNINGS = range(6)
 
+_VARIANTS_LBL_MIN_W = 180
 _HOLDOUT_CHIP = "홀드아웃 포함"
 _HOLDOUT_NOTE = (f"홀드아웃 구간({DEV_END:%Y-%m-%d} 이후)이 포함된 결과입니다. 스펙 6-5의 홀드아웃은 이 실행으로 열린 것으로 "
                  "봐야 합니다 (trend_following.md 9-23).")
@@ -169,9 +170,10 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
 
     def _build_settings_card(self) -> QFrame:
         """The run settings in one card: folded, a line of chips summing up the
-        form; unfolded ("설정 편집"), the form itself in two rows in the chips'
-        place. The tab's actions sit on the right either way, Run (the one
-        primary) last (docs/ui.md 8.4 / 8.12)."""
+        form; unfolded ("설정 편집"), the form itself where the chips were: two
+        lines on a normal window, more when it is narrow (FlowLayout). The
+        actions sit on the right either way, Run (the one primary) last
+        (docs/ui.md 8.4 / 8.12)."""
         card = QFrame()
         card.setObjectName("DashboardCard")
         grid = QGridLayout(card)
@@ -180,10 +182,9 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         grid.setVerticalSpacing(6)
         title = QLabel("실행 설정")
         title.setObjectName("kpiLabel")
-        grid.addWidget(title, 0, 0, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        title.setFixedHeight(BTN_H)          # level with the first line of controls
+        grid.addWidget(title, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
-        top = QHBoxLayout()
-        top.setContentsMargins(0, 0, 0, 0)
         self.chips: list[QLabel] = []
         self.chips_box = QWidget()
         # Chips summarise the form; on a narrow window the last ones are cut
@@ -193,13 +194,13 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self._chips_layout.setContentsMargins(0, 0, 0, 0)
         self._chips_layout.setSpacing(4)
         self._chips_layout.addStretch()
-        top.addWidget(self.chips_box, 1)
-        # Row 1 of the form sits in the chips' place, left of the buttons; row 2
-        # spans the card's full width under them.
-        self.form_box, self.form_row2 = self._build_form()
-        top.addWidget(self.form_box, 1)
-        grid.addLayout(top, 0, 1)
-        grid.addWidget(self.form_row2, 1, 1, 1, 2)
+        grid.addWidget(self.chips_box, 0, 1)
+        # The form takes the place of the chips and wraps: its minimum width is
+        # one group of controls, not a whole row. It spans the card to the right
+        # edge, with the first line kept clear of the buttons laid over that
+        # corner, so the lines after it run under them.
+        self.form_box = self._build_form()
+        grid.addWidget(self.form_box, 0, 1, 1, 2)
         grid.setColumnStretch(1, 1)
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
@@ -217,13 +218,17 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.save_btn.setEnabled(False)
         for btn in (self.edit_btn, self.save_btn, self.stop_btn, self.run_btn):
             buttons.addWidget(btn)
-        grid.addLayout(buttons, 0, 2)
+        grid.addLayout(buttons, 0, 2, Qt.AlignmentFlag.AlignTop)
+        self.form_flow.set_first_line_inset(
+            sum(b.sizeHint().width() for b in (self.edit_btn, self.save_btn, self.stop_btn, self.run_btn))
+            + 3 * buttons.spacing() + grid.horizontalSpacing())
         self.chips_box.setVisible(False)
         return card
 
-    def _build_form(self) -> tuple[QWidget, QWidget]:
-        """Two rows (docs/ui.md 8.12): the window and the markets, then the
-        universe and portfolio settings, costs, the two data switches and the variants."""
+    def _build_form(self) -> QWidget:
+        """Groups of controls in a FlowLayout (docs/ui.md 8.12): the window, the
+        markets, the universe and portfolio settings, costs, the two data
+        switches and the variants, wrapping line by line."""
         # The window ends today by default. Anything after DEV_END is the
         # spec's hold-out (6-5): such a request carries allow_holdout and the
         # chip, the form and the report say so (spec 9-23).
@@ -288,43 +293,41 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.variants_btn = make_button("변형 선택...", on_click=self._on_variants_clicked,
                                         tooltip="백테스트할 전략 변형을 고르고 각 규칙 설명을 봅니다")
         self.variants_lbl = QLabel("")
-        # A long selection ("A0, A1, ... need flows") must not set the tab's
-        # minimum width; it is clipped and the full text is on the tooltip.
+        # A long selection ("A0, A1, ... need flows") must not set the minimum
+        # width of the tab: it counts as _VARIANTS_LBL_MIN_W in the flow, takes the
+        # rest of its line, is clipped beyond that and has the full text on its tooltip.
         self.variants_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.variants_lbl.setMinimumWidth(_VARIANTS_LBL_MIN_W)
 
-        def _row(*groups):
-            line = QHBoxLayout()
+        def _group(*widgets) -> QWidget:
+            """A label and its controls that stay together when the form wraps."""
+            box = QWidget()
+            line = QHBoxLayout(box)
             line.setContentsMargins(0, 0, 0, 0)
             line.setSpacing(6)
-            for i, group in enumerate(groups):
-                if i:
-                    line.addSpacing(14)
-                for w in group:
-                    if w is self.variants_lbl:
-                        line.addWidget(w, 1)      # takes the spare width (its size hint is ignored)
-                    else:
-                        line.addWidget(QLabel(w) if isinstance(w, str) else w)
-            if self.variants_lbl not in [w for g in groups for w in g]:
-                line.addStretch()
-            return line
+            for w in widgets:
+                line.addWidget(QLabel(w) if isinstance(w, str) else w)
+            return box
 
-        row1, row2 = QWidget(), QWidget()
-        row1.setLayout(_row(
-            ("기간", self.start_edit, "~", self.end_edit, self.holdout_lbl),
-            ("시장", *self.market_buttons.values()),
-        ))
-        row2.setLayout(_row(
-            ("유니버스", self.universe_spin),
-            ("유동성 하한", self.liquidity_spin),
-            ("최대 보유", self.positions_spin),
-            ("점검 요일", self.weekday_combo),
-            ("비용", self.cost_combo),
-            (self.flows_cb, self.event_cb),
-            (self.variants_btn, self.variants_lbl),
-        ))
+        form = QWidget()
+        self.form_flow = FlowLayout(form)
+        self.form_groups = [
+            _group("기간", self.start_edit, "~", self.end_edit, self.holdout_lbl),
+            _group("시장", *self.market_buttons.values()),
+            _group("유니버스", self.universe_spin),
+            _group("유동성 하한", self.liquidity_spin),
+            _group("최대 보유", self.positions_spin),
+            _group("점검 요일", self.weekday_combo),
+            _group("비용", self.cost_combo),
+            _group(self.flows_cb, self.event_cb),
+            self.variants_btn,
+            self.variants_lbl,
+        ]
+        for g in self.form_groups:
+            self.form_flow.addWidget(g)
         self.end_edit.dateChanged.connect(self._update_holdout)
         self._update_holdout()
-        return row1, row2
+        return form
 
     def selected_markets(self) -> tuple[str, ...]:
         return tuple(m for m in MARKETS if self.market_buttons[m].isChecked())
@@ -523,7 +526,6 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
 
     def _on_edit_toggled(self, checked: bool):
         self.form_box.setVisible(checked)
-        self.form_row2.setVisible(checked)
         self.chips_box.setVisible(not checked)
 
     # --------------------------------------------------------------- request

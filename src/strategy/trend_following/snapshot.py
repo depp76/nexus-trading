@@ -23,7 +23,7 @@ import numpy as np
 import polars as pl
 
 from paths import CACHE_DIR
-from strategy.trend_following.config import DEV_END, SPEC_VERSION
+from strategy.trend_following.config import DEV_END, SPEC_VERSION, US_MARKETS
 from strategy.trend_following.dataset import Dataset, PriceBook, check_dev_window
 
 SNAPSHOT_FORMAT = 1
@@ -102,11 +102,39 @@ def default_snapshot_dir(name: str) -> Path:
     return SNAPSHOT_ROOT / name
 
 
+class UnsupportedSnapshotError(ValueError):
+    """The dataset holds something the snapshot format (v1) does not store."""
+
+
+def check_snapshot_supported(ds: Dataset) -> None:
+    """Raise UnsupportedSnapshotError for a dataset format v1 cannot round-trip
+    (spec 9-25: snapshots are single-market KOSPI). The format stores one index
+    series and one benchmark ticker and restores every benchmark as a Korean ETF,
+    so a several-market dataset used to save, hash and load "successfully" with
+    its per-market indices and benchmark mix gone (review_codex.md C5)."""
+    problems = []
+    if getattr(ds, "index_by_market", None):
+        problems.append("per-market indices (several markets)")
+    us = sorted({m for m in ds.stocks.markets.values() if m in US_MARKETS})
+    if us:
+        problems.append(f"US-listed names ({', '.join(us)})")
+    if ds.bm is not None:
+        if ds.bm.N != 1:
+            problems.append(f"{ds.bm.N} benchmark ETFs (one is stored)")
+        bm_us = sorted({m for m in ds.bm.markets.values() if m in US_MARKETS})
+        if bm_us:
+            problems.append(f"a US benchmark ETF ({', '.join(bm_us)})")
+    if problems:
+        raise UnsupportedSnapshotError(
+            "snapshot format v1 stores a single-market Korean dataset; this one has " + "; ".join(problems))
+
+
 def save_snapshot(ds: Dataset, path, allow_holdout: bool = False) -> dict:
     """Write `ds` into folder `path` and return the manifest. A dataset with
     dates after DEV_END is refused unless `allow_holdout`."""
     if ds.dates:
         check_dev_window(ds.dates[-1], allow_holdout, "dataset last date")
+    check_snapshot_supported(ds)        # before anything is written
     folder = Path(path)
     folder.mkdir(parents=True, exist_ok=True)
 
@@ -168,6 +196,12 @@ def load_snapshot(path, allow_holdout: bool = False, verify: bool = True) -> Dat
                          close=arrs["close"], volume=arrs["volume"], markets=markets, names=names)
 
     stocks = book("stocks", tickers, dict(man["markets"]), dict(man["names"]))
+    for label, arr, n in (("stocks", stocks.close, len(tickers)),) + (
+            (("bm", _read_array(folder, "bm_close"), 1),) if man["bm_ticker"] else ()):
+        if arr.ndim != 2 or arr.shape[1] != n:
+            raise SnapshotIntegrityError(
+                f"snapshot {folder}: {label} arrays have {arr.shape[1] if arr.ndim == 2 else '?'} columns "
+                f"for {n} ticker(s) in the manifest")
     bm = book("bm", [man["bm_ticker"]], {man["bm_ticker"]: "ETF"}, {man["bm_ticker"]: man["bm_ticker"]}) \
         if man["bm_ticker"] else None
     flow_fi = flow_retail = None

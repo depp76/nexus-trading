@@ -40,9 +40,7 @@ class BuyAndHoldPolicy(Policy):
         return [Order(self.ticker, "buy", int(math.floor(eng.cash / price)), "hold")]
 
     def initial_orders(self, eng: Engine, t0: int) -> list[Order]:
-        b = eng.book
-        px = b.open[t0, 0] if np.isfinite(b.open[t0, 0]) else b.close[t0, 0]
-        return self._buy_all(eng, px)
+        return self._buy_all(eng, _first_open_prices(eng.book, t0)[0])
 
     def decide(self, t: int, eng: Engine) -> list[Order]:
         if eng.has_pending(self.ticker, "buy"):
@@ -75,18 +73,33 @@ class TrendTimingPolicy(Policy):
         return []
 
 
+def _first_open_prices(book, t0: int) -> np.ndarray:
+    """Sizing prices for the orders filled at the first open: that open, or the
+    previous close where there is none -- never session t0's own close, which is
+    not known yet (review_codex.md C1)."""
+    prev = book.close[t0 - 1] if t0 > 0 else np.full(book.N, np.nan)
+    return np.where(np.isfinite(book.open[t0]), book.open[t0], prev)
+
+
 class EqualWeightPolicy(Policy):
     """BM2: equal weight across the eligible names, set on the first session
-    and re-set after each year-end reset."""
+    and re-set after each year-end reset.
+
+    Timing (review_codex.md C1): the first open's candidates use the eligibility
+    of the session before it -- `eligible[t0]` contains t0's own close x volume.
+    With no earlier session (t0 == 0) nothing is bought at the first open; the
+    book is set from the first close and filled at the next open. A year-end
+    re-set decides at that close and fills at the next open, so it reads its own row."""
 
     def __init__(self, eligible: np.ndarray | None):
         self.eligible = eligible
+        self._start_at_close: int | None = None
 
-    def _targets(self, t: int, eng: Engine, prices: np.ndarray, equity: float) -> list[Order]:
+    def _targets(self, elig_row: int, eng: Engine, prices: np.ndarray, equity: float) -> list[Order]:
         b = eng.book
         ok = np.isfinite(prices) & (prices > 0)
         if self.eligible is not None:
-            ok &= self.eligible[t]
+            ok &= self.eligible[elig_row]
         cols = np.flatnonzero(ok)
         orders: list[Order] = []
         for tk in list(eng.positions):
@@ -107,11 +120,15 @@ class EqualWeightPolicy(Policy):
         return orders
 
     def initial_orders(self, eng: Engine, t0: int) -> list[Order]:
-        b = eng.book
-        prices = np.where(np.isfinite(b.open[t0]), b.open[t0], b.close[t0])
-        return self._targets(t0, eng, prices, eng.cash)
+        if self.eligible is not None and t0 == 0:
+            self._start_at_close = t0      # no earlier session to judge liquidity on
+            return []
+        return self._targets(max(t0 - 1, 0), eng, _first_open_prices(eng.book, t0), eng.cash)
 
     def decide(self, t: int, eng: Engine) -> list[Order]:
+        if self._start_at_close == t:
+            self._start_at_close = None
+            return self._targets(t, eng, eng.book.close[t], eng.equity_now)
         if not eng.is_year_end(t):
             return []
         return self._targets(t, eng, eng.book.close[t], eng.equity_now)

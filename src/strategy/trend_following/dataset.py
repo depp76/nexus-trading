@@ -681,6 +681,7 @@ def _load_multi_market(start, end, warm_start, markets, universe_size, include_f
     _check_stop(should_stop)
     _say(progress, "Loading benchmark ETFs...")
     bm_frames: dict[str, pl.DataFrame] = {}
+    bm_missing: list[str] = []
     bm_tr = True
     for m in markets:
         tk = MARKET_BM_ETF[m]
@@ -690,6 +691,15 @@ def _load_multi_market(start, end, warm_start, markets, universe_size, include_f
             f = _cut_frame(get_historical_data(tk, ws), end)
         if f is not None and not f.is_empty():
             bm_frames[tk] = f
+        else:
+            bm_missing.append(f"{m}: {MARKET_BM_ETF[m]}")
+    if bm_missing:
+        # Spec 9-25 defines BM1/BM3 as the equal-weight mix of *every* selected market's
+        # ETF. A mix of the ones that happened to load would be a different benchmark
+        # under the same name (review_codex.md C3), so none is used: BM1/BM3 and the
+        # BM-relative metrics come out N/A and the report names what was missing.
+        logger.warning("benchmark ETF history missing for %s; BM1/BM3 are skipped", ", ".join(bm_missing))
+        bm_frames = {}
     bm_markets = {tk: BM_ETF_COST_MARKET.get(tk, "ETF") for tk in bm_frames}
 
     _say(progress, "Loading CD 91-day rate...")
@@ -711,6 +721,7 @@ def _load_multi_market(start, end, warm_start, markets, universe_size, include_f
               "cutoff": end.isoformat(), "holdout_allowed": bool(allow_holdout),
               "excluded_etf": excluded, "universe_fixed_from": "",
               "universe_built_on": date.today().isoformat(), "markets": list(markets),
+              "bm_requested": [MARKET_BM_ETF[m] for m in markets], "bm_missing": bm_missing,
               "names_by_market": {m: sum(1 for c in frames if market_of[c] == m) for m in markets}},
         cutoff=end,
     )

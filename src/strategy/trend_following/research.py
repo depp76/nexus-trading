@@ -106,7 +106,12 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
     if not ds.info.get("bm_is_total_return", True):
         warnings.append("BM1/BM3 use a price-only ETF series (KODEX 200TR unavailable): benchmarks understate "
                         "total return by the dividend yield (6-3 forbids price indices).")
-    if ds.bm is None:
+    bm_missing = ds.info.get("bm_missing") or []
+    if bm_missing:
+        warnings.append(f"Benchmark ETF history missing for {', '.join(bm_missing)}: the equal-weight mix of the "
+                        "selected markets' ETFs (9-25) could not be built, so BM1, BM3 and every BM-relative "
+                        "metric are N/A rather than a mix of the ETFs that did load.")
+    elif ds.bm is None:
         warnings.append("No benchmark ETF history: BM1 and BM3 were skipped.")
     if not feats.has_flows:
         warnings.append("Investor-flow data not loaded: A3/A4/A5 (F, FX) and the flow groups of the event study "

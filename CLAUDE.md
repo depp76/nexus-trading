@@ -114,7 +114,7 @@ Dev tooling is in `requirements-dev.txt`
 - **`src/ui/`**: `universe_tab.py` (`UniverseTab`), `history_tab.py` (`TradingHistoryTab`),
   `assets_tab.py` (`TradingRecordTab`), `strategy_tab.py` (`StrategyTab`, the sub-tab host
   that merges its children's `collect_threads_to_stop()`), `trend_following_tab.py`
-  (`TrendFollowingTab`: request form folded behind a run-settings chip row ->
+  (`TrendFollowingTab`: request form (a wrapping `FlowLayout`) or its chip-row summary ->
   `TrendFollowingResearchThread` -> variant/cost segments, KPI cards, NAV + drawdown chart,
   target-check card, result tabs (comparison, all metrics, monthly, trades, event study,
   warnings), "Save Report" to `reports/`; docs/ui.md 8.10), `strategy_widgets.py` (that
@@ -143,7 +143,8 @@ Dev tooling is in `requirements-dev.txt`
   (`create_font` + the `FONT_*` point-size scale, `FONT_FAMILIES` / `FONT_FAMILY_CSS`,
   `apply_matplotlib_font`, status color constants,
   input validators, `make_button`/`BTN_H` (every push button), `setup_table`/`TABLE_ROW_H` (every data
-  table), `make_footer_label`/`TAB_MARGINS`/`TAB_SPACING` (the tab skeleton), `install_table_keys`
+  table), `make_footer_label`/`TAB_MARGINS`/`TAB_SPACING` (the tab skeleton), `FlowLayout` (wrapping
+  rows; the Strategy settings form), `install_table_keys`
   (Ctrl+C/Enter on a table), `KpiStrip` (History's KPI row), `KpiCard` / `make_badge` (Strategy
   cards and status badges; all docs/ui.md 8), `atomic_save_json` /
   `safe_load_json`, `retire_thread`, `ThreadOwnerMixin`). Tabs never
