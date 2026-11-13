@@ -46,7 +46,7 @@ from data.collectors.kis import (
 
 from data.listing import _get_listing_with_norm
 
-from data.history import get_historical_data, peek_recent_closes
+from data.history import get_historical_data
 
 from data.fx import (
     get_usd_krw_rate,

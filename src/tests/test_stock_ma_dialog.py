@@ -218,3 +218,63 @@ class TestSimpleAndEmptyCharts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTrendScoreSection(unittest.TestCase):
+    """docs/ui.md 8.10: the MA chart dialog carries the last Trend Score
+    run's breakdown for a KR stock (moved out of the Universe table)."""
+
+    @staticmethod
+    def _rec():
+        from strategy.trend_following.config import StrategyParams
+        from strategy.trend_following.scoring import compute_scores, weekly_recommendation
+        from tests.strategy.trend_following.test_scoring import score_book
+        book, _ = score_book()
+        p = StrategyParams()
+        return weekly_recommendation(compute_scores(book, p), book, p)
+
+    def test_scored_name_shows_percentiles_rank_and_gate(self):
+        rec = self._rec()
+        top = rec.top[0]
+        d = StockMaDialog(top.ticker, "X", "KOSPI", _df(), trend_rec=rec)
+        sec = d.trend_section
+        self.assertFalse(sec.hint_lbl.isVisibleTo(sec))
+        self.assertEqual(sec.cards["ma50"].value.text(), f"{top.pct_ma50:.2f}")
+        self.assertEqual(sec.cards["range52"].value.text(), f"{top.pct_range52:.2f}")
+        self.assertIn(f"{top.week_avg:+.2f}", sec.total_lbl.text())
+        self.assertIn("Top 1", sec.total_lbl.text())
+        self.assertEqual({b.text() for b in sec.gate_badges.values()}, {"Pass"})
+        d.close()
+
+    def test_overheated_name_fails_that_gate(self):
+        rec = self._rec()
+        d = StockMaDialog("SPIKE", "X", "KOSPI", _df(), trend_rec=rec)
+        self.assertEqual(d.trend_section.gate_badges["heat"].objectName(), "badgeFail")
+        self.assertIn("Bottom", d.trend_section.total_lbl.text())
+        d.close()
+
+    def test_hint_before_a_run_or_for_an_unscored_name(self):
+        from ui.trend_score_section import NOT_RUN_TEXT, NOT_SCORED_TEXT
+        d = StockMaDialog("005930", "Samsung", "KOSPI", _df())
+        self.assertEqual(d.trend_section.hint_lbl.text(), NOT_RUN_TEXT)
+        self.assertEqual(d.trend_section.cards, {})
+        d.close()
+        d = StockMaDialog("THIN", "X", "KOSPI", _df(), trend_rec=self._rec())
+        self.assertEqual(d.trend_section.hint_lbl.text(), NOT_SCORED_TEXT)
+        d.close()
+
+    def test_no_section_outside_kr_stocks(self):
+        d = StockMaDialog("AAPL", "Apple", "NASDAQ 100", _df(), trend_rec=self._rec())
+        self.assertIsNone(d.trend_section)
+        d.close()
+
+    def test_universe_passes_its_last_run_to_the_dialog(self):
+        from unittest.mock import patch
+        from ui.universe_tab import UniverseTab
+        with patch("ui.universe_tab.safe_load_json", side_effect=lambda _p, default=None: default):
+            tab = UniverseTab()
+        rec = self._rec()
+        tab._on_trend_score_finished(rec, "")      # a run is remembered for the dialog
+        with patch("ui.ma_chart.StockMaDialog") as dlg:
+            tab._on_stock_ma_loaded("UP", "Up", _df(), "", [], "KOSPI", "pct")
+        self.assertIs(dlg.call_args.kwargs["trend_rec"], rec)

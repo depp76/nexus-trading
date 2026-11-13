@@ -13,7 +13,7 @@ Strategy 탭은 2026-09-28 옛 전략 계층과 함께 제거됐다가 같은 �
 | Total Assets | `Total Assets Redesign.dc.html` | 9건 |
 | ~~Strategy~~ | `Strategy Redesign.dc.html` | 9건 — 옛 Strategy 탭 기준. 지금의 Strategy 탭(Trend Following)과는 다른 화면이라 5장은 기록용 |
 | Strategy › Trend Following (2026-11) | `docs/ui_mockups/2026-11/Main.dc.html` | 8.10 — 실행 화면 `impl_strategy.png` |
-| Trading Universe 상세 패널 (2026-11) | `docs/ui_mockups/2026-11/Universe.dc.html` | 8.10 |
+| Trading Universe 상세 패널 (2026-11) | `docs/ui_mockups/2026-11/Universe.dc.html` | 8.10 — 구현 후 철회, 점수 구성은 MA 차트 팝업으로 |
 | 토큰·배지 (2026-11) | `docs/ui_mockups/2026-11/Tokens.dc.html` | 8.10 |
 
 ---
@@ -743,15 +743,13 @@ app.setStyleSheet(app_qss(FONT_FAMILY_CSS))
      Trades · Event study · Warnings (n)(n > 0이면 탭 글자 WARN — 전역 QSS가 탭 색을 정하므로 `QTabWidget#ResultTabs[warn="true"]
      QTabBar::tab:last` 규칙으로 칠한다).
   7. 변형·비용 전환은 재실행 없이 이미 받은 `ResearchResult`로 다시 그린다.
-- **Trading Universe**:
-  - **Score 열**(Trend 왼쪽, [Score, Trend] 그룹): 마지막 Trend Score 실행의 주간 평균 총점(−1~2, `+0.00`), 실행 전·미채점은 `-`.
-    고정 해제(Trend Score 재클릭) 뒤에도 남고, 세션 안에서만 유효해 `universe_cache.json`에 저장하지 않는다.
-  - **순위 배지**: 이름 앞 `T3`(Top, PROFIT 계열 옅은 바탕) / `B7`(Bottom, LOSS 계열). 150px 이름 열에서 이름 자리를 남기려고
-    짧게 쓰고, 셀 툴팁에 "Trend Score Top 3"를 적는다(시안은 "Top 3").
-  - **상세 패널**(`ui/universe_detail.py`): 표 오른쪽 `QSplitter`, 기본 320px, 핸들 더블클릭으로 접기·펼치기(툴바 버튼을 늘리지 않음).
-    현재 행을 따라 이름·티커·시장·현재가·Chg, 일봉 120세션 미니 차트, 점수 구성(pct(MA50Div)·pct(Range52)·pct(R3) 카드와
-    주간 평균), 게이트 4줄 Pass/Fail, MA Chart · AI Report(우클릭 메뉴와 같은 동작). 실행 전에는
-    "Run Trend Score to see the score breakdown". 미니 차트는 새로 받지 않고 `data.history.peek_recent_closes`로 Universe 갱신이
-    채운 `_HIST_CACHE`만 읽는다(시안의 "TrendDelegate 시계열"은 5개 모멘텀 점이라 60~120일 곡선이 아님).
-  - 창이 좁으면(약 1500px) 패널 때문에 표가 가로 스크롤되고 이름 열이 최소 폭이 된다 — 패널을 접어 넓힌다.
+- **Trading Universe → MA 차트 팝업** (2026-11-13, 지시서 P2를 구현했다가 사용자 결정으로 철회):
+  Score 열·이름 앞 순위 배지·오른쪽 상세 패널을 Universe 표에 넣으니 표가 좁아져(1500px 창에서 가로 스크롤, MA Div 헤더와
+  이름 잘림) 원래 정보가 제대로 보이지 않았다. Universe 표는 개편 전 그대로 두고(Trend Score는 상위/하위 고정 순서와
+  이름 옆 `· Top 3 (+0.79)` 태그만), 점수 구성은 종목 하나를 깊게 보는 **MA 차트 팝업**(`StockMaDialog`) 오른쪽 패널 맨 위의
+  Trend Score 섹션(`ui/trend_score_section.py`)으로 옮겼다.
+  - KOSPI/KOSDAQ 종목에만: 주간 평균·최신 총점·Top/Bottom 순위, pct(MA50Div)·pct(Range52)·pct(R3) 카드 3장, 게이트 4줄 Pass/Fail 배지.
+  - 팝업을 연 시점의 마지막 실행(`UniverseTab._last_recommendation`, 고정 해제 뒤에도 유지)을 쓰므로 제목에 그 실행의 기준일을 적는다.
+    열린 팝업은 이후 실행으로 갱신되지 않는다.
+  - 실행 전: "Run Trend Score in Trading Universe to see the score breakdown", 미채점 종목: 사유 한 줄.
 - 한국어 문구: KPI 카드 풀이 줄, 점수 구성 카드 풀이, E2·A5 툴팁은 지시서 문구 그대로 한국어(CLAUDE.md 예외).

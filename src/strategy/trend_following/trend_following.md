@@ -525,8 +525,8 @@ Trading Universe 탭의 **Trend Score** 버튼이 표의 KOSPI/KOSDAQ 행(지수
   `tests/test_universe_tab.py`(버튼 → KR 행만 스레드로, 성공 시 상위 → 하위 → 나머지 순 고정·태그·전체 갱신 후 유지·재클릭 해제, 실패 시 순서 불변, 열 정렬 해제).
 - **표시용 필드 추가 (2026-11-13, docs/ui_redesign_2026-11.md P2)**: 점수·게이트 계산은 바꾸지 않았다. `ScoredName`에 최신 세션의
   퍼센타일 `pct_ma50`·`pct_range52`·`pct_r3`(`ScoreBook.pct`에서 읽기만, NaN 허용), `Recommendation.scored`에 채점 대상(eligible) 전 종목을
-  티커별로 담았다. Universe 표의 Score 열(주간 평균 총점, 미채점은 `-`)과 오른쪽 상세 패널(점수 구성·게이트 Pass/Fail)이 이 값을 쓰고,
-  상위/하위 태그는 이름 앞 배지(`T3`/`B7`)로 바뀌었다. 점수는 그 세션에만 있고 `universe_cache.json`에는 저장하지 않는다.
+  티커별로 담았다. Universe에서 연 MA 차트 팝업의 Trend Score 섹션(점수 구성·게이트 Pass/Fail)이 이 값을 쓴다(docs/ui.md 8.10).
+  Universe 표의 상위/하위 고정과 태그는 그대로다.
 
 
 ### 9-5. 개발 구간 가드·데이터 스냅샷·헤드리스 실행기 (NEX-12, 2026-10-14)

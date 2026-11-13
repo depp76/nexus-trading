@@ -39,11 +39,6 @@ WARN_BG, WARN_TEXT = "#fff6e8", "#8a4f08"
 FAIL_BG, FAIL_TEXT = DANGER_BG, "#b3362e"
 NA_BG, NA_TEXT = "#f0f1f8", "#595d6c"
 
-# Trend Score rank badges in the Universe identity cell (ui_redesign_2026-11
-# P2-1): Top on a light PROFIT tint, Bottom on a light LOSS tint.
-RANK_TOP_BG, RANK_TOP_TEXT = "#e9eefa", "#2d5aa8"
-RANK_BOTTOM_BG, RANK_BOTTOM_TEXT = "#fbecea", "#b3362e"
-
 # Chart series roles (strategy charts; ui_redesign_2026-11 P0-1).
 SERIES_SELECTED = "#9184d9"   # = theme.ACCENT, solid
 SERIES_BENCH = "#9397ab"      # = theme.TEXT_FAINT, dashed

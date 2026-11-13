@@ -27,9 +27,9 @@ from datetime import datetime
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLineEdit,
-    QPushButton, QMessageBox, QInputDialog, QSplitter,
+    QPushButton, QMessageBox, QInputDialog,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QEvent
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
 from paths import UNIVERSE_CACHE_FILE, CUSTOM_SETTINGS_FILE
 from threads.fetch_threads import (
@@ -40,7 +40,6 @@ from threads.fetch_threads import (
 )
 from threads.strategy_threads import TrendScoreThread, CANCELLED_MESSAGE
 from ui.widgets import StockTable, HeatLegend, RangeFilterPopup
-from ui.universe_detail import UniverseDetailPanel
 from ui.universe_views import (
     BUILTIN_VIEWS, count_matches, describe_ranges, describe_view, empty_state as empty_view,
     normalize as normalize_view, same_state as same_view,
@@ -65,15 +64,6 @@ from ui.common import (
 # Message boxes are titled with the tab name (docs/ui.md 8.5).
 _TITLE = "Trading Universe"
 
-# Keys a Trend Score run adds to all_data items (_sort_all_data); session-only.
-_SCORE_KEYS = ("trend_rank", "trend_score")
-
-
-def _without_score_keys(item: dict) -> dict:
-    if not any(k in item for k in _SCORE_KEYS):
-        return item
-    return {k: v for k, v in item.items() if k not in _SCORE_KEYS}
-
 
 class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     """Trading Universe tab: watchlist table + ticker add/search controls."""
@@ -95,8 +85,9 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         # ticker -> (group 0=Top/1=Bottom, rank, label) of the pinned Trend
         # Score run; empty = default order (see _sort_all_data).
         self._trend_score_order = {}
-        # The last successful Trend Score run (scoring.Recommendation): the
-        # Score column and the detail panel read it; it outlives an unpin.
+        # The last successful Trend Score run (scoring.Recommendation). The MA
+        # chart dialog shows its breakdown for the opened name (docs/ui.md 8.10);
+        # it outlives an unpin.
         self._last_recommendation = None
         # User-added tickers re-fetched after a full refresh (on_finished_all)
         # each arrive on their own thread; rendering once, a beat after the
@@ -113,8 +104,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         # Try to load cached universe data to make startup instant, but always refresh to latest afterwards.
         cached = safe_load_json(UNIVERSE_CACHE_FILE, default=None)
         if cached:
-            # A Trend Score run lives only in this session; never show a cached rank/score.
-            self.all_data = [_without_score_keys(d) for d in cached]
+            self.all_data = cached
             self._reload_table()
             self.filter_table()
             self.update_total_status(prefix="Loaded cached universe. Refreshing data...")
@@ -211,23 +201,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.table.user_sorted.connect(self._on_user_sorted)
         self.table.toggle_requested.connect(self.toggle_stock)
 
-        # Detail panel on the right (docs/ui_redesign_2026-11 P2-2): follows the
-        # current row; double-click the splitter handle to fold / unfold it.
-        self.detail_panel = UniverseDetailPanel()
-        self.detail_panel.ma_chart_requested.connect(self._on_ma_chart_requested)
-        self.detail_panel.ai_report_requested.connect(self._on_ai_report_requested)
-        self.table.currentCellChanged.connect(self._on_current_row_changed)
-        self.splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.splitter.addWidget(self.table)
-        self.splitter.addWidget(self.detail_panel)
-        self.splitter.setStretchFactor(0, 1)
-        self.splitter.setStretchFactor(1, 0)
-        self.splitter.setCollapsible(0, False)
-        self.splitter.setCollapsible(1, True)
-        self.splitter.setSizes([1000, self.DETAIL_PANEL_W])
-        self.splitter.handle(1).setToolTip("Double-click to show or hide the detail panel")
-        self.splitter.handle(1).installEventFilter(self)
-        universe_layout.addWidget(self.splitter, 1)
+        universe_layout.addWidget(self.table, 1)
 
         # Footer: this tab's lasting status line (load/progress/Trend Score
         # results). It used to be MainWindow's shared footer row, visible on
@@ -242,34 +216,6 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         universe_layout.addLayout(footer)
 
     _FILTER_BTN_W = 80
-    DETAIL_PANEL_W = 320
-
-    def eventFilter(self, obj, event):
-        if obj is self.splitter.handle(1) and event.type() == QEvent.Type.MouseButtonDblClick:
-            self.toggle_detail_panel()
-            return True
-        return super().eventFilter(obj, event)
-
-    def toggle_detail_panel(self):
-        sizes = self.splitter.sizes()
-        total = sum(sizes)
-        if sizes[1] > 0:
-            self.splitter.setSizes([total, 0])
-        else:
-            self.splitter.setSizes([max(total - self.DETAIL_PANEL_W, 0), self.DETAIL_PANEL_W])
-
-    def _current_item(self):
-        row = self.table.currentRow()
-        data = self.table._row_identity(row) if row >= 0 else None
-        if not data:
-            return None
-        return next((d for d in self.all_data if d.get('ticker') == data["ticker"]), None)
-
-    def _on_current_row_changed(self, *_):
-        self.update_detail_panel()
-
-    def update_detail_panel(self):
-        self.detail_panel.show_item(self._current_item(), self._last_recommendation)
     # (highlight status to show, button label): "" = no status filter. The
     # status values are the ones custom_settings.json stores ("On" = Held,
     # "Tg" = Target; docs/ui.md 1.7).
@@ -330,7 +276,6 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         rows are ordinary rows here (user direction 2026-09-19; the
         docs/ui.md 2.4 Market rail they used to live in is gone)."""
         self.table.load_data(self.all_data, self.custom_settings.get("highlights", {}))
-        self.update_detail_panel()
 
     def delete_stock(self, ticker):
         reply = QMessageBox.question(
@@ -467,7 +412,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             # refresh that fetched nothing and had nothing to fall back on).
             return
         try:
-            atomic_save_json(UNIVERSE_CACHE_FILE, [_without_score_keys(d) for d in self.all_data])
+            atomic_save_json(UNIVERSE_CACHE_FILE, self.all_data)
         except Exception as e:
             logger.warning("Error caching universe data: %s", e, exc_info=True)
 
@@ -491,23 +436,14 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         (_trend_score_order), its Top rows come first in rank order, then
         its Bottom rows, then everything else in that default order; the
         pinned items get a `trend_rank` label the identity cell shows after
-        the market, every other item loses it. Every name the last run
-        scored gets its weekly average as `trend_score` (the Score column),
-        pinned or not."""
+        the market, every other item loses it."""
         order = self._trend_score_order
-        scored = self._last_recommendation.scored if self._last_recommendation is not None else {}
         for item in self.all_data:
-            tk = item.get('ticker')
-            entry = order.get(tk)
+            entry = order.get(item.get('ticker'))
             if entry is None:
                 item.pop('trend_rank', None)
             else:
                 item['trend_rank'] = entry[2]
-            s = scored.get(tk)
-            if s is None:
-                item.pop('trend_score', None)
-            else:
-                item['trend_score'] = s.week_avg
         self.all_data.sort(key=self._order_key)
 
     def filter_table(self, text=None):
@@ -727,9 +663,9 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             return
         order = {}
         for i, s in enumerate(rec.top, 1):
-            order[s.ticker] = (0, i, ("top", i))
+            order[s.ticker] = (0, i, f"Top {i} ({s.week_avg:+.2f})")
         for i, s in enumerate(rec.bottom, 1):
-            order[s.ticker] = (1, i, ("bottom", i))
+            order[s.ticker] = (1, i, f"Bottom {i} ({s.week_avg:+.2f})")
         self._trend_score_order = order
         self._last_recommendation = rec
         self.trend_score_btn.setChecked(True)
@@ -852,8 +788,6 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
         # Restore scroll position to prevent jumping
         self.table.verticalScrollBar().setValue(v_scroll)
-        if changed_rows:
-            self.update_detail_panel()
 
         self.update_total_status("Auto-updated prices.")
         self.update_last_sync_time()

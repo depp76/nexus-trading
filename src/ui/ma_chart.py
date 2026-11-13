@@ -34,7 +34,8 @@ class StockMaLauncherMixin:
         if error and df is None:
             QMessageBox.warning(self, "Trading Universe", f"Failed to load data for {ticker}:\n{error}")
             return
-        dlg = StockMaDialog(ticker, name, market, df, investor_data=investor_data, parent=None, change_mode=change_mode)
+        dlg = StockMaDialog(ticker, name, market, df, investor_data=investor_data, parent=None, change_mode=change_mode,
+                            trend_rec=getattr(self, "_last_recommendation", None))
         dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         alive = []
         for d in getattr(self, "_open_dialogs", []):

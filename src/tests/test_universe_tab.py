@@ -283,13 +283,11 @@ class TestTrendScoreButton(unittest.TestCase):
         self.assertTrue(tab.trend_score_btn.isChecked())
         # Top rows in rank order, then Bottom rows, then the rest in cap order.
         self.assertEqual([d["ticker"] for d in tab.all_data], top + bottom + ["AAA", "BBB", "THIN"])
-        self.assertEqual(tab.all_data[0]["trend_rank"], ("top", 1))
-        self.assertEqual(tab.all_data[len(top)]["trend_rank"], ("bottom", 1))
+        self.assertTrue(tab.all_data[0]["trend_rank"].startswith("Top 1 ("))
+        self.assertTrue(tab.all_data[len(top)]["trend_rank"].startswith("Bottom 1 ("))
         self.assertNotIn("trend_rank", tab.all_data[-1])
-        # The rank is a badge before the name now (ui_redesign_2026-11 P2-1), not a meta suffix.
-        payload = tab.table.item(0, 0).data(0x0100)            # identity UserRole payload
-        self.assertEqual(payload["rank"], ("top", 1))
-        self.assertNotIn("Top", payload["meta"])
+        meta = tab.table.item(0, 0).data(0x0100)["meta"]      # identity UserRole payload
+        self.assertIn(" · Top 1 (", meta)
         self.assertEqual(tab.table.item(0, 0).text(), f"S{top[0]}")
         self.assertIn("pinned", statuses[-1])
 
@@ -300,7 +298,7 @@ class TestTrendScoreButton(unittest.TestCase):
             tab.on_finished_all(fresh)
         self.assertEqual([d["ticker"] for d in tab.all_data][:2], top)
         self.assertEqual(tab.all_data[2]["ticker"], "BOUNCE")
-        self.assertEqual(tab.all_data[0]["trend_rank"], ("top", 1))
+        self.assertTrue(tab.all_data[0]["trend_rank"].startswith("Top 1"))
 
         # Clicking again unpins: default cap order, labels gone, button unchecked.
         tab._on_trend_score_clicked()
@@ -308,7 +306,7 @@ class TestTrendScoreButton(unittest.TestCase):
         self.assertEqual(tab._trend_score_order, {})
         self.assertEqual([d["ticker"] for d in tab.all_data], ["UP", "BBB", "BOUNCE", "PULL"])
         self.assertFalse(any("trend_rank" in d for d in tab.all_data))
-        self.assertIsNone(tab.table.item(0, 0).data(0x0100)["rank"])
+        self.assertNotIn("Top", tab.table.item(0, 0).data(0x0100)["meta"])
         self.assertIn("restored", statuses[-1])
 
     def test_failure_leaves_the_order_alone_and_unchecks(self):
@@ -349,132 +347,10 @@ class TestTrendScoreButton(unittest.TestCase):
         self.assertFalse(tab.trend_score_btn.isChecked())
         self.assertEqual(tab._trend_score_order, {})
         self.assertFalse(any("trend_rank" in d for d in tab.all_data))
-        self.assertIsNone(tab.table.item(0, 0).data(0x0100)["rank"])
+        self.assertNotIn("Top", tab.table.item(0, 0).data(0x0100)["meta"])
         self.assertEqual(tab.table._sort_col, 1)                 # the user's sort stays
         with patch.object(tab, "load_custom_settings"):
             tab.custom_settings = {"added": [], "deleted": [], "highlights": {}}
             tab.on_finished_all([_stock("UP", 800), _stock("PULL", 400)])
         self.assertFalse(tab.trend_score_btn.isChecked())
         self.assertFalse(any("trend_rank" in d for d in tab.all_data))
-
-
-class TestScoreColumnAndDetailPanel(unittest.TestCase):
-    """docs/ui_redesign_2026-11.md P2: the Score column, the Top/Bottom badge
-    and the detail panel that follows the current row."""
-
-    def setUp(self):
-        p = patch("ui.universe_tab.atomic_save_json")
-        p.start()
-        self.addCleanup(p.stop)
-
-    def _tab(self):
-        from ui.universe_tab import UniverseTab
-        with patch("ui.universe_tab.safe_load_json", side_effect=_no_disk):
-            tab = UniverseTab()
-        tab.custom_settings = {"added": [], "deleted": [], "highlights": {}}
-        tab.all_data = [_stock(t, cap) for t, cap in
-                        (("AAA", 900), ("UP", 800), ("DOWN", 700), ("BBB", 600), ("BOUNCE", 500),
-                         ("PULL", 400), ("THIN", 300), ("SPIKE", 200))]
-        tab._reload_table()
-        return tab
-
-    @staticmethod
-    def _rec():
-        return TestTrendScoreButton._rec()
-
-    def _row_of(self, tab, ticker):
-        return next(r for r in range(tab.table.rowCount())
-                    if tab.table.item(r, 0).data(0x0100)["ticker"] == ticker)
-
-    def test_score_column_values_and_unscored_dash(self):
-        from ui.widgets import COL_SCORE, COLUMNS
-        self.assertEqual(COLUMNS[COL_SCORE].key, "score")
-        tab = self._tab()
-        self.assertEqual({tab.table.item(r, COL_SCORE).text() for r in range(tab.table.rowCount())}, {"-"})
-        rec = self._rec()
-        tab._on_trend_score_finished(rec, "")
-        for tk, s in rec.scored.items():
-            self.assertEqual(tab.table.item(self._row_of(tab, tk), COL_SCORE).text(), f"{s.week_avg:+.2f}")
-        unscored = [d["ticker"] for d in tab.all_data if d["ticker"] not in rec.scored]
-        self.assertIn("THIN", unscored)
-        for tk in unscored:
-            self.assertEqual(tab.table.item(self._row_of(tab, tk), COL_SCORE).text(), "-")
-        # Unpinning keeps the last run's scores; the cache never stores them.
-        tab._on_trend_score_clicked()
-        tk = next(iter(rec.scored))
-        self.assertNotEqual(tab.table.item(self._row_of(tab, tk), COL_SCORE).text(), "-")
-        from ui.universe_tab import _without_score_keys
-        self.assertFalse(any("trend_score" in _without_score_keys(d) for d in tab.all_data))
-
-    def test_rank_badge_kinds(self):
-        from ui.delegates import IdentityDelegate
-        from ui.colors import RANK_TOP_BG, RANK_BOTTOM_BG
-        self.assertEqual(IdentityDelegate.rank_badge(("top", 3))[0::2], ("T3", RANK_TOP_BG))
-        self.assertEqual(IdentityDelegate.rank_badge(("bottom", 7))[0::2], ("B7", RANK_BOTTOM_BG))
-        self.assertIsNone(IdentityDelegate.rank_badge(None))
-        tab = self._tab()
-        tab._on_trend_score_finished(self._rec(), "")
-        self.assertEqual(tab.table.item(0, 0).toolTip(), "Trend Score Top 1")
-        tab.table.resize(900, 400)
-        tab.table.show()
-        app.processEvents()                       # paints the badge path without error
-        tab.table.hide()
-
-    def test_panel_follows_the_current_row_and_says_when_not_run(self):
-        from ui.universe_detail import NOT_RUN_TEXT
-        tab = self._tab()
-        panel = tab.detail_panel
-        tab.table.setCurrentCell(self._row_of(tab, "UP"), 1)
-        self.assertEqual(panel.ticker, "UP")
-        self.assertEqual(panel.name_lbl.text(), "SUP")
-        self.assertEqual(panel.hint_lbl.text(), NOT_RUN_TEXT)
-        self.assertFalse(panel.score_box.isVisibleTo(panel))
-
-        rec = self._rec()
-        tab._on_trend_score_finished(rec, "")
-        tab.table.setCurrentCell(self._row_of(tab, "PULL"), 1)
-        self.assertEqual(panel.ticker, "PULL")
-        self.assertTrue(panel.score_box.isVisibleTo(panel))
-        s = rec.scored["PULL"]
-        self.assertEqual(panel.cards["ma50"].value.text(), f"{s.pct_ma50:.2f}")
-        self.assertEqual(panel.cards["r3"].value.text(), f"{s.pct_r3:.2f}")
-        self.assertIn(f"{s.week_avg:+.2f}", panel.total_lbl.text())
-        self.assertEqual({b.text() for b in panel.gate_badges.values()}, {"Pass"})   # a Top name passes the gate
-
-        tab.table.setCurrentCell(self._row_of(tab, "SPIKE"), 1)
-        self.assertEqual(panel.gate_badges["heat"].objectName(), "badgeFail")
-
-        tab.table.setCurrentCell(self._row_of(tab, "THIN"), 1)      # illiquid: not scored
-        self.assertFalse(panel.score_box.isVisibleTo(panel))
-        self.assertIn("Not scored", panel.hint_lbl.text())
-
-    def test_panel_buttons_reuse_the_row_actions(self):
-        tab = self._tab()
-        tab.table.setCurrentCell(self._row_of(tab, "UP"), 1)
-        with patch.object(tab, "_show_stock_ma") as ma:
-            tab.detail_panel.ma_btn.click()
-        ma.assert_called_once()
-        self.assertEqual(ma.call_args[0][0], "UP")
-
-    def test_splitter_handle_folds_the_panel(self):
-        tab = self._tab()
-        tab.resize(1400, 700)
-        tab.show()
-        app.processEvents()
-        self.assertGreater(tab.splitter.sizes()[1], 0)
-        tab.toggle_detail_panel()
-        self.assertEqual(tab.splitter.sizes()[1], 0)
-        tab.toggle_detail_panel()
-        self.assertEqual(tab.splitter.sizes()[1], tab.DETAIL_PANEL_W)
-        tab.hide()
-
-    def test_mini_chart_reads_only_the_history_cache(self):
-        import polars as pl
-        import data.cache as dc
-        from data.history import peek_recent_closes
-        with patch.dict(dc._HIST_CACHE, {("ZZZ", "2020-01-01"): pl.DataFrame({"Close": [1.0, 2.0, 3.0]})},
-                        clear=False), \
-             patch("data.history._fetch_historical_uncached") as fetch:
-            self.assertEqual(peek_recent_closes("ZZZ", 2), [2.0, 3.0])
-            self.assertEqual(peek_recent_closes("NOPE"), [])
-        fetch.assert_not_called()

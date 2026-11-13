@@ -114,8 +114,9 @@ Dev tooling is in `requirements-dev.txt`
   target-check card, result tabs (comparison, all metrics, monthly, trades, event study,
   warnings), "Save Report" to `reports/`; docs/ui.md 8.10), `strategy_widgets.py` (that
   screen's widgets: `KpiRow`, `TargetCheckCard`, `SharpeBarDelegate`, `SegmentRow`, table
-  fillers, `TARGET_SHARPE`/`TARGET_MDD`), `universe_detail.py` (`UniverseDetailPanel`, right of
-  the Universe table: score breakdown and gate of the last Trend Score run, cache-only mini chart),
+  fillers, `TARGET_SHARPE`/`TARGET_MDD`), `trend_score_section.py` (`TrendScoreSection`: the
+  MA chart dialog's block with the last Trend Score run's breakdown and gate for a KOSPI/KOSDAQ name;
+  `UniverseTab._last_recommendation` is passed in through `StockMaDialog(trend_rec=...)`),
   `widgets.py` (`StockTable`, `NumericItem`, `FilterPopup`, `GroupedHeaderView`), `delegates.py`
   (every custom-painted table cell: `CellDelegate` base + the Universe/History delegates),
   `ma_chart.py` (`StockMaLauncherMixin`, the MA-chart dialog launcher; `UniverseTab` is its
@@ -172,8 +173,7 @@ Dev tooling is in `requirements-dev.txt`
   `price_crosscheck.py` (report-only KIS vs Naver comparison, `python -m data.price_crosscheck`)
   -> `listing.py`
   (`get_stock_listing`, day-scoped single-flight cache), `history.py` (`get_historical_data`
-  routing KR codes to Naver, bonds to cached series, else yfinance/yahooquery/FDR;
-  `peek_recent_closes` reads `_HIST_CACHE` only, never the network, so a UI slot may call it), `fx.py`
+  routing KR codes to Naver, bonds to cached series, else yfinance/yahooquery/FDR), `fx.py`
   (`get_usd_krw_rate`) -> `indicators.py` (`_compute_indicators`, `fetch_historical_changes`)
   -> `collectors/yahoo.py` (`yf_quote_batch` is the one Yahoo quote entry point, US bulk
   universe) -> `market.py` (per-market universe builds, single-stock lookup, index/MA
@@ -248,7 +248,7 @@ not fixtures. Trading History principal/deposit/withdrawal live in `QSettings`
   `ui/dialogs/variant_picker.py` list labels) are Korean, and the tests assert those
   literals; their identifiers, comments and docstrings stay English. The same applies to
   the one-line explanations under the Strategy KPI cards and the Universe score cards
-  (`ui/strategy_widgets.py` `KPI_CARDS`, `ui/universe_detail.py`) and the E2/A5 tooltip,
+  (`ui/strategy_widgets.py` `KPI_CARDS`, `ui/trend_score_section.py`) and the E2/A5 tooltip,
   worded as in `docs/ui_redesign_2026-11.md` (2026-11-13).
 - UI 변경은 `docs/ui.md` 의 전역 규칙을 따른다.
 - One font family app-wide, Malgun Gothic Semilight (user direction, 2026-09-19): every

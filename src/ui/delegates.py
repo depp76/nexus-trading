@@ -19,7 +19,6 @@ from PyQt6.QtWidgets import QStyledItemDelegate, QStyle
 from PyQt6.QtCore import Qt, QRect, QSize
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPen
 
-from ui.colors import RANK_TOP_BG, RANK_TOP_TEXT, RANK_BOTTOM_BG, RANK_BOTTOM_TEXT
 from ui.theme import ACCENT, ACCENT_TEXT, ACCENT_BG, TEXT, TEXT_FAINT, LINE, LINE_SOFT, SURFACE
 
 
@@ -134,20 +133,6 @@ class IdentityDelegate(CellDelegate):
     1.7). The button is painted here and hit-tested by StockTable's mouse
     handlers through status_button_rect()."""
 
-    RANK_BADGE_H = 16
-
-    @staticmethod
-    def rank_badge(rank):
-        """(label, text color, fill) for a pinned Trend Score rank
-        ("top"|"bottom", n), or None. Compact ("T3" / "B7") so the name keeps
-        its room in the 150 px identity column; the cell tooltip spells it out."""
-        if not rank:
-            return None
-        kind, n = rank
-        if kind == "top":
-            return f"T{n}", RANK_TOP_TEXT, RANK_TOP_BG
-        return f"B{n}", RANK_BOTTOM_TEXT, RANK_BOTTOM_BG
-
     STATUS_BTN_W = 56
     STATUS_BTN_H = 18
     STATUS_BTN_MARGIN = 6
@@ -172,14 +157,6 @@ class IdentityDelegate(CellDelegate):
 
         btn_rect = self.status_button_rect(rect)
         text_x = rect.x() + 4 + self.MARKER_W + 8
-        rank = self.rank_badge(data.get("rank"))
-        if rank is not None:
-            label, fg, bg = rank
-            font = self.badge_font(option.font)
-            w = self.badge_width(font, label)
-            badge = QRect(text_x, rect.y() + (rect.height() - self.RANK_BADGE_H) // 2, w, self.RANK_BADGE_H)
-            self.draw_badge(painter, badge, label, fg, bg, bg, font)
-            text_x += w + 6
         text_w = max(10, btn_rect.x() - 6 - text_x)
         self.draw_name_and_meta(painter, option, text_x, text_w, name, meta)
 
