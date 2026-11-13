@@ -70,6 +70,9 @@ class ResearchResult:
     runs: list[RunSummary]
     event_study: list[dict]
     warnings: list[str]
+    # Variants that were requested but not run, with the reason (e.g. A3-A5 without
+    # investor-flow data), so a reader can tell "not run" from "ran and did nothing".
+    skipped: dict[str, str] = field(default_factory=dict)
 
     def runs_at(self, mult: float, kind: str | None = None) -> list[RunSummary]:
         return [r for r in self.runs if abs(r.cost_mult - mult) < 1e-9 and (kind is None or r.kind == kind)]
@@ -116,6 +119,9 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
     warnings.append(ds.info.get("universe", ""))
 
     runs: list[RunSummary] = []
+    skipped: dict[str, str] = {}
+    if req.run_backtests and not feats.has_flows:
+        skipped.update({vid: "no investor-flow data" for vid in req.variant_ids if VARIANTS[vid].needs_flows})
     score_books: dict[str, object] = {}     # C-series ScoreBook per variant: independent of the cost multiplier
     if req.run_backtests:
         for mult in req.cost_multipliers:
@@ -148,7 +154,8 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
     info = dict(ds.info)
     info["flow_coverage"] = feats.flow_coverage
     info["regime_on_share"] = float(np.mean(feats.regime_on[ds.start_idx:])) if ds.stocks.T > ds.start_idx else 0.0
-    return ResearchResult(SPEC_VERSION, datetime.now(), req, info, runs, events, [w for w in warnings if w])
+    return ResearchResult(SPEC_VERSION, datetime.now(), req, info, runs, events, [w for w in warnings if w],
+                          skipped)
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +234,8 @@ def render_markdown(result: ResearchResult, header: list[str] | None = None) -> 
     out.append(f"- Costs (1x): commission {_pct(cm.commission_rate, 3)}, slippage {_pct(cm.slippage_rate, 2)}, "
                f"tax by year {{{tax_desc}}}, ETF slippage 0.02%, tick rounding {cm.round_to_tick}, "
                f"limit-move block {cm.block_limit_up_down}")
+    if result.skipped:
+        out.append("- Requested but not run: " + ", ".join(f"{v} ({why})" for v, why in result.skipped.items()))
     if result.warnings:
         out.append("")
         out.append("## Warnings")

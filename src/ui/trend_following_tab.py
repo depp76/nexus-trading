@@ -1,11 +1,12 @@
 """ui/trend_following_tab.py — TrendFollowingTab: the research/backtest UI for
-strategy.trend_following (trend_following.md v03).
+strategy.trend_following (trend_following.md, version in SPEC_VERSION).
 
 One form (window, universe, sizing, variant matrix, cost scenarios, flows,
 event study) -> one background run (threads.strategy_threads) -> a scorecard
 table for every variant and benchmark per cost multiplier, a rebased NAV
-chart, the event-study table, and "Save Report" for the markdown the spec
-asks to keep per version. Signal generation / research only: nothing here
+chart, the event-study table, a Warnings panel (the run's caveats and the
+variants it skipped, readable without saving), and "Save Report" for the
+markdown the spec asks to keep per version. Signal generation / research only: nothing here
 places orders (docs/ui.md 5.6 banner).
 """
 from __future__ import annotations
@@ -16,6 +17,8 @@ import os
 import numpy as np
 from matplotlib.dates import date2num, num2date
 from datetime import date, datetime
+
+from html import escape
 
 from PyQt6.QtCore import Qt, QDate
 from PyQt6.QtGui import QBrush, QColor
@@ -35,7 +38,10 @@ from strategy.trend_following import (
 from strategy.trend_following.research import SUMMARY_COLUMNS
 from strategy.trend_following.event_study import HORIZONS
 from threads.strategy_threads import TrendFollowingResearchThread, CANCELLED_MESSAGE
-from ui.common import create_font, make_button, setup_table, make_footer_label, ThreadOwnerMixin, TAB_MARGINS, TAB_SPACING, FONT_SMALL
+from ui.common import (
+    create_font, make_button, setup_table, make_footer_label, install_table_keys, ThreadOwnerMixin,
+    TAB_MARGINS, TAB_SPACING, FONT_SMALL,
+)
 from ui.theme import TEXT, TEXT_SUB, TEXT_MUTED, TEXT_FAINT, TEXT_EMPTY, LINE
 
 logger = logging.getLogger(__name__)
@@ -60,6 +66,9 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._result: ResearchResult | None = None
+        # Check state of the flow-dependent variants (A3-A5) while Investor flows
+        # is off and their boxes are disabled; restored when flows is ticked again.
+        self._flow_variant_state: dict[str, bool] = {}
         self._research_thread = None
         # Hover readout state: (label, color, x as matplotlib date numbers, y) per plotted series.
         self._chart_series: list[tuple[str, str, np.ndarray, np.ndarray]] = []
@@ -73,8 +82,9 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         root.setContentsMargins(*TAB_MARGINS)
         # No in-tab title (docs/ui.md 8.4): no other tab has one and the tab
         # label already names it. What a run does is on the Run button's tooltip.
-        self._run_tooltip = (f"Research backtest per trend_following.md {SPEC_VERSION}: variants A0–A5 and B "
-                             f"against BM1–BM4 with the 0x/1x/2x cost scenarios and the 6-1 event study.")
+        self._run_tooltip = (f"Research backtest per trend_following.md {SPEC_VERSION}: variants "
+                             f"{', '.join(VARIANTS)} against BM1–BM4 with the 0x/1x/2x cost scenarios "
+                             f"and the 6-1 event study.")
 
         form = QGridLayout()
         form.setHorizontalSpacing(10)
@@ -127,7 +137,9 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         # explanations moved to tooltips.
         fields = [
             (_lbl("Start"), self.start_edit),
-            (_lbl("End"), self.end_edit),
+            (_lbl(f"End (≤ {DEV_END:%Y-%m-%d})",
+                  "Runs stop at the end of the development window; the hold-out year after it stays "
+                  "closed (trend_following.md 6-5)"), self.end_edit),
             (_lbl("Universe", "KOSPI top N by market cap"), self.universe_spin),
             (_lbl("Liquidity floor", "20-day average trading value"), self.liquidity_spin),
             (_lbl("Max positions"), self.positions_spin),
@@ -153,17 +165,37 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             self.variant_cbs[vid] = cb
             variants_row.addWidget(cb)
         variants_row.addStretch()
-        # Run is the tab's one primary action; Stop cancels a run, it does not
-        # destroy anything, so it stays neutral (docs/ui.md 8.1).
+        # Run is the tab's one primary action and sits last (docs/ui.md 8.4);
+        # Stop cancels a run, it does not destroy anything, so it stays neutral (8.1).
         self.run_btn = make_button("Run Research", "primary", self._on_run_clicked, tooltip=self._run_tooltip)
         self.stop_btn = make_button("Stop", on_click=self._on_stop_clicked)
         self.stop_btn.setEnabled(False)
         self.save_btn = make_button("Save Report", on_click=self._on_save_clicked)
         self.save_btn.setEnabled(False)
-        variants_row.addWidget(self.run_btn)
-        variants_row.addWidget(self.stop_btn)
         variants_row.addWidget(self.save_btn)
+        variants_row.addWidget(self.stop_btn)
+        variants_row.addWidget(self.run_btn)
         root.addLayout(variants_row)
+        # A3-A5 cannot run without investor flows: keep the selection equal to
+        # what a run will actually do (review_codex.md S1).
+        self.flows_cb.toggled.connect(self._sync_flow_variants)
+        self._sync_flow_variants(self.flows_cb.isChecked())
+
+        # The shown result's caveats (benchmark substitutions, flow coverage,
+        # skipped variants), readable here instead of only in the saved report
+        # (review_codex.md S3). Hidden until a result has any.
+        self.warn_btn = make_button("Warnings", on_click=self._on_warnings_toggled, checkable=True)
+        self.warn_btn.setVisible(False)
+        self.warn_lbl = QLabel("")
+        self.warn_lbl.setObjectName("warn")
+        self.warn_lbl.setWordWrap(True)
+        self.warn_lbl.setTextFormat(Qt.TextFormat.RichText)
+        self.warn_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.warn_lbl.setVisible(False)
+        warn_row = QHBoxLayout()
+        warn_row.addWidget(self.warn_btn, 0, Qt.AlignmentFlag.AlignTop)
+        warn_row.addWidget(self.warn_lbl, 1)
+        root.addLayout(warn_row)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
 
@@ -176,6 +208,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.table.horizontalHeader().setDefaultSectionSize(72)
         self.table.setColumnWidth(0, 60)
         self.table.setColumnWidth(1, 50)
+        install_table_keys(self.table)      # Ctrl+C copies the selected rows as TSV (docs/ui.md 8.6)
         splitter.addWidget(self.table)
 
         self.fig = Figure(figsize=(6, 2.6), constrained_layout=True)
@@ -209,6 +242,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.event_table.setColumnCount(len(ev_headers))
         self.event_table.setHorizontalHeaderLabels(ev_headers)
         self.event_table.setColumnWidth(0, 300)
+        install_table_keys(self.event_table)
         splitter.addWidget(self.event_table)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
@@ -236,7 +270,26 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
 
     # --------------------------------------------------------------- request
     def _selected_variants(self) -> tuple[str, ...]:
-        return tuple(vid for vid, cb in self.variant_cbs.items() if cb.isChecked())
+        return tuple(vid for vid, cb in self.variant_cbs.items() if cb.isEnabled() and cb.isChecked())
+
+    def _sync_flow_variants(self, flows_on: bool):
+        """Disable (and untick) the variants that need investor flows while
+        Investor flows is off, remembering their state for when it is back on."""
+        for vid, cb in self.variant_cbs.items():
+            v = VARIANTS[vid]
+            if not v.needs_flows:
+                continue
+            if flows_on:
+                if not cb.isEnabled():
+                    cb.setEnabled(True)
+                    cb.setChecked(self._flow_variant_state.pop(vid, True))
+                cb.setToolTip(v.label)
+            else:
+                if cb.isEnabled():
+                    self._flow_variant_state[vid] = cb.isChecked()
+                    cb.setChecked(False)
+                    cb.setEnabled(False)
+                cb.setToolTip(f"{v.label}\nNeeds Investor flows: tick it to run this variant.")
 
     def build_request(self) -> ResearchRequest:
         start = self.start_edit.date().toPyDate()
@@ -292,11 +345,27 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self._result = result
         self.save_btn.setEnabled(True)
         self.populate(result)
+        self._show_warnings(result)
         n_runs = len(result.runs)
-        warn = f" · {len(result.warnings)} warning(s), see the saved report" if result.warnings else ""
+        skipped = f" · skipped {', '.join(result.skipped)}" if result.skipped else ""
         self.status_lbl.setText(
             f"Done {result.created_at:%H:%M:%S} · {n_runs} runs · {result.dataset_info.get('n_tickers', 0)} names · "
-            f"{result.dataset_info.get('eval_start', '')} → {result.dataset_info.get('eval_end', '')}{warn}")
+            f"{result.dataset_info.get('eval_start', '')} → {result.dataset_info.get('eval_end', '')}{skipped}")
+
+    # -------------------------------------------------------------- warnings
+    def _show_warnings(self, result: ResearchResult):
+        """Fill the Warnings panel from `result` (not from the current form)."""
+        lines = [f"{escape(vid)} not run: {escape(why)}" for vid, why in result.skipped.items()]
+        lines += [escape(w) for w in result.warnings]
+        self.warn_lbl.setText("<br>".join(f"• {line}" for line in lines))
+        self.warn_btn.setText(f"Warnings ({len(lines)})")
+        self.warn_btn.setVisible(bool(lines))
+        if not lines:
+            self.warn_btn.setChecked(False)
+        self.warn_lbl.setVisible(bool(lines) and self.warn_btn.isChecked())
+
+    def _on_warnings_toggled(self, checked: bool):
+        self.warn_lbl.setVisible(checked)
 
     # --------------------------------------------------------------- results
     def populate(self, result: ResearchResult):

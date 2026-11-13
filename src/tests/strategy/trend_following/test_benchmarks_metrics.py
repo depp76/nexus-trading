@@ -9,7 +9,7 @@ from strategy.trend_following.config import StrategyParams
 from strategy.trend_following.costs import CostModel
 from strategy.trend_following.metrics import (
     cagr, max_drawdown, sharpe, nav_returns, yearly_returns, monthly_returns, capture_ratios, beta_alpha,
-    information_ratio, period_returns, summarize_run,
+    information_ratio, period_returns, summarize_run, annual_vol, session_rf,
 )
 from strategy.trend_following.signals import compute_features
 from tests.strategy.trend_following.helpers import synthetic_dataset, business_days
@@ -94,6 +94,35 @@ class TestMetrics(unittest.TestCase):
         self.assertAlmostEqual(cagr(np.array([1.0, 1.5, 2.0]), dates), 1.0, places=6)
         self.assertAlmostEqual(max_drawdown(np.array([1.0, 0.5, 0.75, 1.2])), -0.5)
         self.assertEqual(max_drawdown(np.array([1.0, 1.1, 1.2])), 0.0)
+
+    def test_first_session_counts_in_the_risk_metrics(self):
+        """review_codex.md R4: returns and MDD start from the seed (NAV_BASE),
+        like total return, so a first-day move is not dropped."""
+        np.testing.assert_allclose(nav_returns(np.array([0.8, 0.9])), [-0.2, 0.125])
+        self.assertAlmostEqual(max_drawdown(np.array([0.8, 0.9])), -0.2)         # first-day crash, recovery
+        self.assertAlmostEqual(max_drawdown(np.array([0.999, 1.01])), -0.001)    # first-day costs only
+        self.assertAlmostEqual(max_drawdown(np.array([1.2, 0.9])), -0.25)        # first-day jump, then fall
+        np.testing.assert_allclose(nav_returns(np.array([1.1, 1.21]), base=1.1), [0.0, 0.1])
+        # Volatility and Sharpe use every session: a path flat after a first-day
+        # loss has non-zero volatility and a negative Sharpe.
+        nav = np.array([0.9, 0.9, 0.9, 0.9])
+        self.assertGreater(annual_vol(nav_returns(nav)), 0.0)
+        self.assertLess(sharpe(nav_returns(nav), np.zeros(4)), 0.0)
+
+    def test_session_rf_zeroes_only_the_first_session(self):
+        np.testing.assert_allclose(session_rf([0.01, 0.02, 0.03]), [0.0, 0.02, 0.03])
+        np.testing.assert_allclose(session_rf([0.01, 0.02], first_session=False), [0.01, 0.02])
+
+    def test_bm4_has_zero_excess_return(self):
+        """BM4 holds cash: with the day-0 rate zeroed its excess return is 0 on
+        every session, so it is not penalised for the uncredited first day."""
+        ds = synthetic_dataset()
+        res = run_bm4(ds, StrategyParams())
+        ex = nav_returns(res.nav) - session_rf(res.rf_period)
+        np.testing.assert_allclose(ex, 0.0, atol=1e-12)
+        self.assertEqual(sharpe(nav_returns(res.nav), session_rf(res.rf_period)), 0.0)
+        noisy = np.full(300, 1e-4) + np.tile([1e-19, -1e-19], 150)    # float noise, not risk
+        self.assertEqual(sharpe(noisy, np.full(300, 1e-4)), 0.0)
 
     def test_sharpe_positive_for_positive_drift(self):
         rng = np.random.default_rng(0)

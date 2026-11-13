@@ -20,21 +20,39 @@ from strategy.trend_following.backtest import BacktestResult, TRIM_REASON, WEIGH
 from strategy.trend_following.config import PERIODS
 
 TRADING_DAYS = 252
-
-
-def nav_returns(nav: np.ndarray) -> np.ndarray:
-    nav = np.asarray(nav, dtype=float)
-    out = np.zeros(len(nav))
-    if len(nav) > 1:
-        out[1:] = nav[1:] / nav[:-1] - 1.0
-    return out
+_SD_EPS = 1e-12      # below this a daily-return spread is float noise, not risk
 
 
 NAV_BASE = 1.0
 """Every return below is measured from the seed (nav 1.0), not from ``nav[0]``:
 a policy that fills on the first session (BM1/BM2) already carries that day's
 costs and open-to-close move in ``nav[0]``, and dividing by it would drop
-them (review_agy.md 3.2, 2026-09-29)."""
+them (review_agy.md 3.2, 2026-09-29). The risk metrics follow the same rule
+(review_codex.md R4, 2026-11-13): the first daily return is
+``nav[0] / base - 1`` and the drawdown peak starts at ``base``, so volatility,
+Sharpe, beta/alpha, IR and MDD see the first session like total return does."""
+
+
+def nav_returns(nav: np.ndarray, base: float = NAV_BASE) -> np.ndarray:
+    """Daily returns with the first one measured from `base` (the seed, or the
+    previous NAV when `nav` is a slice of a longer series)."""
+    nav = np.asarray(nav, dtype=float)
+    out = np.zeros(len(nav))
+    if len(nav):
+        out[0] = nav[0] / base - 1.0 if base > 0 else 0.0
+        out[1:] = nav[1:] / nav[:-1] - 1.0
+    return out
+
+
+def session_rf(rf_period, first_session: bool = True) -> np.ndarray:
+    """Per-session risk-free returns aligned with ``nav_returns``. The engine
+    credits no cash interest on the first session (``Engine.run``: ``t > t0``)
+    and BM4 starts at exactly 1.0, so day 0's rate is zeroed when the series
+    starts on the first session; a later slice keeps it."""
+    rf = np.array(rf_period, dtype=float, copy=True)
+    if first_session and len(rf):
+        rf[0] = 0.0
+    return rf
 
 
 def total_return(nav: np.ndarray) -> float:
@@ -52,24 +70,28 @@ def cagr(nav: np.ndarray, dates: list[date]) -> float:
 
 
 def annual_vol(rets: np.ndarray) -> float:
-    r = np.asarray(rets, dtype=float)[1:]
+    r = np.asarray(rets, dtype=float)
     return float(np.std(r, ddof=1) * np.sqrt(TRADING_DAYS)) if len(r) > 2 else 0.0
 
 
 def sharpe(rets: np.ndarray, rf_period: np.ndarray) -> float:
-    ex = np.asarray(rets, dtype=float)[1:] - np.asarray(rf_period, dtype=float)[1:]
+    """Annualised Sharpe of `rets` (``nav_returns``) over `rf_period`
+    (``session_rf``), every session included."""
+    ex = np.asarray(rets, dtype=float) - np.asarray(rf_period, dtype=float)
     if len(ex) < 3:
         return 0.0
     sd = np.std(ex, ddof=1)
-    return float(np.mean(ex) / sd * np.sqrt(TRADING_DAYS)) if sd > 0 else 0.0
+    # BM4's excess return is zero up to float noise; noise / noise gave a Sharpe of ~75.
+    return float(np.mean(ex) / sd * np.sqrt(TRADING_DAYS)) if sd > _SD_EPS else 0.0
 
 
-def max_drawdown(nav: np.ndarray) -> float:
-    """Most negative peak-to-trough drawdown (<= 0)."""
+def max_drawdown(nav: np.ndarray, base: float = NAV_BASE) -> float:
+    """Most negative peak-to-trough drawdown (<= 0), the peak starting at
+    `base` so a loss on the first session counts."""
     nav = np.asarray(nav, dtype=float)
     if len(nav) == 0:
         return 0.0
-    peak = np.maximum.accumulate(nav)
+    peak = np.maximum.accumulate(np.concatenate([[base], nav]))[1:]
     with np.errstate(divide="ignore", invalid="ignore"):
         dd = np.where(peak > 0, nav / peak - 1.0, 0.0)
     return float(np.min(dd))
@@ -127,8 +149,8 @@ def capture_ratios(strat_m: dict, bm_m: dict) -> tuple[float, float]:
 
 def beta_alpha(strat_rets: np.ndarray, bm_rets: np.ndarray, rf_period: np.ndarray) -> tuple[float, float]:
     """Daily excess-return regression strat = alpha + beta x bm; alpha annualised."""
-    ys = np.asarray(strat_rets, dtype=float)[1:] - np.asarray(rf_period, dtype=float)[1:]
-    xs = np.asarray(bm_rets, dtype=float)[1:] - np.asarray(rf_period, dtype=float)[1:]
+    ys = np.asarray(strat_rets, dtype=float) - np.asarray(rf_period, dtype=float)
+    xs = np.asarray(bm_rets, dtype=float) - np.asarray(rf_period, dtype=float)
     n = min(len(xs), len(ys))
     if n < 3:
         return float("nan"), float("nan")
@@ -142,7 +164,7 @@ def beta_alpha(strat_rets: np.ndarray, bm_rets: np.ndarray, rf_period: np.ndarra
 
 
 def information_ratio(strat_rets: np.ndarray, bm_rets: np.ndarray) -> float:
-    d = np.asarray(strat_rets, dtype=float)[1:] - np.asarray(bm_rets, dtype=float)[1:]
+    d = np.asarray(strat_rets, dtype=float) - np.asarray(bm_rets, dtype=float)
     if len(d) < 3:
         return 0.0
     sd = np.std(d, ddof=1)
@@ -182,7 +204,7 @@ def summarize_run(res: BacktestResult, bm1: BacktestResult | None = None,
     """The 6-4 scorecard for one run (plus the BM1/BM3-relative block)."""
     nav, dates = res.nav, res.dates
     rets = nav_returns(nav)
-    rf = res.rf_period
+    rf = session_rf(res.rf_period)
     c = cagr(nav, dates)
     mdd = max_drawdown(nav)
     years = _years(dates)
@@ -232,5 +254,5 @@ def summarize_run(res: BacktestResult, bm1: BacktestResult | None = None,
             k: (None if v is None or b_periods.get(k) is None else v > b_periods[k]) for k, v in out["periods"].items()
         }
         out[f"{prefix}_beats_risk_adjusted"] = bool(
-            out["sharpe"] > sharpe(b_rets, bm.rf_period) and out["calmar"] > calmar(b_cagr, b_mdd))
+            out["sharpe"] > sharpe(b_rets, session_rf(bm.rf_period)) and out["calmar"] > calmar(b_cagr, b_mdd))
     return out

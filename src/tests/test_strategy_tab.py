@@ -62,8 +62,8 @@ class TestTrendFollowingTab(unittest.TestCase):
         tab.positions_spin.setValue(8)
         tab.weekday_combo.setCurrentIndex(2)
         tab.cost_combo.setCurrentIndex(1)
-        tab.variant_cbs["A3"].setChecked(False)
         tab.flows_cb.setChecked(True)
+        tab.variant_cbs["A3"].setChecked(False)
         tab.event_cb.setChecked(False)
         req = tab.build_request()
         self.assertEqual(req.params.universe_size, 120)
@@ -76,6 +76,63 @@ class TestTrendFollowingTab(unittest.TestCase):
         self.assertTrue(req.include_flows)
         self.assertFalse(req.run_event_study)
         self.assertEqual(req.start, date(2021, 1, 1))
+
+    def test_flow_variants_follow_the_flows_checkbox(self):
+        """review_codex.md S1: without investor flows A3-A5 cannot run, so they
+        are disabled and left out of the request; ticking flows restores them."""
+        from strategy.trend_following import VARIANTS
+        flow_ids = [vid for vid, v in VARIANTS.items() if v.needs_flows]
+        self.assertTrue(flow_ids)
+        tab = TrendFollowingTab()
+        self.assertFalse(tab.flows_cb.isChecked())
+        for vid in flow_ids:
+            self.assertFalse(tab.variant_cbs[vid].isEnabled())
+            self.assertFalse(tab.variant_cbs[vid].isChecked())
+        req = tab.build_request()
+        self.assertFalse(set(flow_ids) & set(req.variant_ids))
+        self.assertIn("A0", req.variant_ids)
+
+        tab.flows_cb.setChecked(True)
+        self.assertTrue(all(tab.variant_cbs[v].isEnabled() and tab.variant_cbs[v].isChecked() for v in flow_ids))
+        tab.variant_cbs[flow_ids[0]].setChecked(False)
+        tab.flows_cb.setChecked(False)
+        tab.flows_cb.setChecked(True)          # the user's choice survives the round trip
+        self.assertFalse(tab.variant_cbs[flow_ids[0]].isChecked())
+        self.assertTrue(tab.variant_cbs[flow_ids[1]].isChecked())
+
+    def test_skipped_variants_and_warnings_are_shown_without_saving(self):
+        """review_codex.md S1/S3: a run that could not load flows names the
+        skipped variants and shows every warning in the tab."""
+        ds = synthetic_dataset()             # no flows
+        req = ResearchRequest(start=date(2021, 1, 4), variant_ids=("A0", "A3"), cost_multipliers=(1.0,),
+                              include_flows=True, run_event_study=False)
+        result = run_research(ds, req)
+        self.assertEqual(result.skipped, {"A3": "no investor-flow data"})
+        self.assertNotIn("A3", {r.id for r in result.runs})
+        self.assertIn("A3 (no investor-flow data)", result.to_markdown())
+        tab = TrendFollowingTab()
+        self.assertFalse(tab.warn_btn.isVisibleTo(tab))
+        tab._on_research_finished(result, "")
+        n = len(result.warnings) + 1
+        self.assertTrue(tab.warn_btn.isVisibleTo(tab))
+        self.assertEqual(tab.warn_btn.text(), f"Warnings ({n})")
+        self.assertFalse(tab.warn_lbl.isVisibleTo(tab))
+        tab.warn_btn.click()
+        self.assertTrue(tab.warn_lbl.isVisibleTo(tab))
+        self.assertIn("A3 not run", tab.warn_lbl.text())
+        self.assertIn("skipped A3", tab.status_lbl.text())
+
+    def test_tables_copy_selected_rows(self):
+        """review_codex.md S4: both result tables get the app-wide Ctrl+C."""
+        tab = TrendFollowingTab()
+        self.assertTrue(hasattr(tab.table, "_table_keys"))
+        self.assertTrue(hasattr(tab.event_table, "_table_keys"))
+
+    def test_run_tooltip_lists_every_variant(self):
+        from strategy.trend_following import VARIANTS
+        tab = TrendFollowingTab()
+        for vid in VARIANTS:
+            self.assertIn(vid, tab.run_btn.toolTip())
 
     def test_run_starts_a_tracked_worker_and_disables_the_button(self):
         tab = TrendFollowingTab()

@@ -13,7 +13,7 @@ place that chrome comes from; nothing else should call
 file already has a rule for -- add an objectName selector here instead (see
 `QPushButton#primary` / `#danger` below).
 """
-from ui.colors import DANGER, DANGER_BG, DANGER_LINE
+from ui.colors import DANGER, DANGER_BG, DANGER_LINE, WARN
 
 BG          = "#fbfbfd"   # app background
 SURFACE     = "#ffffff"   # cards, table body
@@ -155,4 +155,6 @@ def app_qss(font_css: str) -> str:
        keeps them on one token. */
     QLabel#muted {{ color: {TEXT_MUTED}; }}
     QLabel#faint {{ color: {TEXT_FAINT}; }}
+    /* Caveats attached to a result (Strategy's Warnings panel): caution, not failure (8.3). */
+    QLabel#warn  {{ color: {WARN}; }}
     """
