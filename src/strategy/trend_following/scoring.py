@@ -175,6 +175,11 @@ class ScoredName:
     r3: float
     r20: float                 # 20-session close-to-close return (display only, spec has no R20)
     reasons: tuple[str, ...] = ()   # why the gate failed on the latest session ("" when it passed)
+    # Display only (spec 9-4, 2026-11-13): the latest session's percentiles the
+    # total is built from (ScoreBook.pct), for the Universe detail panel.
+    pct_ma50: float = float("nan")
+    pct_range52: float = float("nan")
+    pct_r3: float = float("nan")
 
 
 @dataclass
@@ -189,6 +194,8 @@ class Recommendation:
     regime_on: bool | None     # L1 (2-1) on the latest session, None without index data
     params: StrategyParams
     info: dict = field(default_factory=dict)
+    # Display only (spec 9-4): every eligible name by ticker, Top/Bottom included.
+    scored: dict[str, ScoredName] = field(default_factory=dict)
 
 
 def _gate_reasons(sb: ScoreBook, t: int, j: int, p: StrategyParams) -> tuple[str, ...]:
@@ -247,7 +254,12 @@ def weekly_recommendation(sb: ScoreBook, book: PriceBook, params: StrategyParams
             ma20_div=float(sb.ma20_div[t_last, j]), r3=float(sb.r3[t_last, j]),
             r20=_ret(j, DISPLAY_RETURN_WINDOW),
             reasons=_gate_reasons(sb, t_last, j, p),
+            pct_ma50=_pct_at("ma50_div", j), pct_range52=_pct_at("range52", j), pct_r3=_pct_at("r3", j),
         )
+
+    def _pct_at(key: str, j: int) -> float:
+        arr = sb.pct.get(key)
+        return float(arr[t_last, j]) if arr is not None else float("nan")
 
     top_idx = [j for j in np.argsort(-week_avg, kind="stable") if eligible[j] and sb.gate[t_last, j]][:n_top]
     taken = set(top_idx)
@@ -265,6 +277,7 @@ def weekly_recommendation(sb: ScoreBook, book: PriceBook, params: StrategyParams
         n_universe=sb.N, n_liquid=int(sb.liquid[t_last].sum()), n_gated=int(sb.gate[t_last].sum()),
         regime_on=regime_on, params=p,
         info={"n_eligible": int(eligible.sum()), "week_sessions": len(week_dates), "min_sessions": min_sessions},
+        scored={sb.tickers[j]: _scored(j) for j in np.flatnonzero(eligible)},
     )
 
 

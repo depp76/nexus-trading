@@ -13,6 +13,7 @@ Facade: UI and thread code import from here; the modules underneath are
   event_study 6-1 breakout event study
   factor_ic   6-1-2 factor Rank IC, quintiles and the verdict table
   research    the matrix runner and the markdown report
+  variant_info  plain-language description of each matrix row (the Strategy tab's variant picker)
   robustness  E1 weekdays, E2 pre-registered neighbours, E4, E5 and the checklist-form report (not imported here)
   snapshot    save / load a Dataset with a SHA-256 manifest (cache/snapshots/)
   run         headless entry point: python -m strategy.trend_following.run (not imported here)
@@ -20,7 +21,7 @@ Facade: UI and thread code import from here; the modules underneath are
 from strategy.trend_following.config import (
     SPEC_VERSION, SPEC_FILE, StrategyParams, Variant, VARIANTS, COST_MULTIPLIERS, PERIODS,
     HOLDOUT_PERIOD, FORWARD_PERIOD, IC_VERDICT_HORIZON,
-    BM_TR_TICKER, BM_PRICE_FALLBACK_TICKER, DEV_START, DEV_END,
+    BM_TR_TICKER, BM_PRICE_FALLBACK_TICKER, DEV_START, DEV_END, MARKETS, US_MARKETS, normalize_markets,
 )
 from strategy.trend_following.costs import CostModel, TradeCost, DEFAULT_TAX_TABLE, tick_size, snap_to_tick
 from strategy.trend_following.signals import Features, compute_features, regime_state, weekly_check_days
@@ -36,6 +37,7 @@ from strategy.trend_following.factor_ic import FactorICResult, run_factor_ic
 from strategy.trend_following.research import (
     ResearchRequest, ResearchResult, RunSummary, run_research, render_markdown,
 )
+from strategy.trend_following.variant_info import VariantDescription, describe_variant
 from strategy.trend_following.scoring import (
     ScoreBook, ScoredName, Recommendation, compute_scores, weekly_recommendation, load_score_inputs,
     run_universe_scoring,
@@ -44,7 +46,7 @@ from strategy.trend_following.scoring import (
 __all__ = [
     "SPEC_VERSION", "SPEC_FILE", "StrategyParams", "Variant", "VARIANTS", "COST_MULTIPLIERS", "PERIODS",
     "HOLDOUT_PERIOD", "FORWARD_PERIOD", "IC_VERDICT_HORIZON",
-    "BM_TR_TICKER", "BM_PRICE_FALLBACK_TICKER",
+    "BM_TR_TICKER", "BM_PRICE_FALLBACK_TICKER", "MARKETS", "US_MARKETS", "normalize_markets",
     "CostModel", "TradeCost", "DEFAULT_TAX_TABLE", "tick_size", "snap_to_tick",
     "Features", "compute_features", "regime_state", "weekly_check_days",
     "Dataset", "PriceBook", "ResearchCancelled", "HoldoutGuardError", "build_dataset", "load_dataset",
@@ -54,5 +56,5 @@ __all__ = [
     "summarize_run", "run_event_study", "FactorICResult", "run_factor_ic",
     "ResearchRequest", "ResearchResult", "RunSummary", "run_research", "render_markdown",
     "ScoreBook", "ScoredName", "Recommendation", "compute_scores", "weekly_recommendation", "load_score_inputs",
-    "run_universe_scoring",
+    "run_universe_scoring", "VariantDescription", "describe_variant",
 ]

@@ -12,7 +12,7 @@ import numpy as np
 from strategy.trend_following.backtest import BacktestResult, run_backtest
 from strategy.trend_following.benchmarks import run_benchmarks
 from strategy.trend_following.config import (
-    SPEC_VERSION, COST_MULTIPLIERS, PERIODS, VARIANTS, StrategyParams,
+    SPEC_VERSION, COST_MULTIPLIERS, PERIODS, VARIANTS, StrategyParams, normalize_markets,
 )
 from strategy.trend_following.costs import CostModel
 from strategy.trend_following.dataset import ResearchCancelled, check_dev_window
@@ -41,8 +41,10 @@ class ResearchRequest:
     run_backtests: bool = True
     run_event_study: bool = True
     allow_holdout: bool = False     # explicit switch for dates after config.DEV_END (default: blocked)
+    markets: tuple[str, ...] = ("KOSPI",)   # universe markets (spec 9-25); KOSPI alone = the original spec
 
     def __post_init__(self):
+        object.__setattr__(self, "markets", normalize_markets(self.markets))
         check_dev_window(self.start, self.allow_holdout, "start date")
         check_dev_window(self.end, self.allow_holdout, "end date")
 
@@ -70,6 +72,9 @@ class ResearchResult:
     runs: list[RunSummary]
     event_study: list[dict]
     warnings: list[str]
+    # Variants that were requested but not run, with the reason (e.g. A3-A5 without
+    # investor-flow data), so a reader can tell "not run" from "ran and did nothing".
+    skipped: dict[str, str] = field(default_factory=dict)
 
     def runs_at(self, mult: float, kind: str | None = None) -> list[RunSummary]:
         return [r for r in self.runs if abs(r.cost_mult - mult) < 1e-9 and (kind is None or r.kind == kind)]
@@ -101,7 +106,12 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
     if not ds.info.get("bm_is_total_return", True):
         warnings.append("BM1/BM3 use a price-only ETF series (KODEX 200TR unavailable): benchmarks understate "
                         "total return by the dividend yield (6-3 forbids price indices).")
-    if ds.bm is None:
+    bm_missing = ds.info.get("bm_missing") or []
+    if bm_missing:
+        warnings.append(f"Benchmark ETF history missing for {', '.join(bm_missing)}: the equal-weight mix of the "
+                        "selected markets' ETFs (9-25) could not be built, so BM1, BM3 and every BM-relative "
+                        "metric are N/A rather than a mix of the ETFs that did load.")
+    elif ds.bm is None:
         warnings.append("No benchmark ETF history: BM1 and BM3 were skipped.")
     if not feats.has_flows:
         warnings.append("Investor-flow data not loaded: A3/A4/A5 (F, FX) and the flow groups of the event study "
@@ -116,6 +126,9 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
     warnings.append(ds.info.get("universe", ""))
 
     runs: list[RunSummary] = []
+    skipped: dict[str, str] = {}
+    if req.run_backtests and not feats.has_flows:
+        skipped.update({vid: "no investor-flow data" for vid in req.variant_ids if VARIANTS[vid].needs_flows})
     score_books: dict[str, object] = {}     # C-series ScoreBook per variant: independent of the cost multiplier
     if req.run_backtests:
         for mult in req.cost_multipliers:
@@ -146,9 +159,12 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
         events = run_event_study(ds, feats, p)
 
     info = dict(ds.info)
+    info["names"] = dict(ds.stocks.names)      # display only (the Strategy tab's trade list, spec 9-24)
+    info["ticker_markets"] = dict(ds.stocks.markets)    # display only (the trade list popup, spec 9-24)
     info["flow_coverage"] = feats.flow_coverage
     info["regime_on_share"] = float(np.mean(feats.regime_on[ds.start_idx:])) if ds.stocks.T > ds.start_idx else 0.0
-    return ResearchResult(SPEC_VERSION, datetime.now(), req, info, runs, events, [w for w in warnings if w])
+    return ResearchResult(SPEC_VERSION, datetime.now(), req, info, runs, events, [w for w in warnings if w],
+                          skipped)
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +226,8 @@ def render_markdown(result: ResearchResult, header: list[str] | None = None) -> 
         out.append("")
     out.append(f"- Generated: {result.created_at:%Y-%m-%d %H:%M}")
     out.append(f"- Window: {result.dataset_info.get('eval_start', '')} → {result.dataset_info.get('eval_end', '')}")
-    out.append(f"- Universe: {result.dataset_info.get('n_tickers', 0)} KOSPI names "
+    mk = "+".join(result.dataset_info.get("markets") or ["KOSPI"])
+    out.append(f"- Universe: {result.dataset_info.get('n_tickers', 0)} {mk} names "
                f"(requested top {result.dataset_info.get('universe_size_requested', p.universe_size)}), "
                f"liquidity floor {p.min_avg_trading_value / 1e8:,.0f}억 KRW (20d avg value)")
     out.append(f"- Benchmark ETF: {result.dataset_info.get('bm_ticker', '-')} "
@@ -218,7 +235,14 @@ def render_markdown(result: ResearchResult, header: list[str] | None = None) -> 
                f"risk-free: {result.dataset_info.get('rf_source', '-')}")
     out.append(f"- Flows loaded: {result.dataset_info.get('has_flows', False)} "
                f"(coverage {_pct(result.dataset_info.get('flow_coverage', 0.0), 0)}); "
-               f"KOSPI risk-on share of sessions: {_pct(result.dataset_info.get('regime_on_share', 0.0), 0)}")
+               f"{'KOSPI' if mk == 'KOSPI' else 'any-market'} risk-on share of sessions: "
+               f"{_pct(result.dataset_info.get('regime_on_share', 0.0), 0)}")
+    if mk != "KOSPI":
+        by_m = result.dataset_info.get("names_by_market") or {}
+        out.append(f"- Markets (spec 9-25): {', '.join(f'{m} {n}' for m, n in by_m.items()) or mk}; each name's L1/RS on "
+                   f"its own market index; US prices in KRW ({result.dataset_info.get('fx_source', '-')}); "
+                   f"US costs: commission {_pct(req.cost_model.us_commission_rate, 2)}/side + SEC fee on sales, "
+                   "no tax, no tick/limit")
     out.append(f"- Seed {p.seed_krw:,.0f} KRW, annual reset {p.annual_reset}, max positions {p.max_positions}, "
                f"risk/trade {_pct(p.risk_per_trade)}, single-name cap {_pct(p.max_weight, 0)}, "
                f"check weekday {p.check_weekday}")
@@ -227,6 +251,8 @@ def render_markdown(result: ResearchResult, header: list[str] | None = None) -> 
     out.append(f"- Costs (1x): commission {_pct(cm.commission_rate, 3)}, slippage {_pct(cm.slippage_rate, 2)}, "
                f"tax by year {{{tax_desc}}}, ETF slippage 0.02%, tick rounding {cm.round_to_tick}, "
                f"limit-move block {cm.block_limit_up_down}")
+    if result.skipped:
+        out.append("- Requested but not run: " + ", ".join(f"{v} ({why})" for v, why in result.skipped.items()))
     if result.warnings:
         out.append("")
         out.append("## Warnings")

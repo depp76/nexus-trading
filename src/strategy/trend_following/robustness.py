@@ -28,7 +28,7 @@ from strategy.trend_following.config import (
 )
 from strategy.trend_following.dataset import check_dev_window
 from strategy.trend_following.metrics import (
-    NAV_BASE, beta_alpha, cagr, max_drawdown, nav_returns, sharpe, summarize_run,
+    NAV_BASE, beta_alpha, cagr, max_drawdown, nav_returns, session_rf, sharpe, summarize_run,
 )
 from strategy.trend_following.research import (
     SUMMARY_COLUMNS, ResearchRequest, ResearchResult, _num, _pct, _table, run_research,
@@ -123,7 +123,8 @@ def period_stats(nav, dates: list[date], rf, periods=PERIODS) -> dict[str, PerfS
             out[label] = None
             continue
         seq = nav[idx] / base
-        out[label] = PerfStats(sharpe(nav_returns(seq), rf[idx]), cagr(seq, [dates[i] for i in idx]),
+        out[label] = PerfStats(sharpe(nav_returns(seq), session_rf(rf[idx], first_session=i0 == 0)),
+                               cagr(seq, [dates[i] for i in idx]),
                                max_drawdown(seq))
     return out
 
@@ -573,8 +574,13 @@ def _period_alpha_table(res: RobustnessResult) -> list[str]:
                     row += ["-", "-"]
                     continue
                 rf = np.zeros(len(x.nav)) if x.rf_period is None else np.asarray(x.rf_period, dtype=float)
-                beta, alpha = beta_alpha(nav_returns(np.asarray(x.nav, dtype=float)[idx]),
-                                         nav_returns(np.asarray(bm1.nav, dtype=float)[idx]), rf[idx])
+                i0 = int(idx[0])
+                xn, bn = np.asarray(x.nav, dtype=float), np.asarray(bm1.nav, dtype=float)
+                # Each period's first return is measured from the previous period's
+                # last NAV (the seed for the first period), as in period_stats.
+                beta, alpha = beta_alpha(nav_returns(xn[idx], xn[i0 - 1] if i0 > 0 else NAV_BASE),
+                                         nav_returns(bn[idx], bn[i0 - 1] if i0 > 0 else NAV_BASE),
+                                         session_rf(rf[idx], first_session=i0 == 0))
                 row += [_pct(alpha), _num(beta)]
             rows.append(row)
     if not rows:

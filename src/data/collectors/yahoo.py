@@ -412,3 +412,35 @@ def fetch_us_market_data(market="NASDAQ 100", top_n=200, progress_callback=None)
     except Exception:
         logger.error("fetch_us_market_data failed for market=%s", market, exc_info=True)
         return []
+
+
+_US_LISTING_SYM = re.compile(r'^[A-Z]{1,5}([.-][A-Z]{1,2})?$')
+
+
+def get_us_listing_ranked(market: str, pool_size: int) -> list:
+    """The largest common stocks of a US exchange ("NASDAQ" | "NYSE"), largest first:
+    [{"Code": Yahoo symbol, "Name", "Marcap": USD market cap}]. The FDR listing comes in
+    roughly market-cap order, so only its first `pool_size` symbols are quoted; Yahoo's
+    marketCap ranks them and its quoteType drops ETFs / funds / preferreds. Empty on failure."""
+    try:
+        df = get_stock_listing(market)
+    except Exception:
+        logger.warning("US listing failed for %s", market, exc_info=True)
+        return []
+    if df is None or df.empty or "Symbol" not in df.columns:
+        return []
+    names = {}
+    for sym, nm in df[["Symbol", "Name"]].head(max(pool_size, 1)).values.tolist():
+        ysym = str(sym).strip().upper().replace(" ", "-").replace(".", "-")
+        if _US_LISTING_SYM.match(ysym):
+            names.setdefault(ysym, str(nm))
+    quotes = yf_quote_batch(list(names))
+    rows = []
+    for ysym, nm in names.items():
+        q = quotes.get(ysym) or {}
+        cap = q.get("marketCap")
+        if q.get("quoteType", "EQUITY") != "EQUITY" or not cap:
+            continue
+        rows.append({"Code": ysym, "Name": nm, "Marcap": float(cap)})
+    rows.sort(key=lambda r: -r["Marcap"])
+    return rows

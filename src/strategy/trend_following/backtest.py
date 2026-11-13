@@ -30,7 +30,7 @@ import numpy as np
 from strategy.trend_following.config import StrategyParams, Variant
 from strategy.trend_following.costs import CostModel, TradeCost
 from strategy.trend_following.dataset import PriceBook
-from strategy.trend_following.signals import Features, rank_desc_score
+from strategy.trend_following.signals import Features, entry_regime, rank_desc_score
 
 TRIM_REASON = "year_end_trim"
 WEIGHT_TRIM_REASON = "weight_trim"     # 2-4 weekly excess-weight sell (C5 standing cap)
@@ -163,10 +163,18 @@ class Engine:
         return t < len(d) - 1 and d[t + 1].year != d[t].year
 
     def _adv_at(self, t: int, col: int):
-        if self.adv is None:
+        """ADV through session t's close: for fills made at that close (year-end
+        trim, delisting)."""
+        if self.adv is None or t < 0:
             return None
         v = self.adv[t, col]
         return float(v) if np.isfinite(v) else None
+
+    def _adv_open(self, t: int, col: int):
+        """ADV known at session t's open, i.e. through t-1. `adv[t]` holds t's own
+        close x volume, which a fill at the open cannot know (review_codex.md C4).
+        None on the first row or without a value: the liquidity term is then left out."""
+        return self._adv_at(t - 1, col)
 
     def _ledger(self, t: int, cost: TradeCost, value: float) -> None:
         y = self.book.dates[t].year
@@ -183,13 +191,14 @@ class Engine:
         return any(o.ticker == ticker and o.side == side for o in self.pending)
 
     def affordable_qty(self, t: int, market: str, price: float, col: int) -> int:
+        """Whole shares the cash covers at an open fill on session t (costs included)."""
         if price <= 0 or self.cash <= 0:
             return 0
         cm = self.cm
-        per_share = price * (1.0 + (cm.commission_rate + cm.slippage_rate) * cm.cost_multiplier)
+        per_share = price * (1.0 + (cm.commission_rate_for(market) + cm.slippage_rate) * cm.cost_multiplier)
         q = int(math.floor(self.cash / per_share))
         d = self.book.dates[t]
-        adv = self._adv_at(t, col)
+        adv = self._adv_open(t, col)
         while q > 0 and price * q + cm.buy_cost(d, market, price, q, adv).total > self.cash + 1e-9:
             q -= 1
         return q
@@ -205,10 +214,11 @@ class Engine:
 
     # -- execution ---------------------------------------------------------
     def _execute_buy(self, t: int, ticker: str, qty: int, price: float, reason: str, stop_offset) -> None:
+        """Buys only ever fill at the open, so the cost uses the ADV through t-1."""
         b = self.book
         col = b.col(ticker)
         market = b.market_of(ticker)
-        cost = self.cm.buy_cost(b.dates[t], market, price, qty, self._adv_at(t, col))
+        cost = self.cm.buy_cost(b.dates[t], market, price, qty, self._adv_open(t, col))
         self.cash -= price * qty + cost.total
         self._ledger(t, cost, price * qty)
         pos = self.positions.get(ticker)
@@ -228,13 +238,17 @@ class Engine:
             if stop is not None and pos.stop_price is not None:
                 pos.stop_price = min(pos.stop_price, stop)
 
-    def _execute_sell(self, t: int, pos: Position, qty: int, price: float, reason: str) -> None:
+    def _execute_sell(self, t: int, pos: Position, qty: int, price: float, reason: str,
+                      at_open: bool = False) -> None:
+        """`at_open`: a pending order filled at the open (ADV through t-1); otherwise a
+        close-time fill of session t (year-end trim, delisting), which may use adv[t]."""
         b = self.book
         qty = int(min(qty, pos.qty))
         if qty <= 0:
             return
         market = b.market_of(pos.ticker)
-        cost = self.cm.sell_cost(b.dates[t], market, price, qty, self._adv_at(t, pos.col))
+        adv = self._adv_open(t, pos.col) if at_open else self._adv_at(t, pos.col)
+        cost = self.cm.sell_cost(b.dates[t], market, price, qty, adv)
         self.cash += price * qty - cost.total
         self._ledger(t, cost, price * qty)
         share = qty / pos.qty
@@ -275,7 +289,7 @@ class Engine:
                 keep.append(o)
                 continue
             price = self.cm.fill_price(d, b.market_of(pos.ticker), px, "sell")
-            self._execute_sell(t, pos, pos.qty if o.qty is None else o.qty, price, o.reason)
+            self._execute_sell(t, pos, pos.qty if o.qty is None else o.qty, price, o.reason, at_open=True)
 
         for o in buys:
             if o.ticker not in b._col:
@@ -442,6 +456,25 @@ class TrendFollowingPolicy(Policy):
                 out.append(Order(tk, "sell", min(excess, pos.qty), WEIGHT_TRIM_REASON))
         return out
 
+    @staticmethod
+    def pending_sells(eng: Engine) -> tuple[set, set]:
+        """(names with a pending full exit, names with only a pending partial sell).
+        Only a full exit takes a name out of the exit checks and the slot count: a
+        deferred weight trim (limit-down, halt, market holiday) used to block the
+        stop / channel exit of the rest of the position (review_codex.md C2)."""
+        full = {o.ticker for o in eng.pending if o.side == "sell" and o.qty is None}
+        partial = {o.ticker for o in eng.pending if o.side == "sell" and o.qty is not None}
+        return full, partial - full
+
+    @staticmethod
+    def full_exit(eng: Engine, ticker: str, reason: str) -> Order:
+        """One sell-everything order for `ticker`. Its pending partial sells (weight
+        trims) are dropped from the queue, so the exit replaces them instead of
+        filling behind them as a second trade."""
+        eng.pending = [o for o in eng.pending
+                       if not (o.ticker == ticker and o.side == "sell" and o.qty is not None)]
+        return Order(ticker, "sell", None, reason)
+
     def _equal_size(self, equity: float, close: float) -> int:
         if not (np.isfinite(close) and close > 0 and equity > 0):
             return 0
@@ -453,7 +486,7 @@ class TrendFollowingPolicy(Policy):
         orders: list[Order] = []
 
         # 3: exits, checked every session
-        exiting = {o.ticker for o in eng.pending if o.side == "sell"}
+        exiting, trimming = self.pending_sells(eng)
         for tk, pos in eng.positions.items():
             if tk in exiting:
                 continue
@@ -469,22 +502,26 @@ class TrendFollowingPolicy(Policy):
             elif v.flow_exit and f.flow_exit[t, j]:
                 reason = "flow"
             if reason:
-                orders.append(Order(tk, "sell", None, reason))
+                orders.append(self.full_exit(eng, tk, reason))
                 exiting.add(tk)
+                trimming.discard(tk)
 
         # 2-4 weekly adjustment: only ever trim a name above the cap, never add (C5 standing cap)
         trims: list[Order] = []
         if f.check_day[t]:
-            trims = self._weight_trims(t, eng, exiting)
+            trims = self._weight_trims(t, eng, exiting | trimming)    # no second trim while one is pending
             orders.extend(trims)
 
         pending_buys = {o.ticker for o in eng.pending if o.side == "buy"}
         staying = len([tk for tk in eng.positions if tk not in exiting])
         slots = p.max_positions - staying - len(pending_buys)
-        if v.regime and not f.regime_on[t]:
-            return orders     # 2-1: risk-off -> no new entries, exits only
+        # 2-1: risk-off -> no new entries, exits only. Each name follows its own market's
+        # regime (spec 9-25); with one market every column is the same state.
+        entry_ok = entry_regime(f, t, b.N) if v.regime else np.ones(b.N, dtype=bool)
+        if not entry_ok.any():
+            return orders
         if v.mode == "high52":
-            rebalance = self._high52_rebalance(t, eng, exiting, pending_buys)
+            rebalance = self._high52_rebalance(t, eng, exiting, pending_buys, entry_ok)
             # a name ranked out is sold whole; its excess-weight trim would only duplicate that sell
             ranked_out = {o.ticker for o in rebalance if o.reason == "rank_out"}
             return [o for o in orders if o.reason != WEIGHT_TRIM_REASON or o.ticker not in ranked_out] + rebalance
@@ -497,7 +534,7 @@ class TrendFollowingPolicy(Policy):
         for tk in pending_buys:
             if tk in b._col:
                 held[b.col(tk)] = True
-        mask = f.trend_ok[t] & f.breakout[t] & f.liquid[t] & f.traded[t] & ~held
+        mask = f.trend_ok[t] & f.breakout[t] & f.liquid[t] & f.traded[t] & ~held & entry_ok
         if v.volume:
             mask &= f.vol_ok[t]
         if v.flow:
@@ -517,12 +554,15 @@ class TrendFollowingPolicy(Policy):
                                     weight_cap=p.max_weight))
         return orders
 
-    def _high52_rebalance(self, t: int, eng: Engine, exiting: set, pending_buys: set) -> list[Order]:
+    def _high52_rebalance(self, t: int, eng: Engine, exiting: set, pending_buys: set,
+                          entry_ok: np.ndarray | None = None) -> list[Order]:
         f, p, b = self.f, self.p, eng.book
         if not f.check_day[t]:
             return []
         prox = np.where(np.isfinite(f.high52_prox[t]), f.high52_prox[t], -np.inf)
         eligible = f.trend_ok[t] & f.liquid[t] & f.traded[t] & np.isfinite(f.high52_prox[t])
+        if entry_ok is not None:
+            eligible &= entry_ok
         cands = np.flatnonzero(eligible)
         if cands.size == 0:
             return []
@@ -531,7 +571,7 @@ class TrendFollowingPolicy(Policy):
         orders: list[Order] = []
         for tk in list(eng.positions):
             if tk not in target and tk not in exiting:
-                orders.append(Order(tk, "sell", None, "rank_out"))
+                orders.append(self.full_exit(eng, tk, "rank_out"))
                 exiting.add(tk)
         equity = eng.equity_now
         for j in target_cols:

@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QLabel, QTabWidget,
     QCheckBox,
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QTranslator, QLibraryInfo
 from PyQt6.QtGui import QFont, QShortcut, QKeySequence
 
 from paths import ENV_FILE, APP_LOG_FILE
@@ -294,6 +294,11 @@ if __name__ == "__main__":
     # (notably QTabBar and QHeaderView theming); Fusion renders every rule
     # (docs/ui.md 6.4).
     app.setStyle("Fusion")
+    # Qt's own buttons and dialogs (message-box Yes/No, input dialogs, file
+    # dialogs) in Korean, like the app's labels (docs/ui.md 8.11).
+    _qt_ko = QTranslator(app)
+    if _qt_ko.load("qtbase_ko", QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
+        app.installTranslator(_qt_ko)
     app_font = create_font(style_name="Semilight")
     app.setFont(app_font)
     apply_matplotlib_font()

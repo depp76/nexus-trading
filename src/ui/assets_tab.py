@@ -140,7 +140,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
 
         # ---Header row: currency toggle + USD/KRW rate (docs/ui.md 4.1/4.3) ---
         header_row = QHBoxLayout()
-        lbl_currency = QLabel("Currency:")
+        lbl_currency = QLabel("통화:")
         lbl_currency.setFont(create_font(FONT_BODY, style_name="Semilight"))
         header_row.addWidget(lbl_currency)
 
@@ -182,7 +182,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
 
         self._asset_edit = QLineEdit()
         self._asset_edit.setFont(create_font(FONT_BODY, style_name="Semilight"))
-        self._asset_edit.setPlaceholderText("Total Assets (auto-filled)")
+        self._asset_edit.setPlaceholderText("자동 입력")
         self._asset_edit.setFixedWidth(120)
         self._asset_edit.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._asset_edit.textEdited.connect(self._fmt_asset_input)
@@ -192,16 +192,16 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         # This Week/Graph/Export are secondary utilities and stay neutral.
         # Delete lives on the table's right-click menu and the Delete key, as
         # in the other tabs -- never an always-visible button.
-        add_btn = make_button("Add Record", "primary", self._add_record)
-        today_btn = make_button("This Week", on_click=self._select_latest_week)
+        add_btn = make_button("기록 추가", "primary", self._add_record)
+        today_btn = make_button("이번 주", on_click=self._select_latest_week)
 
-        lbl_date = QLabel("Date:")
+        lbl_date = QLabel("날짜:")
         lbl_date.setFont(create_font(FONT_BODY, style_name="Semilight"))
-        lbl_assets = QLabel("Total Assets:")
+        lbl_assets = QLabel("총자산:")
         lbl_assets.setFont(create_font(FONT_BODY, style_name="Semilight"))
 
-        live_asset_title = QLabel("Current Total Assets:")
-        live_asset_title.setToolTip("Account valuation + cumulative withdrawals, from Trading History")
+        live_asset_title = QLabel("현재 총자산:")
+        live_asset_title.setToolTip("계좌 평가액 + 누적 출금액 (Trading History 기준)")
         live_asset_title.setFont(create_font(FONT_BODY, style_name="Semilight"))
 
         # docs/ui.md issue #7 (mockup): these were QLineEdit(readOnly), which
@@ -213,7 +213,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self.live_asset_lbl.setStyleSheet(f"color:{TEXT};")
         self.live_asset_lbl.setFixedWidth(120)
 
-        live_diff_title = QLabel("Weekly P/L:")
+        live_diff_title = QLabel("주간 손익:")
         live_diff_title.setFont(create_font(FONT_BODY, style_name="Semilight"))
 
         self.live_diff_lbl = QLabel("-")
@@ -237,11 +237,11 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         # Graph/Export sit on the header row, right-aligned above the chart
         # they belong to: all on one controls row the tab needed ~1,540px
         # and ran past the screen edge (user report 2026-10-15).
-        graph_btn = make_button("Graph", on_click=self._show_graph)
+        graph_btn = make_button("그래프", on_click=self._show_graph)
         header_row.addWidget(graph_btn)
 
-        export_btn = make_button("Export", on_click=self._on_export_clicked,
-                                 tooltip="Export the asset snapshot table to Excel or CSV")
+        export_btn = make_button("내보내기", on_click=self._on_export_clicked,
+                                 tooltip="총자산 기록 표를 Excel 또는 CSV로 내보냅니다")
         header_row.addWidget(export_btn)
 
         # Actions on the right, the primary last (docs/ui.md 8.4).
@@ -290,7 +290,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         if not self._table.selectedIndexes():
             return
         menu = QMenu(self._table)
-        delete_action = menu.addAction("Delete Record...")
+        delete_action = menu.addAction("기록 삭제...")
         if menu.exec(self._table.viewport().mapToGlobal(pos)) is delete_action:
             self._delete_selected()
 
@@ -461,7 +461,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
             trade_db.save_asset_records(self._records)
         except Exception as e:
             logger.error("[TradingRecord] Save error: %s", e, exc_info=True)
-            QMessageBox.warning(self, _TITLE, f"Failed to save asset records:\n{e}")
+            QMessageBox.warning(self, _TITLE, f"총자산 기록을 저장하지 못했습니다:\n{e}")
 
     # ---Background metrics warm-up (roadmap 2026-09-18, review.md 1-2) ---
     def _start_metrics_preload(self):
@@ -494,14 +494,14 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         date_str = self._selected_date()
         raw_amt  = self._asset_edit.text().replace(',', '').strip()
         if not date_str:
-            QMessageBox.warning(self, _TITLE, "Select a Friday.")
+            QMessageBox.warning(self, _TITLE, "금요일을 선택하세요.")
             return
         try:
             total = float(raw_amt)
         except ValueError:
             total = math.nan
         if not math.isfinite(total):  # float() takes "nan"/"inf" (review_codex.md #6)
-            QMessageBox.warning(self, _TITLE, "Total Assets must be a number.")
+            QMessageBox.warning(self, _TITLE, "총자산은 숫자로 입력하세요.")
             return
 
         # docs/ui.md 4.5: the value was auto-filled from the live position
@@ -539,7 +539,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         if not dates_to_delete:
             return
         reply = QMessageBox.question(
-            self, _TITLE, f"Delete {len(dates_to_delete)} record(s)?",
+            self, _TITLE, f"기록 {len(dates_to_delete)}건을 삭제할까요?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -650,7 +650,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self._report_start = first[:8] + "01"
         if self._graph_dlg is not None:
             self._graph_dlg.report_btn.setEnabled(False)
-            self._graph_dlg.report_btn.setText("Loading...")
+            self._graph_dlg.report_btn.setText("불러오는 중...")
         thread = self._track_thread(AssetReportThread(self._report_start), '_report_thread')
         thread.finished.connect(self._on_report_fetched)
         thread.start()
@@ -659,16 +659,16 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         parent = self._graph_dlg or self
         if self._graph_dlg is not None:
             self._graph_dlg.report_btn.setEnabled(True)
-            self._graph_dlg.report_btn.setText("Report")
+            self._graph_dlg.report_btn.setText("리포트")
         if error or not kospi:
-            QMessageBox.warning(parent, _TITLE, f"Could not load the report data.\n{error or 'No KOSPI history.'}")
+            QMessageBox.warning(parent, _TITLE, f"리포트 데이터를 불러오지 못했습니다.\n{error or 'KOSPI 시세가 없습니다.'}")
             return
         settings = QSettings(*self._SETTINGS_SCOPE)
         end_cash = self._settings_amount(settings, "deposit") + self._settings_amount(settings, "withdrawal")
         points = report_dates([d for d, _ in kospi], self._report_start, datetime.now().strftime("%Y-%m-%d"))
         rows = build_report(trades, end_cash, points, closes, kospi, usd_krw)
         if not rows:
-            QMessageBox.information(parent, _TITLE, "No trading days in the recorded period.")
+            QMessageBox.information(parent, _TITLE, "기록된 기간에 거래일이 없습니다.")
             return
         AssetsReportDialog(rows, parent).exec()
 
@@ -751,7 +751,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
                 wb.save(path)
         except Exception as e:
             logger.warning("Total assets export failed: %s", e, exc_info=True)
-            QMessageBox.warning(self, _TITLE, f"Failed to export:\n{e}")
+            QMessageBox.warning(self, _TITLE, f"내보내지 못했습니다:\n{e}")
             return
 
         self.status_message.emit(f"Exported {len(rows)} row(s) to {path}")
@@ -788,7 +788,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
                     self._save_records()
                     self._refresh_table()
                 except ValueError:
-                    QMessageBox.warning(self, _TITLE, "Invalid number format.")
+                    QMessageBox.warning(self, _TITLE, "숫자 형식이 올바르지 않습니다.")
 
     # ---Table rendering ---
     # docs/ui.md issue #9 (mockup): "정렬이 꺼져 있다" -- sorting is enabled

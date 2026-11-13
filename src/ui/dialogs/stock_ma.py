@@ -63,6 +63,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont, QFontMetrics
 
+from ui.trend_score_section import TrendScoreSection
 from ui.common import create_font, setup_table, BTN_H, FONT_TITLE, FONT_BODY, FONT_SMALL, FONT_CAPTION
 from ui.colors import PROFIT, LOSS, MA_RAMP, MA_DIV_NEUTRAL_PCT
 from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_FAINT, LINE, SURFACE
@@ -70,6 +71,7 @@ from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_FAINT, LINE, SURFACE
 logger = logging.getLogger(__name__)
 
 _STOCK_MARKETS = ("KOSPI", "KOSDAQ", "NASDAQ 100", "S&P500")
+_TREND_SCORE_MARKETS = ("KOSPI", "KOSDAQ")     # what the Universe's Trend Score scores
 _SIMPLE_CHART_TICKERS = ("CL=F", "^VIX", "VKOSPI")
 _SCROLL_MAX = 10000
 _TICK_PT = FONT_SMALL          # issue #12: nothing on the chart below 9pt
@@ -137,8 +139,13 @@ class StockMaDialog(QDialog):
     """Price + moving averages for one instrument, with volume, divergence and
     RSI panels (docs/ui.md MA Chart Redesign)."""
 
-    def __init__(self, ticker, name, market, df, investor_data=None, parent=None, change_mode='pct'):
+    def __init__(self, ticker, name, market, df, investor_data=None, parent=None, change_mode='pct',
+                 trend_rec=None):
         super().__init__(parent)
+        # The last Trend Score run (scoring.Recommendation) when the dialog was
+        # opened from Trading Universe; KR stocks get its breakdown in the
+        # right panel (ui.trend_score_section, docs/ui.md 8.10).
+        self._trend_rec = trend_rec
         self._ticker = ticker
         self._name = name
         self._market = market
@@ -210,7 +217,7 @@ class StockMaDialog(QDialog):
         if self.scrollbar is not None:
             chart_v.addWidget(self.scrollbar)
 
-        close_btn = QPushButton("Close")
+        close_btn = QPushButton("닫기")
         close_btn.clicked.connect(self.accept)
         root.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
@@ -295,6 +302,12 @@ class StockMaDialog(QDialog):
         panel = QWidget()
         v = QVBoxLayout(panel)
         v.setContentsMargins(0, 0, 0, 0)
+
+        self.trend_section = None
+        if self._market in _TREND_SCORE_MARKETS:
+            self.trend_section = TrendScoreSection(self._trend_rec, self._ticker)
+            v.addWidget(self.trend_section)
+            v.addSpacing(10)
 
         inv = self._investor_data
         is_wti_futures = bool(inv) and self._ticker == "CL=F" and 'Contract' in inv[0]

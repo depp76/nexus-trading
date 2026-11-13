@@ -23,7 +23,7 @@ import numpy as np
 from strategy.trend_following.backtest import Engine, Order, TrendFollowingPolicy
 from strategy.trend_following.config import StrategyParams, Variant
 from strategy.trend_following.scoring import ScoreBook
-from strategy.trend_following.signals import Features
+from strategy.trend_following.signals import Features, entry_regime
 
 REASON_MA50 = "ma50_exit"        # absolute sell: close below the 50-day average (2-5 (5) absolute 1)
 REASON_STOP = "stop"             # absolute sell: initial ATR stop (2-5 (5) absolute 2, same as 3-2)
@@ -44,7 +44,7 @@ class ScoringPolicy(TrendFollowingPolicy):
         orders: list[Order] = []
         weekly = bool(f.check_day[t])
 
-        exiting = {o.ticker for o in eng.pending if o.side == "sell"}
+        exiting, trimming = self.pending_sells(eng)     # only a full exit skips the checks (C2)
         for tk, pos in eng.positions.items():
             if tk in exiting:
                 continue
@@ -60,13 +60,16 @@ class ScoringPolicy(TrendFollowingPolicy):
             elif weekly and sb.gate[t, j] and sb.total_rank[t, j] < p.score_sell_pct:
                 reason = REASON_RANK
             if reason:
-                orders.append(Order(tk, "sell", None, reason))
+                orders.append(self.full_exit(eng, tk, reason))
                 exiting.add(tk)
+                trimming.discard(tk)
 
         if weekly:
-            orders.extend(self._weight_trims(t, eng, exiting))     # names already being sold are skipped there
+            # names being sold, or with a trim still pending, are skipped there
+            orders.extend(self._weight_trims(t, eng, exiting | trimming))
 
-        if not weekly or not f.regime_on[t]:
+        entry_ok = entry_regime(f, t, eng.book.N)     # each name's own market regime (spec 9-25)
+        if not weekly or not entry_ok.any():
             return orders                       # buys only on a Risk-on check day
 
         pending_buys = {o.ticker for o in eng.pending if o.side == "buy"}
@@ -83,7 +86,7 @@ class ScoringPolicy(TrendFollowingPolicy):
                 held[b.col(tk)] = True
         rank = sb.total_rank[t]
         with np.errstate(invalid="ignore"):
-            mask = sb.gate[t] & (rank >= p.score_buy_pct) & f.traded[t] & ~held
+            mask = sb.gate[t] & (rank >= p.score_buy_pct) & f.traded[t] & ~held & entry_ok
         cands = np.flatnonzero(mask)
         if cands.size == 0:
             return orders

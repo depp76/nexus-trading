@@ -25,7 +25,10 @@ modules to spec sections and records every implementation decision that deviates
 (current-constituent universe, year-end trim at the close, no weekly re-weighting, no sector
 cap, KODEX 200TR as BM1 data, CD91 from ECOS/CSV/constant). **Real-data results are recorded in
 spec 9-19** (development window 2021-2024): the J1 verdict is that no variant is adoptable, all
-ten were discarded, and the 2025 hold-out has not been opened. The scoring mode also feeds the
+ten were discarded, and the 2025 hold-out had not been opened as of that record. Since
+2026-11-13 the Strategy tab's end date defaults to today and a run past `DEV_END` passes
+`allow_holdout=True` and is labelled as including the hold-out (spec 9-23); running one
+counts as opening it. The scoring mode also feeds the
 Trading Universe tab's "Trend Score" button, which pins the weekly Top 10 / Bottom 10 to the top
 of its table (`TrendScoreThread`; Top rows, then Bottom rows, then the rest in the default
 order, with a `Top n (score)` / `Bottom n (score)` tag in the identity cell; the checkable
@@ -52,7 +55,7 @@ working directory:
 ### Verification
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest src\tests -q      # ~640 tests, no network, ~30 s
+.\.venv\Scripts\python.exe -m pytest src\tests -q      # ~700 tests, no network, ~30 s
 .\.venv\Scripts\ruff.exe check src                      # pyflakes rules only (ruff.toml)
 ```
 
@@ -78,7 +81,9 @@ Dev tooling is in `requirements-dev.txt`
   year-keyed tax table, 2023-01-25 tick-ladder reform, `scaled()`/`for_etf()`), `signals.py`
   (date x ticker arrays for L1-L4 and the exits; `regime_state` is the weekly-held L1 state),
   `dataset.py` (`PriceBook`/`Dataset`; `build_dataset` is pure and what tests feed,
-  `load_dataset` fetches through `data.*`), `backtest.py` (`Engine` + `Policy`, t+1-open fills
+  `load_dataset` fetches through `data.*`; `markets=` other than KOSPI alone goes through
+  `_load_multi_market`: KRW-ranked union of KOSPI/KOSDAQ/NASDAQ/NYSE, US prices in KRW,
+  per-market index in `Dataset.index_by_market`, spec 9-25), `backtest.py` (`Engine` + `Policy`, t+1-open fills
   with sells first, cash interest, annual reset at the year's last close, per-year cost
   ledger; `TrendFollowingPolicy`), `benchmarks.py` (BM1-BM4 as policies on the same engine),
   `metrics.py` (6-4 scorecard incl. the BM1/BM3-relative block), `event_study.py` (6-1),
@@ -94,9 +99,11 @@ Dev tooling is in `requirements-dev.txt`
   no engine/UI caller yet; 9-20), `snapshot.py` (`save_snapshot`/`load_snapshot` of a `Dataset` under `cache/snapshots/` with a
   SHA-256 manifest, for byte-identical reruns), `run.py` (headless CLI: `--build-snapshot`,
   `--snapshot`, `--factor-ic`, `--robustness`, `--variants`, ...), `raw_check.py` (A5 sample check
-  of split-adjusted vs unadjusted prices). The Strategy tab runs the research matrix (one
-  checkbox per `VARIANTS` entry, C1-C3 included); factor IC and robustness reports come from
-  `run.py` only.
+  of split-adjusted vs unadjusted prices), `variant_info.py` (`describe_variant`: each matrix
+  row's rules in Korean, built from the `Variant` flags and `StrategyParams`). The
+  Strategy tab runs the research matrix; its variants are picked in `VariantPickerDialog`
+  (list + description of the highlighted row; A3-A5 untickable while Investor flows is off);
+  factor IC and robustness reports come from `run.py` only.
   Strategy code imports `data.*` directly (never `data_fetcher`); `data/` never imports it.
   Tests live in `src/tests/strategy/trend_following/` on synthetic price paths
   (`helpers.synthetic_dataset`).
@@ -107,8 +114,15 @@ Dev tooling is in `requirements-dev.txt`
 - **`src/ui/`**: `universe_tab.py` (`UniverseTab`), `history_tab.py` (`TradingHistoryTab`),
   `assets_tab.py` (`TradingRecordTab`), `strategy_tab.py` (`StrategyTab`, the sub-tab host
   that merges its children's `collect_threads_to_stop()`), `trend_following_tab.py`
-  (`TrendFollowingTab`: request form -> `TrendFollowingResearchThread` -> scorecard table,
-  rebased NAV chart, event-study table, "Save Report" to `reports/`),
+  (`TrendFollowingTab`: request form (a wrapping `FlowLayout`) or its chip-row summary ->
+  `TrendFollowingResearchThread` -> variant/cost segments, KPI cards, NAV + drawdown chart,
+  target-check card, result tabs (comparison, all metrics, monthly, trades, event study,
+  warnings), "Save Report" to `reports/`; docs/ui.md 8.10), `strategy_widgets.py` (that
+  screen's widgets: `KpiRow`, `TargetCheckCard`, `SharpeBarDelegate`, `SegmentRow`, table
+  fillers, `TARGET_SHARPE`/`TARGET_MDD`; the trade list shared by the tab and its popup is
+  `dialogs/strategy_trades.py` `StrategyTradesView`), `trend_score_section.py` (`TrendScoreSection`: the
+  MA chart dialog's block with the last Trend Score run's breakdown and gate for a KOSPI/KOSDAQ name;
+  `UniverseTab._last_recommendation` is passed in through `StockMaDialog(trend_rec=...)`),
   `widgets.py` (`StockTable`, `NumericItem`, `FilterPopup`, `GroupedHeaderView`), `delegates.py`
   (every custom-painted table cell: `CellDelegate` base + the Universe/History delegates),
   `ma_chart.py` (`StockMaLauncherMixin`, the MA-chart dialog launcher; `UniverseTab` is its
@@ -121,7 +135,7 @@ Dev tooling is in `requirements-dev.txt`
   `QCalendarWidget` rules have no current caller and are kept for the next `QDateEdit`),
   `dialogs/` (one module per
   dialog group: `index_ma`, `stock_ma`, `trade_edit`, `trade_history`, `assets_graph`,
-  `holdings_summary`, `assets_report`, `stock_report`; import from `ui.dialogs`),
+  `holdings_summary`, `assets_report`, `stock_report`, `variant_picker`, `strategy_trades`; import from `ui.dialogs`),
   `history_table.py` (cell factories, `fill_table_rows`, `SectionTable` + the column
   `SECTIONS` for the history grid), `history_calc.py` (pure P/L maths, no Qt:
   `compute_pl_fields`, `build_monthly_rows`, `summarize_positions`), `assets_report.py` (pure maths for the Total Assets graph's
@@ -130,8 +144,10 @@ Dev tooling is in `requirements-dev.txt`
   (`create_font` + the `FONT_*` point-size scale, `FONT_FAMILIES` / `FONT_FAMILY_CSS`,
   `apply_matplotlib_font`, status color constants,
   input validators, `make_button`/`BTN_H` (every push button), `setup_table`/`TABLE_ROW_H` (every data
-  table), `make_footer_label`/`TAB_MARGINS`/`TAB_SPACING` (the tab skeleton), `install_table_keys`
-  (Ctrl+C/Enter on a table), `KpiStrip` (History's KPI row; all docs/ui.md 8), `atomic_save_json` /
+  table), `make_footer_label`/`TAB_MARGINS`/`TAB_SPACING` (the tab skeleton), `FlowLayout` (wrapping
+  rows; the Strategy settings form), `install_table_keys`
+  (Ctrl+C/Enter on a table), `KpiStrip` (History's KPI row), `KpiCard` / `make_badge` (Strategy
+  cards and status badges; all docs/ui.md 8), `atomic_save_json` /
   `safe_load_json`, `retire_thread`, `ThreadOwnerMixin`). Tabs never
   reference each other
   directly; `MainWindow` connects their signals (`status_message`, `refresh_started`,
@@ -234,6 +250,21 @@ not fixtures. Trading History principal/deposit/withdrawal live in `QSettings`
   (`data/collectors/naver.py`, `data/collectors/krx.py`), and the `'맑은 고딕 Semilight'`
   font-family fallback name (`ui/common.py`). `gemini_helper.py`'s prompts were included in
   the sweep — see the note on that file above for the response-language consequence.
+  A second exception (user direction, 2026-11-13): the strategy-variant descriptions the
+  Strategy tab's picker shows (`strategy/trend_following/variant_info.py` strings, the
+  `ui/dialogs/variant_picker.py` list labels) are Korean, and the tests assert those
+  literals; their identifiers, comments and docstrings stay English. The same applies to
+  the one-line explanations under the Strategy KPI cards and the Universe score cards
+  (`ui/strategy_widgets.py` `KPI_CARDS`, `ui/trend_score_section.py`) and the E2/A5 tooltip,
+  worded as in `docs/ui_redesign_2026-11.md` (2026-11-13).
+  Third and broadest (user direction, 2026-11-13): **visible UI labels are Korean** for
+  buttons, toolbar labels and placeholders, context menus, dialog buttons/titles/field labels
+  and message-box texts (docs/ui.md 8.11). Kept English: the four top-level tab names,
+  message-box titles (they are the tab names, 8.5), metric abbreviations (CAGR, MDD, Sharpe,
+  tPER, MA20 Div, RSI ...), the narrow numeric column headers, IDs (A0-C3, BM1-BM4) and
+  market names. Table column headers, the MA chart dialog and footer/status-bar messages
+  were not converted (yet). Qt's own dialogs get Korean from the bundled `qtbase_ko`
+  translator `main.py` installs.
 - UI 변경은 `docs/ui.md` 의 전역 규칙을 따른다.
 - One font family app-wide, Malgun Gothic Semilight (user direction, 2026-09-19): every
   widget goes through `create_font()` (sizes from the `FONT_*` scale in `ui/common.py`),

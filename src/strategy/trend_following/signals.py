@@ -137,6 +137,9 @@ class Features:
     check_day: np.ndarray       # 1-D bool, weekly check days
     has_flows: bool
     flow_coverage: float        # fraction of (date, ticker) cells with a flow value
+    # T x N bool: the L1 state of each name's own market (spec 9-25). With one market every
+    # column equals regime_on; regime_on is then "any selected market risk-on".
+    regime_cols: np.ndarray | None = None
 
 
 def compute_features(ds, params: StrategyParams, flow_lead: int = 0) -> Features:
@@ -167,8 +170,13 @@ def compute_features(ds, params: StrategyParams, flow_lead: int = 0) -> Features
 
     ret_w = close / shift(close, p.rs_window) - 1.0
     idx = np.asarray(ds.index_close, dtype=float)
-    idx_ret = idx / shift(idx, p.rs_window) - 1.0
-    rs = ret_w - idx_ret[:, None]
+    by_market = getattr(ds, "index_by_market", None)
+    if by_market:
+        idx_cols = ds.index_cols()
+        rs = ret_w - (idx_cols / shift(idx_cols, p.rs_window) - 1.0)
+    else:
+        idx_ret = idx / shift(idx, p.rs_window) - 1.0
+        rs = ret_w - idx_ret[:, None]
 
     high52 = rolling(high, p.high_52w_window, "max", min_periods=max(20, int(p.high_52w_window * 0.8)))
     high52_prox = close / high52
@@ -195,14 +203,35 @@ def compute_features(ds, params: StrategyParams, flow_lead: int = 0) -> Features
         flow_exit = np.zeros(close.shape, dtype=bool)
         flow_coverage = 0.0
 
-    regime_on, check_day = regime_state(idx, b.dates, p)
+    if by_market:
+        states = {m: regime_state(arr, b.dates, p) for m, arr in by_market.items()}
+        check_day = next(iter(states.values()))[1]
+        regime_cols = np.empty(close.shape, dtype=bool)
+        base_state = regime_state(idx, b.dates, p)[0]
+        for j, tk in enumerate(b.tickers):
+            st = states.get(b.market_of(tk))
+            regime_cols[:, j] = st[0] if st is not None else base_state
+        regime_on = np.any(np.stack([st[0] for st in states.values()]), axis=0)
+    else:
+        regime_on, check_day = regime_state(idx, b.dates, p)
+        regime_cols = np.repeat(regime_on[:, None], close.shape[1], axis=1)
 
     return Features(
         trend_ok=trend_ok, breakout=breakout, vol_ok=vol_ok, flow_ok=flow_ok, liquid=liquid, traded=traded,
         exit_channel=exit_channel, flow_exit=flow_exit, atr=atr_arr, adv=adv,
         flow_strength=flow_strength, rs=rs, high52_prox=high52_prox, ma_short=ma_s,
         regime_on=regime_on, check_day=check_day, has_flows=has_flows, flow_coverage=flow_coverage,
+        regime_cols=regime_cols,
     )
+
+
+def entry_regime(f, t: int, n: int) -> np.ndarray:
+    """Per-name L1 state on session t: `f.regime_cols[t]` when the features carry it
+    (several markets, spec 9-25), else the single `regime_on[t]` for every name."""
+    cols = getattr(f, "regime_cols", None)
+    if cols is not None:
+        return np.asarray(cols[t], dtype=bool)
+    return np.full(n, bool(f.regime_on[t]))
 
 
 def rank_desc_score(*columns: np.ndarray) -> np.ndarray:

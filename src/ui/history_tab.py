@@ -65,6 +65,8 @@ def _make_rw_edit(placeholder: str = "") -> QLineEdit:
 
 # Message boxes are titled with the tab name (docs/ui.md 8.5).
 _TITLE = "Trading History"
+# Period filter keys (1M/3M/YTD/All) -> button label; the keys stay what the filter code compares.
+_PERIOD_LABELS = {"All": "전체"}
 
 
 class TradingHistoryTab(ThreadOwnerMixin, QWidget):
@@ -207,7 +209,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         row.setContentsMargins(0, 0, 0, 0)
 
         self._open_stocks_combo = QComboBox()
-        self._open_stocks_combo.addItem("Current Holdings...")
+        self._open_stocks_combo.addItem("보유 종목...")
         self._open_stocks_combo.setFixedHeight(_BTN_H)
         self._open_stocks_combo.setMinimumWidth(150)
         self._open_stocks_combo.setMaximumWidth(250)
@@ -215,20 +217,20 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         row.addWidget(self._open_stocks_combo)
 
         self._search_stock_pl_edit = QLineEdit()
-        self._search_stock_pl_edit.setPlaceholderText("Search company")
+        self._search_stock_pl_edit.setPlaceholderText("종목 검색")
         self._search_stock_pl_edit.setFixedHeight(_BTN_H)
         self._search_stock_pl_edit.setMinimumWidth(150)
         self._search_stock_pl_edit.setMaximumWidth(250)
         self._search_stock_pl_edit.returnPressed.connect(self._on_search_stock_pl)
         row.addWidget(self._search_stock_pl_edit)
-        row.addWidget(make_button("Search", on_click=self._on_search_stock_pl))
+        row.addWidget(make_button("검색", on_click=self._on_search_stock_pl))
         row.addSpacing(8)
 
         # Period filter (mockup "periods": 1M/3M/YTD/All), by buy date.
         self._period_filter = "All"
         self._period_buttons = {}
         for label in ("1M", "3M", "YTD", "All"):
-            btn = make_button(label, width=48, checkable=True, checked=(label == "All"))
+            btn = make_button(_PERIOD_LABELS.get(label, label), width=48, checkable=True, checked=(label == "All"))
             btn.clicked.connect(lambda checked, p=label: self._on_period_filter_changed(p))
             row.addWidget(btn)
             self._period_buttons[label] = btn
@@ -242,7 +244,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         # label named the other mode).
         self._sort_by_date = False
         self._group_buttons = {}
-        for key, label in (("status", "By Status"), ("month", "By Month")):
+        for key, label in (("status", "상태별"), ("month", "월별")):
             btn = make_button(label, width=84, checkable=True, checked=(key == "status"))
             btn.clicked.connect(lambda _c, k=key: self._on_grouping_changed(k))
             row.addWidget(btn)
@@ -254,7 +256,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         # way to know why.
         self._hide_stale_closed = True
         self._stale_toggle_btn = make_button(
-            "Hide stale prices", tooltip="Hide the current price of trades closed more than 30 days ago",
+            "오래된 시세 숨김", tooltip="매도 후 30일이 지난 거래의 현재가를 숨깁니다",
             checkable=True, checked=True)
         self._stale_toggle_btn.toggled.connect(self._on_stale_toggle_changed)
         row.addWidget(self._stale_toggle_btn)
@@ -262,11 +264,11 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         row.addStretch()
 
         # Actions; Add Trade is the tab's one primary (docs/ui.md 8.1).
-        row.addWidget(make_button("Summary", on_click=self._show_holdings_summary))
-        self._fetch_dep_btn = make_button("Fetch Deposit", on_click=self._fetch_account_deposit)
+        row.addWidget(make_button("종목별 요약", on_click=self._show_holdings_summary))
+        self._fetch_dep_btn = make_button("예수금 조회", on_click=self._fetch_account_deposit)
         row.addWidget(self._fetch_dep_btn)
-        row.addWidget(make_button("Reload", on_click=self._reload_current))
-        row.addWidget(make_button("Add Trade", "primary", self._show_add_trade_dialog))
+        row.addWidget(make_button("다시 읽기", on_click=self._reload_current))
+        row.addWidget(make_button("거래 추가", "primary", self._show_add_trade_dialog))
         return row
 
     def _on_grouping_changed(self, key: str):
@@ -326,7 +328,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         if not self._selected_trade_records():
             return
         menu = QMenu(self._table)
-        delete_action = menu.addAction("Delete Trade...")
+        delete_action = menu.addAction("거래 삭제...")
         if menu.exec(self._table.viewport().mapToGlobal(pos)) is delete_action:
             self._delete_selected_trades()
 
@@ -336,10 +338,10 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             return
         names = ", ".join(f"{rec.get('company', '')} ({rec.get('buy_date', '')})" for _, rec in targets[:3])
         if len(targets) > 3:
-            names += f" and {len(targets) - 3} more"
+            names += f" 외 {len(targets) - 3}건"
         reply = QMessageBox.question(
             self, _TITLE,
-            f"Delete {len(targets)} trade(s)?\n{names}\n\nThis removes them from portfolio.db.",
+            f"거래 {len(targets)}건을 삭제할까요?\n{names}\n\nportfolio.db에서 지워집니다.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -354,7 +356,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
                     deleted_keys.add(key)
             except Exception as e:
                 logger.error("Failed to delete trade %s: %s", key, e, exc_info=True)
-                QMessageBox.warning(self, _TITLE, f"Failed to delete trade:\n{e}")
+                QMessageBox.warning(self, _TITLE, f"거래를 삭제하지 못했습니다:\n{e}")
                 break
         # Filter by orig_key rather than list.remove(rec): dict equality would
         # match a different row with identical field values (e.g. two same-day
@@ -425,7 +427,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             logger.error("Failed to save trade to DB: %s", e, exc_info=True)
             QMessageBox.critical(
                 self, _TITLE,
-                f"Failed to save trade to database:\n{e}\n\nThe record was not added."
+                f"거래를 데이터베이스에 저장하지 못했습니다:\n{e}\n\n기록이 추가되지 않았습니다."
             )
             return False
 
@@ -461,7 +463,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             logger.error("Failed to save overrides to DB: %s", e, exc_info=True)
             QMessageBox.warning(
                 self, _TITLE,
-                f"Failed to save modified trades to database:\n{e}"
+                f"수정한 거래를 데이터베이스에 저장하지 못했습니다:\n{e}"
             )
             return False
 
@@ -712,7 +714,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._fetch_dep_btn.setEnabled(True)
         if err:
             self.status_message.emit("Account deposit fetch failed")
-            QMessageBox.critical(self, _TITLE, f"Failed to fetch the account deposit:\n{err}")
+            QMessageBox.critical(self, _TITLE, f"계좌 예수금을 조회하지 못했습니다:\n{err}")
             return
         self._deposit_edit.setText(f"{int(val):,}")
         self._on_deposit_changed()

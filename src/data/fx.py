@@ -68,6 +68,17 @@ def get_usd_krw_rate():
         return rate
 
 
+def get_usd_krw_history() -> pl.DataFrame:
+    """Daily USD/KRW (Date, Close) from the same cached Yahoo series the spot
+    rate reads; empty when it cannot be fetched. The Trend Following research
+    converts US prices to KRW with it (spec 9-25)."""
+    get_usd_krw_rate()
+    df = _USD_KRW_CACHE.get("df")
+    if df is None or df.is_empty() or "Close" not in df.columns or "Date" not in df.columns:
+        return pl.DataFrame()
+    return df.select(["Date", "Close"])
+
+
 def get_usd_krw_rate_for_date(date_str: str) -> float:
     """Returns USD/KRW rate for a specific date (YYYY-MM-DD)."""
     get_usd_krw_rate()

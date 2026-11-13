@@ -44,17 +44,29 @@ TICK_SIZE_TABLES: list[tuple[date, dict[str, list[tuple[float, int]]]]] = [
 ]
 
 
+# US listings (spec 9-25): no transaction tax, no KRX tick ladder or daily price
+# limit; prices reach the engine already converted to KRW, so a $0.01 tick has
+# no fixed KRW size and fills are not snapped (the spread is in the slippage).
+US_COST_MARKETS = frozenset({"NASDAQ", "NYSE"})
+
+
 def normalize_market(market) -> str:
-    """'KOSPI' | 'KOSDAQ' | 'ETF' -- anything unknown is treated as KOSPI."""
+    """'KOSPI' | 'KOSDAQ' | 'ETF' | 'NASDAQ' | 'NYSE' -- anything unknown is treated as KOSPI."""
     m = str(market or "").strip().upper()
-    if m in ("KOSDAQ", "ETF"):
+    if m in ("KOSDAQ", "ETF") or m in US_COST_MARKETS:
         return m
     return "KOSPI"
 
 
+def is_us_market(market) -> bool:
+    return normalize_market(market) in US_COST_MARKETS
+
+
 def tick_size(trade_date: date, market, price: float) -> int:
-    """Tick size (KRW) for `price` on `trade_date` in `market`."""
+    """Tick size (KRW) for `price` on `trade_date` in `market`; 0 (no grid) for a US listing."""
     m = normalize_market(market)
+    if m in US_COST_MARKETS:
+        return 0
     for effective_from, ladders in TICK_SIZE_TABLES:
         if trade_date >= effective_from:
             for bound, tick in ladders[m]:
@@ -113,6 +125,10 @@ class CostModel:
     cost_multiplier: float = 1.0
     slippage_liquidity_coeff: float = 0.0
     limit_move_pct: float = 0.30      # KRX daily price limit (+-30% since 2015-06)
+    # US listings (spec 9-25): a Korean broker's overseas-stock commission per side and the
+    # SEC Section 31 fee on sales (booked with the commission); no tax, no tick, no limit.
+    us_commission_rate: float = 0.0025
+    us_sec_fee_rate: float = 0.0000278
 
     # -- rates -----------------------------------------------------------------
     def tax_rate(self, trade_date: date, market) -> float:
@@ -130,10 +146,13 @@ class CostModel:
             rate += self.slippage_liquidity_coeff * (value / adv)
         return rate
 
-    def _commission(self, value: float) -> float:
+    def commission_rate_for(self, market) -> float:
+        return self.us_commission_rate if is_us_market(market) else self.commission_rate
+
+    def _commission(self, value: float, market=None) -> float:
         if value <= 0:
             return 0.0
-        return max(value * self.commission_rate, self.min_commission)
+        return max(value * self.commission_rate_for(market), self.min_commission)
 
     # -- prices ----------------------------------------------------------------
     def fill_price(self, trade_date: date, market, raw_price: float, side: str) -> float:
@@ -154,9 +173,13 @@ class CostModel:
         return float(down), float(up)
 
     def is_limit_up(self, trade_date: date, market, open_price: float, prev_close: float) -> bool:
+        if is_us_market(market):
+            return False                 # no daily price limit on US exchanges
         return prev_close > 0 and open_price >= self.limit_prices(trade_date, market, prev_close)[1] - 1e-6
 
     def is_limit_down(self, trade_date: date, market, open_price: float, prev_close: float) -> bool:
+        if is_us_market(market):
+            return False
         return prev_close > 0 and open_price <= self.limit_prices(trade_date, market, prev_close)[0] + 1e-6
 
     # -- costs -----------------------------------------------------------------
@@ -165,7 +188,7 @@ class CostModel:
         if value <= 0:
             return TradeCost()
         return TradeCost(
-            commission=self._commission(value),
+            commission=self._commission(value, market),
             tax=0.0,
             slippage=value * self._slippage_rate_for(value, adv),
         ).scaled(self.cost_multiplier)
@@ -174,8 +197,9 @@ class CostModel:
         value = float(price) * int(qty)
         if value <= 0:
             return TradeCost()
+        sec_fee = value * self.us_sec_fee_rate if is_us_market(market) else 0.0
         return TradeCost(
-            commission=self._commission(value),
+            commission=self._commission(value, market) + sec_fee,
             tax=value * self.tax_rate(trade_date, market),
             slippage=value * self._slippage_rate_for(value, adv),
         ).scaled(self.cost_multiplier)

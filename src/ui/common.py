@@ -12,12 +12,12 @@ import math
 import tempfile
 import logging
 import datetime as _dt
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
-from PyQt6.QtCore import QObject, QEvent, Qt
+from PyQt6.QtCore import QObject, QEvent, Qt, QRect, QSize, QPoint
 from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QTableWidget, QHeaderView, QLabel, QFrame, QHBoxLayout, QVBoxLayout,
-    QWidget, QApplication,
+    QWidget, QApplication, QGridLayout, QLayout, QSizePolicy,
 )
 from PyQt6.QtGui import QFont, QPainter, QColor, QKeySequence
 
@@ -178,6 +178,123 @@ def make_footer_label(text: str = "") -> QLabel:
     return lbl
 
 
+class FlowLayout(QLayout):
+    """Items left to right, wrapping onto a new line when the width runs out
+    (docs/ui.md 8.12). A form built from it never needs more width than its
+    widest item, whatever the font or platform: a row that does not fit takes
+    another line instead of widening the window.
+
+    An item whose widget has an Ignored horizontal size policy counts as its
+    minimum width when placed and is then stretched to the end of its line (a
+    summary label that may be cut rather than push things around).
+
+    `set_first_line_inset(px)` keeps that much of the first line's right end
+    free, for widgets laid over the corner (a button row); later lines use
+    the full width."""
+
+    def __init__(self, parent=None, h_spacing: int = 14, v_spacing: int = 6):
+        super().__init__(parent)
+        self._items: list = []
+        self._h, self._v = h_spacing, v_spacing
+        self._inset = 0
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def set_first_line_inset(self, px: int) -> None:
+        px = max(0, int(px))
+        if px != self._inset:
+            self._inset = px
+            self.invalidate()
+
+    # -- QLayout interface ---------------------------------------------------
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._place(QRect(0, 0, width, 0), apply=False)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._place(rect, apply=True)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        m = self.contentsMargins()
+        items = self._visible()
+        w = max((self._width(i) for i in items), default=0)
+        if items:
+            w = max(w, self._width(items[0]) + self._inset)      # the first line is shorter
+        h = max((i.sizeHint().height() for i in items), default=0)
+        return QSize(w + m.left() + m.right(), h + m.top() + m.bottom())
+
+    # -- placement -----------------------------------------------------------
+    def _visible(self):
+        return [i for i in self._items if i.widget() is None or not i.widget().isHidden()]
+
+    @staticmethod
+    def _stretchy(item) -> bool:
+        w = item.widget()
+        return w is not None and w.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Ignored
+
+    def _width(self, item) -> int:
+        return item.minimumSize().width() if self._stretchy(item) else item.sizeHint().width()
+
+    def lines(self, width: int) -> list[list]:
+        """The items grouped into the lines they take at `width`."""
+        m = self.contentsMargins()
+        avail = width - m.left() - m.right()
+        out: list[list] = []
+        x = 0
+        for item in self._visible():
+            w = self._width(item)
+            if out and x + w <= avail - (self._inset if len(out) == 1 else 0):
+                out[-1].append(item)
+            else:
+                out.append([item])
+                x = 0
+            x += w + self._h
+        return out
+
+    def _place(self, rect: QRect, apply: bool) -> int:
+        m = self.contentsMargins()
+        left, right = rect.x() + m.left(), rect.right() + 1 - m.right()
+        y = rect.y() + m.top()
+        lines = self.lines(rect.width())
+        for n, line in enumerate(lines):
+            line_h = max(i.sizeHint().height() for i in line)
+            line_right = right - (self._inset if n == 0 else 0)
+            x = left
+            for k, item in enumerate(line):
+                w = self._width(item)
+                stretchy = self._stretchy(item)
+                if stretchy and k == len(line) - 1:
+                    w = max(w, line_right - x)
+                if apply:
+                    h = line_h if stretchy else min(item.sizeHint().height(), line_h)
+                    item.setGeometry(QRect(QPoint(x, y + (line_h - h) // 2), QSize(w, h)))
+                x += w + self._h
+            y += line_h + self._v
+        if lines:
+            y -= self._v
+        return y - rect.y() + m.bottom()
+
+
 # ---------------------------------------------------------------------------
 # Tables (docs/ui.md 8.2)
 # ---------------------------------------------------------------------------
@@ -334,6 +451,80 @@ class KpiStrip(QFrame):
 
     def set_sub(self, key: str, text: str):
         self.cells[key][1].setText(text)
+
+
+# ---------------------------------------------------------------------------
+# Status badges and KPI cards (docs/ui.md 8.3 / 8.10; ui_redesign_2026-11 P0-3)
+# ---------------------------------------------------------------------------
+BadgeKind = Literal["ok", "warn", "fail", "na"]
+_BADGE_NAMES = {"ok": "badgeOk", "warn": "badgeWarn", "fail": "badgeFail", "na": "badgeNa"}
+
+
+def set_badge(label: QLabel, kind: BadgeKind, text: str) -> QLabel:
+    """Turn `label` into a status badge of `kind`: only the objectName
+    changes, the look comes from ui/theme.py's QLabel#badge* rules. The
+    style is re-polished so a label that switches kind repaints."""
+    if kind not in _BADGE_NAMES:
+        raise ValueError(f"unknown badge kind: {kind!r}")
+    label.setObjectName(_BADGE_NAMES[kind])
+    label.setText(text)
+    style = label.style()
+    if style is not None:
+        style.unpolish(label)
+        style.polish(label)
+    return label
+
+
+def make_badge(kind: BadgeKind, text: str) -> QLabel:
+    """A small pill label for a judgement (OK / WARN / FAIL / not available)."""
+    lbl = QLabel()
+    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    return set_badge(lbl, kind, text)
+
+
+class KpiCard(QFrame):
+    """One boxed KPI: a small caps label (top left), a badge slot (top
+    right), a large value and a one-line explanation under it. The card
+    counterpart of KpiStrip's cells, for screens that show a few headline
+    numbers with a judgement each (Strategy results, docs/ui.md 8.10)."""
+
+    def __init__(self, label: str, help_text: str = "", parent=None):
+        super().__init__(parent)
+        self.setObjectName("KpiCard")
+        grid = QGridLayout(self)
+        grid.setContentsMargins(12, 8, 12, 8)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(2)
+        self.label = QLabel(label.upper())
+        self.label.setObjectName("kpiLabel")
+        self.badge = make_badge("na", "")
+        self.badge.hide()
+        self.value = QLabel("-")
+        self.value.setObjectName("kpiValue")
+        self.value.setFont(create_font(FONT_TITLE, style_name="Semilight"))
+        self.help = QLabel(help_text)
+        self.help.setObjectName("kpiHelp")
+        self.help.setWordWrap(True)
+        grid.addWidget(self.label, 0, 0)
+        grid.addWidget(self.badge, 0, 1, Qt.AlignmentFlag.AlignRight)
+        grid.addWidget(self.value, 1, 0, 1, 2)
+        grid.addWidget(self.help, 2, 0, 1, 2)
+        grid.setColumnStretch(0, 1)
+
+    def set(self, value: str, color: str | None = None,
+            badge: tuple[BadgeKind, str] | None = None, help: str | None = None) -> None:
+        """Show `value` (in `color`, default text color), an optional
+        `(kind, text)` badge (None hides it) and, when given, a new
+        explanation line."""
+        self.value.setText(value)
+        self.value.setStyleSheet(f"color:{color or TEXT};")
+        if badge is None:
+            self.badge.hide()
+        else:
+            set_badge(self.badge, *badge)
+            self.badge.show()
+        if help is not None:
+            self.help.setText(help)
 
 # Status text colors (roadmap 7-2c) — e.g. a risk-gate PASS/FAIL cell. Reserved
 # for status display only (roadmap 7-4d): an action button must not reuse these,

@@ -199,6 +199,24 @@ class TestWeeklyRecommendation(unittest.TestCase):
         self.assertIn("MA50Div<0", reasons["DOWN"])
         self.assertIn("Range52<0.70", reasons["BOUNCE"])
 
+    def test_display_fields_read_the_score_book(self):
+        """Spec 9-4 (2026-11-13): ScoredName's percentiles and Recommendation.scored
+        are display only -- read from ScoreBook.pct, the score itself unchanged."""
+        sb, p = self.sb, self.p
+        rec = weekly_recommendation(sb, self.book, p, n_top=10)
+        t = sb.T - 1
+        self.assertTrue(rec.scored)
+        for s in rec.top + rec.bottom:
+            self.assertIs(rec.scored[s.ticker].ticker, s.ticker)
+        for tk, s in rec.scored.items():
+            j = sb.tickers.index(tk)
+            np.testing.assert_equal(s.pct_ma50, sb.pct["ma50_div"][t, j])
+            np.testing.assert_equal(s.pct_range52, sb.pct["range52"][t, j])
+            np.testing.assert_equal(s.pct_r3, sb.pct["r3"][t, j])
+            self.assertAlmostEqual(s.latest_total, s.pct_ma50 + s.pct_range52 - s.pct_r3)
+        # Only the eligible names: the illiquid one is not in it.
+        self.assertEqual(len(rec.scored), rec.info["n_eligible"])
+
     def test_n_top_caps_both_lists_and_keeps_them_disjoint(self):
         rec = weekly_recommendation(self.sb, self.book, self.p, n_top=1)
         self.assertEqual(len(rec.top), 1)

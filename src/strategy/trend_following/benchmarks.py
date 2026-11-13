@@ -8,6 +8,10 @@ through the same Engine (fills, interest, annual reset, costs) as the strategy.
        cash; next-open fills like the strategy.
   BM4  Risk-free (CD 91-day): cash compounding at ``Dataset.rf_period``.
 
+With several markets (spec 9-25) ``ds.bm`` holds one ETF per market (KODEX
+200TR, KODEX 코스닥150, QQQ, SPY): BM1 holds them at equal weight, re-set at
+each annual reset, and BM3 times each ETF on its own MA200 with a 1/k slot.
+
 ETF runs use ``CostModel.for_etf()`` (0.02% slippage, no transaction tax);
 BM2 uses the strategy's own cost model.
 """
@@ -36,9 +40,7 @@ class BuyAndHoldPolicy(Policy):
         return [Order(self.ticker, "buy", int(math.floor(eng.cash / price)), "hold")]
 
     def initial_orders(self, eng: Engine, t0: int) -> list[Order]:
-        b = eng.book
-        px = b.open[t0, 0] if np.isfinite(b.open[t0, 0]) else b.close[t0, 0]
-        return self._buy_all(eng, px)
+        return self._buy_all(eng, _first_open_prices(eng.book, t0)[0])
 
     def decide(self, t: int, eng: Engine) -> list[Order]:
         if eng.has_pending(self.ticker, "buy"):
@@ -71,18 +73,33 @@ class TrendTimingPolicy(Policy):
         return []
 
 
+def _first_open_prices(book, t0: int) -> np.ndarray:
+    """Sizing prices for the orders filled at the first open: that open, or the
+    previous close where there is none -- never session t0's own close, which is
+    not known yet (review_codex.md C1)."""
+    prev = book.close[t0 - 1] if t0 > 0 else np.full(book.N, np.nan)
+    return np.where(np.isfinite(book.open[t0]), book.open[t0], prev)
+
+
 class EqualWeightPolicy(Policy):
     """BM2: equal weight across the eligible names, set on the first session
-    and re-set after each year-end reset."""
+    and re-set after each year-end reset.
+
+    Timing (review_codex.md C1): the first open's candidates use the eligibility
+    of the session before it -- `eligible[t0]` contains t0's own close x volume.
+    With no earlier session (t0 == 0) nothing is bought at the first open; the
+    book is set from the first close and filled at the next open. A year-end
+    re-set decides at that close and fills at the next open, so it reads its own row."""
 
     def __init__(self, eligible: np.ndarray | None):
         self.eligible = eligible
+        self._start_at_close: int | None = None
 
-    def _targets(self, t: int, eng: Engine, prices: np.ndarray, equity: float) -> list[Order]:
+    def _targets(self, elig_row: int, eng: Engine, prices: np.ndarray, equity: float) -> list[Order]:
         b = eng.book
         ok = np.isfinite(prices) & (prices > 0)
         if self.eligible is not None:
-            ok &= self.eligible[t]
+            ok &= self.eligible[elig_row]
         cols = np.flatnonzero(ok)
         orders: list[Order] = []
         for tk in list(eng.positions):
@@ -103,14 +120,46 @@ class EqualWeightPolicy(Policy):
         return orders
 
     def initial_orders(self, eng: Engine, t0: int) -> list[Order]:
-        b = eng.book
-        prices = np.where(np.isfinite(b.open[t0]), b.open[t0], b.close[t0])
-        return self._targets(t0, eng, prices, eng.cash)
+        if self.eligible is not None and t0 == 0:
+            self._start_at_close = t0      # no earlier session to judge liquidity on
+            return []
+        return self._targets(max(t0 - 1, 0), eng, _first_open_prices(eng.book, t0), eng.cash)
 
     def decide(self, t: int, eng: Engine) -> list[Order]:
+        if self._start_at_close == t:
+            self._start_at_close = None
+            return self._targets(t, eng, eng.book.close[t], eng.equity_now)
         if not eng.is_year_end(t):
             return []
         return self._targets(t, eng, eng.book.close[t], eng.equity_now)
+
+
+class TrendTimingMixPolicy(Policy):
+    """BM3 over k ETFs: each one held with a 1/k slot of equity while its close
+    is above its own MA, otherwise its slot stays in cash."""
+
+    def __init__(self, book, ma_window: int):
+        self.ma = rolling(np.asarray(book.close, dtype=float), ma_window, "mean")
+
+    def decide(self, t: int, eng: Engine) -> list[Order]:
+        b = eng.book
+        k = b.N
+        orders: list[Order] = []
+        cash = eng.cash
+        for j, tk in enumerate(b.tickers):
+            c, m = b.close[t, j], self.ma[t, j]
+            if not (np.isfinite(c) and np.isfinite(m) and c > 0):
+                continue
+            held = tk in eng.positions
+            if held and c < m and not eng.has_pending(tk, "sell"):
+                orders.append(Order(tk, "sell", None, "below_ma"))
+            elif not held and c > m and not eng.has_pending(tk, "buy"):
+                budget = min(eng.equity_now / k, cash)
+                qty = int(math.floor(budget / c))
+                if qty > 0:
+                    orders.append(Order(tk, "buy", qty, "above_ma"))
+                    cash -= qty * c
+        return orders
 
 
 def _etf_model(cost_model: CostModel) -> CostModel:
@@ -121,6 +170,8 @@ def run_bm1(ds, params: StrategyParams, cost_model: CostModel) -> BacktestResult
     if ds.bm is None:
         return None
     eng = Engine(ds.bm, ds.rf_period, params, _etf_model(cost_model), ds.start_idx, "BM1")
+    if ds.bm.N > 1:
+        return eng.run(EqualWeightPolicy(None))      # the selected markets' ETFs at equal weight
     return eng.run(BuyAndHoldPolicy(ds.bm.tickers[0]))
 
 
@@ -166,6 +217,8 @@ def run_bm3(ds, params: StrategyParams, cost_model: CostModel) -> BacktestResult
     if ds.bm is None:
         return None
     eng = Engine(ds.bm, ds.rf_period, params, _etf_model(cost_model), ds.start_idx, "BM3")
+    if ds.bm.N > 1:
+        return eng.run(TrendTimingMixPolicy(ds.bm, params.bm_ma))
     return eng.run(TrendTimingPolicy(ds.bm.tickers[0], ds.bm.close[:, 0], params.bm_ma))
 
 

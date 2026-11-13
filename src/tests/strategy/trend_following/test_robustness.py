@@ -14,7 +14,7 @@ from strategy.trend_following.config import (
     E2_NEIGHBORS, E2_SHARPE_JUMP, PERIODS, VARIANTS, StrategyParams,
 )
 from strategy.trend_following.costs import CostModel, TradeCost
-from strategy.trend_following.metrics import cagr, max_drawdown, nav_returns, sharpe, summarize_run
+from strategy.trend_following.metrics import cagr, max_drawdown, nav_returns, session_rf, sharpe, summarize_run
 from strategy.trend_following.research import ResearchRequest
 from strategy.trend_following.robustness import (
     GROUP_A2, GROUP_BASE, GROUP_E1, GROUP_E2, NeighborRun, PerfStats, RobustnessRequest, RunCounter,
@@ -240,7 +240,7 @@ class TestPeriodStats(unittest.TestCase):
         res = run_backtest(ds, compute_features(ds, p), p, VARIANTS["A1"], CostModel().scaled(1.0))
         last_year = res.dates[-1].year
         got = period_stats(res.nav, res.dates, res.rf_period, (("all", 2021, last_year),))["all"]
-        self.assertAlmostEqual(got.sharpe, sharpe(nav_returns(res.nav), res.rf_period))
+        self.assertAlmostEqual(got.sharpe, sharpe(nav_returns(res.nav), session_rf(res.rf_period)))
         self.assertAlmostEqual(got.cagr, cagr(res.nav, res.dates))
         self.assertAlmostEqual(got.mdd, max_drawdown(res.nav))
 

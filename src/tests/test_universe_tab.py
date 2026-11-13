@@ -86,7 +86,7 @@ class TestStatusFilterButton(unittest.TestCase):
         seen = []
         with patch.object(tab.table, "apply_col_filters", side_effect=lambda *a, **k: seen.append(k["status"])):
             for expected_label, expected_status, expected_checked in (
-                    ("Held", "On", True), ("Target", "Tg", True), ("", "", False), ("Held", "On", True)):
+                    ("보유", "On", True), ("관심", "Tg", True), ("", "", False), ("보유", "On", True)):
                 btn.click()
                 self.assertEqual(btn.text(), expected_label)
                 self.assertEqual(btn.isChecked(), expected_checked)

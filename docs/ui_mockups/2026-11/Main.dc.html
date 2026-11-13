@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>Trend Following 결과 화면</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#fbfbfd}
+a{color:#5d5294}a:hover{color:#3f3770}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="font-family: 'Malgun Gothic Semilight','Malgun Gothic','Noto Sans KR',sans-serif; color: #1c1e2c; background: #fbfbfd; min-height: 100%; font-size: 13px">
+
+<header style="display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 10px 20px; background: #ffffff; border-bottom: 1px solid #e4e7f5">
+<div style="font-weight: 700; font-size: 15px; color: #1c1e2c; margin-right: 8px">Portfolio Management</div>
+<nav aria-label="Main tabs" style="display: flex; flex-wrap: wrap; gap: 4px">
+<button type="button" style="border: 1px solid transparent; background: transparent; color: #75798c; font-size: 15px; font-weight: 700; padding: 6px 12px; border-radius: 6px">Trading Universe</button>
+<button type="button" style="border: 1px solid transparent; background: transparent; color: #75798c; font-size: 15px; font-weight: 700; padding: 6px 12px; border-radius: 6px">Trading History</button>
+<button type="button" style="border: 1px solid transparent; background: transparent; color: #75798c; font-size: 15px; font-weight: 700; padding: 6px 12px; border-radius: 6px">Total Assets</button>
+<button type="button" aria-current="page" style="border: 1px solid #c9c2f3; background: #f5f4ff; color: #5d5294; font-size: 15px; font-weight: 700; padding: 6px 12px; border-radius: 6px">Strategy</button>
+</nav>
+<div style="flex: 1"></div>
+<div style="display: flex; align-items: center; gap: 6px; color: #75798c; font-size: 12px"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 4px; background: #2e7d5b; display: inline-block"></span>Last sync 10:24</div>
+</header>
+
+<main style="max-width: 1440px; margin: 0 auto; padding: 12px 20px 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 12px">
+
+<section aria-label="Run settings" style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; background: #ffffff; border: 1px solid #e4e7f5; border-radius: 8px; padding: 10px 14px">
+<div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center; flex: 1 1 520px; min-width: 0">
+<span style="color: #75798c; font-size: 12px; margin-right: 4px">Run settings</span>
+<span style="background: #f3f5fe; border-radius: 4px; padding: 3px 8px; font-size: 12px">2021-01-01 → 2024-12-30</span>
+<span style="background: #f3f5fe; border-radius: 4px; padding: 3px 8px; font-size: 12px">KOSPI Top 200</span>
+<span style="background: #f3f5fe; border-radius: 4px; padding: 3px 8px; font-size: 12px">Liquidity ≥ 100억</span>
+<span style="background: #f3f5fe; border-radius: 4px; padding: 3px 8px; font-size: 12px">Max 5 positions</span>
+<span style="background: #f3f5fe; border-radius: 4px; padding: 3px 8px; font-size: 12px">Check: Mon</span>
+<span style="background: #f3f5fe; border-radius: 4px; padding: 3px 8px; font-size: 12px">Costs 0x / 1x / 2x</span>
+<span style="background: #f3f5fe; border-radius: 4px; padding: 3px 8px; font-size: 12px">All 10 variants</span>
+<button type="button" style="border: none; background: transparent; color: #5d5294; font-size: 12px; text-decoration: underline; padding: 3px 4px">Edit settings</button>
+</div>
+<div style="display: flex; gap: 8px">
+<button type="button" style="height: 28px; border: 1px solid #cfd3e5; background: #ffffff; color: #595d6c; border-radius: 6px; padding: 0 12px; font-size: 13px">Save Report</button>
+<button type="button" disabled style="height: 28px; border: 1px solid #f0f1f8; background: #ffffff; color: #c3c6d4; border-radius: 6px; padding: 0 12px; font-size: 13px">Stop</button>
+<button type="button" style="height: 28px; border: 1px solid #9184d9; background: #ffffff; color: #5d5294; border-radius: 6px; padding: 0 14px; font-size: 13px; font-weight: 600">Run Research</button>
+</div>
+</section>
+
+<div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between">
+<div role="group" aria-label="Variant" style="display: flex; flex-wrap: wrap; gap: 4px; align-items: center">
+<span style="color: #75798c; font-size: 12px; margin-right: 6px">Variant</span>
+<sc-for list="{{variants}}" as="v" hint-placeholder-count="11">
+<sc-if value="{{v.active}}" hint-placeholder-val="{{false}}">
+<button type="button" aria-pressed="true" onClick="{{v.pick}}" style="min-width: 44px; height: 30px; border: 1px solid #9184d9; background: #f5f4ff; color: #5d5294; border-radius: 6px; font-weight: 700; font-size: 13px">{{v.id}}</button>
+</sc-if>
+<sc-if value="{{v.inactive}}" hint-placeholder-val="{{true}}">
+<button type="button" aria-pressed="false" onClick="{{v.pick}}" style="min-width: 44px; height: 30px; border: 1px solid #cfd3e5; background: #ffffff; color: #595d6c; border-radius: 6px; font-size: 13px">{{v.id}}</button>
+</sc-if>
+</sc-for>
+</div>
+<div style="display: flex; align-items: center; gap: 6px; color: #75798c; font-size: 12px">Cost
+<span style="border: 1px solid #cfd3e5; background: #ffffff; border-radius: 6px; padding: 4px 10px; color: #595d6c">0x</span>
+<span style="border: 1px solid #9184d9; background: #f5f4ff; border-radius: 6px; padding: 4px 10px; color: #5d5294; font-weight: 700">1x</span>
+<span style="border: 1px solid #cfd3e5; background: #ffffff; border-radius: 6px; padding: 4px 10px; color: #595d6c">2x</span>
+</div>
+</div>
+
+<section aria-label="Key metrics" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px">
+<div style="background: #ffffff; border: 1px solid #e4e7f5; border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px">
+<div style="display: flex; justify-content: space-between; align-items: center"><span style="color: #75798c; font-size: 11px; font-weight: 600">SHARPE</span>
+<sc-if value="{{kpi.sharpeOk}}" hint-placeholder-val="{{false}}"><span style="background: #e8f3ee; color: #2e7d5b; border-radius: 10px; padding: 1px 8px; font-size: 11px; font-weight: 600">✓ Target met</span></sc-if>
+<sc-if value="{{kpi.sharpeNg}}" hint-placeholder-val="{{true}}"><span style="background: #fdf0ef; color: #b3362e; border-radius: 10px; padding: 1px 8px; font-size: 11px; font-weight: 600">✕ Below 1.5</span></sc-if>
+</div>
+<div style="font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums">{{kpi.sharpe}}</div>
+<div style="color: #75798c; font-size: 11px">위험 1단위당 초과수익 · 목표 ≥ 1.5</div>
+</div>
+<div style="background: #ffffff; border: 1px solid #e4e7f5; border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px">
+<div style="display: flex; justify-content: space-between; align-items: center"><span style="color: #75798c; font-size: 11px; font-weight: 600">MAX DRAWDOWN</span>
+<sc-if value="{{kpi.mddOk}}" hint-placeholder-val="{{false}}"><span style="background: #e8f3ee; color: #2e7d5b; border-radius: 10px; padding: 1px 8px; font-size: 11px; font-weight: 600">✓ Within 15%</span></sc-if>
+<sc-if value="{{kpi.mddNg}}" hint-placeholder-val="{{true}}"><span style="background: #fdf0ef; color: #b3362e; border-radius: 10px; padding: 1px 8px; font-size: 11px; font-weight: 600">✕ Over 15%</span></sc-if>
+</div>
+<div style="font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; color: #b3362e">{{kpi.mdd}}</div>
+<div style="color: #75798c; font-size: 11px">고점 대비 최대 하락 · 목표 |MDD| ≤ 15%</div>
+</div>
+<div style="background: #ffffff; border: 1px solid #e4e7f5; border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px">
+<span style="color: #75798c; font-size: 11px; font-weight: 600">CAGR</span>
+<div style="font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; color: {{kpi.cagrColor}}">{{kpi.cagr}}</div>
+<div style="color: #75798c; font-size: 11px">연평균 수익률</div>
+</div>
+<div style="background: #ffffff; border: 1px solid #e4e7f5; border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px">
+<span style="color: #75798c; font-size: 11px; font-weight: 600">VS BM1</span>
+<div style="font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; color: {{kpi.excessColor}}">{{kpi.excess}}</div>
+<div style="color: #75798c; font-size: 11px">시장(KODEX 200TR) 대비 CAGR 차이</div>
+</div>
+<div style="background: #ffffff; border: 1px solid #e4e7f5; border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px">
+<span style="color: #75798c; font-size: 11px; font-weight: 600">VOLATILITY</span>
+<div style="font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums">{{kpi.vol}}</div>
+<div style="color: #75798c; font-size: 11px">수익률 출렁임(연환산)</div>
+</div>
+<div style="background: #ffffff; border: 1px solid #e4e7f5; border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px">
+<span style="color: #75798c; font-size: 11px; font-weight: 600">TRADES</span>
+<div style="font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums">{{kpi.trades}}</div>
+<div style="color: #75798c; font-size: 11px">4년간 매매 횟수</div>
+</div>
+</section>
+
+<div style="display: flex; flex-wrap: wrap; gap: 12px">
+<section aria-label="NAV and drawdown" style="flex: 999 1 640px; min-width: 0; background: #ffffff; border: 1px solid #e4e7f5; border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px">
+<div style="font-weight: 600">NAV rebased to 100 <span style="color: #9397ab; font-weight: 400; font-size: 12px">· 1x costs</span></div>
+<div style="display: flex; gap: 14px; font-size: 12px; color: #595d6c; align-items: center">
+<span><span aria-hidden="true" style="display: inline-block; width: 16px; height: 3px; background: #9184d9; vertical-align: middle; margin-right: 4px"></span>{{kpi.id}}</span>
+<span><span aria-hidden="true" style="display: inline-block; width: 16px; height: 0; border-top: 2px dashed #9397ab; vertical-align: middle; margin-right: 4px"></span>BM1</span>
+<span style="background: #fff6e8; color: #8a4f08; border-radius: 4px; padding: 1px 6px; font-size: 11px">예시 곡선 · 실제 화면은 실행 결과</span>
+</div>
+</div>
+<svg viewBox="-40 -10 910 250" role="img" aria-label="NAV chart example: strategy line rising above the benchmark line" style="width: 100%; height: auto; display: block">
+<g stroke="#f0f1f8" stroke-width="1">
+<line x1="0" y1="26.6" x2="860" y2="26.6"></line>
+<line x1="0" y1="100.5" x2="860" y2="100.5"></line>
+<line x1="0" y1="174.4" x2="860" y2="174.4"></line>
+</g>
+<g fill="#9397ab" font-size="11" text-anchor="end">
+<text x="-8" y="30">200</text><text x="-8" y="104">150</text><text x="-8" y="178">100</text>
+</g>
+<g fill="#9397ab" font-size="11">
+<text x="0" y="238">2021</text><text x="215" y="238">2022</text><text x="430" y="238">2023</text><text x="645" y="238">2024</text>
+</g>
+<polyline fill="none" stroke="#9397ab" stroke-width="1.6" stroke-dasharray="5 4" points="0.0,180.4 7.2,179.8 14.5,176.3 21.7,179.9 28.9,187.1 36.1,188.5 43.4,187.5 50.6,183.7 57.8,190.2 65.0,196.8 72.3,194.9 79.5,193.9 86.7,188.4 93.9,185.2 101.2,186.8 108.4,189.1 115.6,178.5 122.9,181.1 130.1,185.8 137.3,191.9 144.5,192.6 151.8,193.0 159.0,195.5 166.2,196.8 173.4,196.7 180.7,194.9 187.9,191.3 195.1,191.5 202.4,200.0 209.6,198.2 216.8,204.8 224.0,206.4 231.3,212.8 238.5,213.7 245.7,217.3 252.9,217.4 260.2,206.4 267.4,207.5 274.6,205.3 281.8,211.2 289.1,213.1 296.3,211.7 303.5,212.9 310.8,212.5 318.0,213.0 325.2,217.4 332.4,216.4 339.7,220.0 346.9,214.4 354.1,217.1 361.3,215.5 368.6,216.4 375.8,214.0 383.0,217.0 390.3,214.3 397.5,215.7 404.7,212.1 411.9,210.7 419.2,211.1 426.4,214.8 433.6,213.0 440.8,212.2 448.1,207.1 455.3,209.4 462.5,208.3 469.7,207.3 477.0,207.2 484.2,207.4 491.4,207.6 498.7,210.8 505.9,215.3 513.1,217.6 520.3,216.4 527.6,211.9 534.8,209.3 542.0,206.3 549.2,204.3 556.5,202.5 563.7,202.8 570.9,200.7 578.2,194.5 585.4,196.9 592.6,200.7 599.8,193.7 607.1,193.7 614.3,190.7 621.5,188.0 628.7,193.9 636.0,184.4 643.2,177.3 650.4,177.7 657.6,175.3 664.9,175.9 672.1,181.3 679.3,182.9 686.6,182.4 693.8,178.3 701.0,176.2 708.2,177.1 715.5,171.7 722.7,176.7 729.9,174.0 737.1,169.8 744.4,172.5 751.6,182.2 758.8,187.4 766.1,187.5 773.3,186.3 780.5,180.4 787.7,186.1 795.0,187.2 802.2,185.4 809.4,187.3 816.6,198.4 823.9,196.1 831.1,187.3 838.3,183.9 845.5,189.1 852.8,192.0 860.0,192.1"></polyline>
+<polyline fill="none" stroke="#9184d9" stroke-width="2.2" points="0.0,173.0 7.2,164.5 14.5,167.7 21.7,160.4 28.9,159.9 36.1,159.5 43.4,146.3 50.6,143.2 57.8,141.4 65.0,134.5 72.3,124.7 79.5,122.6 86.7,116.0 93.9,120.5 101.2,120.7 108.4,121.4 115.6,128.1 122.9,135.8 130.1,144.0 137.3,143.3 144.5,142.3 151.8,142.1 159.0,139.6 166.2,145.8 173.4,144.1 180.7,140.5 187.9,133.5 195.1,136.8 202.4,137.2 209.6,147.6 216.8,148.6 224.0,159.4 231.3,165.4 238.5,157.3 245.7,167.6 252.9,161.4 260.2,157.6 267.4,157.5 274.6,152.8 281.8,147.6 289.1,139.0 296.3,138.3 303.5,139.9 310.8,141.6 318.0,145.6 325.2,143.7 332.4,146.5 339.7,137.7 346.9,147.2 354.1,151.7 361.3,155.3 368.6,165.1 375.8,152.4 383.0,164.2 390.3,163.8 397.5,164.8 404.7,153.6 411.9,162.9 419.2,154.9 426.4,157.2 433.6,156.1 440.8,158.0 448.1,152.3 455.3,156.9 462.5,155.4 469.7,151.3 477.0,137.9 484.2,150.6 491.4,139.2 498.7,130.8 505.9,131.7 513.1,127.4 520.3,128.2 527.6,114.4 534.8,110.4 542.0,109.5 549.2,108.6 556.5,107.6 563.7,106.3 570.9,110.3 578.2,91.9 585.4,104.1 592.6,127.5 599.8,126.0 607.1,124.7 614.3,119.7 621.5,118.8 628.7,117.4 636.0,112.5 643.2,102.8 650.4,103.6 657.6,103.8 664.9,85.9 672.1,78.6 679.3,84.0 686.6,60.9 693.8,50.6 701.0,52.9 708.2,60.6 715.5,54.7 722.7,59.2 729.9,65.7 737.1,74.0 744.4,75.4 751.6,62.7 758.8,63.6 766.1,73.3 773.3,64.4 780.5,60.8 787.7,49.8 795.0,34.8 802.2,33.1 809.4,31.1 816.6,28.1 823.9,36.1 831.1,25.9 838.3,7.7 845.5,2.1 852.8,0.9 860.0,0.0"></polyline>
+</svg>
+<div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px">
+<div style="font-weight: 600; font-size: 12px">Drawdown <span style="color: #9397ab; font-weight: 400">· 고점 대비 하락</span></div>
+<div style="font-size: 11px; color: #b8650a">--- 목표선 −15%</div>
+</div>
+<svg viewBox="-40 -6 910 110" role="img" aria-label="Drawdown chart example with a minus 15 percent target line" style="width: 100%; height: auto; display: block">
+<line x1="0" y1="0" x2="860" y2="0" stroke="#e4e7f5" stroke-width="1"></line>
+<polygon fill="#d1453b" fill-opacity="0.18" stroke="#d1453b" stroke-width="1.2" points="0,0 0.0,0 7.2,0 14.5,5.4 21.7,0 28.9,0 36.1,0 43.4,0 50.6,0 57.8,0 65.0,0 72.3,0 79.5,0 86.7,0 93.9,5.8 101.2,6.0 108.4,6.9 115.6,15.7 122.9,25.7 130.1,36.3 137.3,35.4 144.5,34.1 151.8,33.9 159.0,30.5 166.2,38.6 173.4,36.5 180.7,31.8 187.9,22.7 195.1,26.9 202.4,27.4 209.6,41.0 216.8,42.2 224.0,56.3 231.3,64.0 238.5,53.6 245.7,67.0 252.9,58.9 260.2,54.0 267.4,53.8 274.6,47.7 281.8,41.0 289.1,29.8 296.3,28.9 303.5,31.0 310.8,33.1 318.0,38.3 325.2,36.0 332.4,39.5 339.7,28.1 346.9,40.4 354.1,46.3 361.3,50.9 368.6,63.7 375.8,47.2 383.0,62.4 390.3,62.0 397.5,63.3 404.7,48.7 411.9,60.8 419.2,50.4 426.4,53.4 433.6,52.0 440.8,54.4 448.1,47.0 455.3,53.0 462.5,51.1 469.7,45.8 477.0,28.4 484.2,44.9 491.4,30.0 498.7,19.1 505.9,20.4 513.1,14.8 520.3,15.9 527.6,0 534.8,0 542.0,0 549.2,0 556.5,0 563.7,0 570.9,4.9 578.2,0 585.4,14.2 592.6,41.3 599.8,39.6 607.1,38.0 614.3,32.3 621.5,31.2 628.7,29.6 636.0,23.9 643.2,12.6 650.4,13.6 657.6,13.8 664.9,0 672.1,0 679.3,5.9 686.6,0 693.8,0 701.0,2.3 708.2,9.8 715.5,4.1 722.7,8.5 729.9,14.9 737.1,23.1 744.4,24.5 751.6,12.0 758.8,12.8 766.1,22.4 773.3,13.6 780.5,10.0 787.7,0 795.0,0 802.2,0 809.4,0 816.6,0 823.9,7.3 831.1,0 838.3,0 845.5,0 852.8,0 860.0,0 860,0"></polygon>
+<line x1="0" y1="54" x2="860" y2="54" stroke="#b8650a" stroke-width="1.2" stroke-dasharray="6 4"></line>
+<g fill="#9397ab" font-size="11" text-anchor="end"><text x="-8" y="4">0%</text><text x="-8" y="58">−15%</text><text x="-8" y="94">−25%</text></g>
+</svg>
+</section>
+
+<aside aria-label="Verdict" style="flex: 1 1 300px; min-width: 0; background: #ffffff; border: 1px solid #e4e7f5; border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px">
+<div style="font-weight: 600">Validation verdict <span style="color: #9397ab; font-weight: 400; font-size: 12px">· NEX-59</span></div>
+<div style="background: #f3f5fe; border-radius: 6px; padding: 10px 12px; font-size: 12px; color: #595d6c">J1 판정: 채택 후보 없음 · 10개 변형 모두 폐기 (2026-10-14 승인)</div>
+<ul style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px">
+<li style="display: flex; justify-content: space-between; gap: 8px; align-items: center; border-bottom: 1px solid #f0f1f8; padding-bottom: 8px"><span><b style="font-weight: 600">H 성과 목표</b><br><span style="color: #75798c; font-size: 11px">Sharpe ≥ 1.5 · |MDD| ≤ 15%</span></span><span style="background: #fdf0ef; color: #b3362e; border-radius: 10px; padding: 2px 9px; font-size: 11px; font-weight: 600; white-space: nowrap">✕ Fail</span></li>
+<li style="display: flex; justify-content: space-between; gap: 8px; align-items: center; border-bottom: 1px solid #f0f1f8; padding-bottom: 8px"><span><b style="font-weight: 600">E2 강건성</b><br><span style="color: #75798c; font-size: 11px">주변값에서 |ΔSharpe| ≤ 0.5</span></span>
+<sc-if value="{{kpi.e2Pass}}" hint-placeholder-val="{{false}}"><span style="background: #e8f3ee; color: #2e7d5b; border-radius: 10px; padding: 2px 9px; font-size: 11px; font-weight: 600; white-space: nowrap">✓ Pass</span></sc-if>
+<sc-if value="{{kpi.e2Fail}}" hint-placeholder-val="{{true}}"><span style="background: #fdf0ef; color: #b3362e; border-radius: 10px; padding: 2px 9px; font-size: 11px; font-weight: 600; white-space: nowrap">✕ Fail</span></sc-if>
+<sc-if value="{{kpi.e2Na}}" hint-placeholder-val="{{false}}"><span style="background: #f0f1f8; color: #595d6c; border-radius: 10px; padding: 2px 9px; font-size: 11px; font-weight: 600; white-space: nowrap">– Not tested</span></sc-if>
+</li>
+<li style="display: flex; justify-content: space-between; gap: 8px; align-items: center; border-bottom: 1px solid #f0f1f8; padding-bottom: 8px"><span><b style="font-weight: 600">A5 미래정보(수정주가)</b><br><span style="color: #75798c; font-size: 11px">체크리스트 A5</span></span><span style="background: #fff6e8; color: #8a4f08; border-radius: 10px; padding: 2px 9px; font-size: 11px; font-weight: 600; white-space: nowrap">! Undecided</span></li>
+<li style="display: flex; justify-content: space-between; gap: 8px; align-items: center"><span><b style="font-weight: 600">구현 감사 A·C·G</b><br><span style="color: #75798c; font-size: 11px">검사 범위 내 불일치</span></span><span style="background: #e8f3ee; color: #2e7d5b; border-radius: 10px; padding: 2px 9px; font-size: 11px; font-weight: 600; white-space: nowrap">✓ None</span></li>
+</ul>
+<a href="#" style="font-size: 12px">Open full checklist (A–H)</a>
+</aside>
+</div>
+
+<section aria-label="Details" style="background: #ffffff; border: 1px solid #e4e7f5; border-radius: 8px; overflow: hidden">
+<div role="tablist" style="display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 10px; border-bottom: 1px solid #e4e7f5">
+<button type="button" role="tab" aria-selected="true" style="border: 1px solid #c9c2f3; background: #f5f4ff; color: #5d5294; font-weight: 600; padding: 5px 12px; border-radius: 6px; font-size: 13px">Variant comparison</button>
+<button type="button" role="tab" aria-selected="false" style="border: 1px solid transparent; background: transparent; color: #75798c; padding: 5px 12px; border-radius: 6px; font-size: 13px">Monthly returns</button>
+<button type="button" role="tab" aria-selected="false" style="border: 1px solid transparent; background: transparent; color: #75798c; padding: 5px 12px; border-radius: 6px; font-size: 13px">Trades</button>
+<button type="button" role="tab" aria-selected="false" style="border: 1px solid transparent; background: transparent; color: #75798c; padding: 5px 12px; border-radius: 6px; font-size: 13px">Event study</button>
+<button type="button" role="tab" aria-selected="false" style="border: 1px solid transparent; background: transparent; color: #b8650a; padding: 5px 12px; border-radius: 6px; font-size: 13px">Warnings (4)</button>
+</div>
+<div style="overflow-x: auto">
+<table style="width: 100%; min-width: 980px; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums">
+<thead>
+<tr style="background: #f3f5fe; color: #75798c; text-align: right">
+<th scope="col" style="text-align: left; padding: 7px 10px; font-weight: 600; border-bottom: 1px solid #d0d0d0">ID</th>
+<th scope="col" style="text-align: left; padding: 7px 10px; font-weight: 600; border-bottom: 1px solid #d0d0d0">Entry</th>
+<th scope="col" style="padding: 7px 10px; font-weight: 600; border-bottom: 1px solid #d0d0d0">CAGR</th>
+<th scope="col" style="padding: 7px 10px; font-weight: 600; border-bottom: 1px solid #d0d0d0">Vol</th>
+<th scope="col" style="text-align: left; padding: 7px 10px; font-weight: 600; border-bottom: 1px solid #d0d0d0; width: 220px">Sharpe <span style="font-weight: 400">(| = 1.5)</span></th>
+<th scope="col" style="padding: 7px 10px; font-weight: 600; border-bottom: 1px solid #d0d0d0">MDD</th>
+<th scope="col" style="padding: 7px 10px; font-weight: 600; border-bottom: 1px solid #d0d0d0">Trades</th>
+<th scope="col" style="padding: 7px 10px; font-weight: 600; border-bottom: 1px solid #d0d0d0">vs BM1 (%p)</th>
+<th scope="col" style="text-align: center; padding: 7px 10px; font-weight: 600; border-bottom: 1px solid #d0d0d0">H</th>
+<th scope="col" style="text-align: center; padding: 7px 10px; font-weight: 600; border-bottom: 1px solid #d0d0d0">E2</th>
+</tr>
+</thead>
+<tbody>
+<sc-for list="{{rows}}" as="r" hint-placeholder-count="11">
+<tr onClick="{{r.pick}}" style="background: {{r.bg}}; border-bottom: 1px solid #f0f1f8; cursor: pointer">
+<td style="padding: 6px 10px; font-weight: 700; color: {{r.idColor}}">{{r.id}}</td>
+<td style="padding: 6px 10px; color: #595d6c">{{r.entry}}</td>
+<td style="padding: 6px 10px; text-align: right; color: {{r.cagrColor}}">{{r.cagr}}</td>
+<td style="padding: 6px 10px; text-align: right">{{r.vol}}</td>
+<td style="padding: 6px 10px">
+<div style="display: flex; align-items: center; gap: 8px">
+<span style="width: 36px; text-align: right">{{r.sharpe}}</span>
+<span style="position: relative; flex: 1; height: 8px; background: #f0f1f8; border-radius: 4px; display: block">
+<span style="position: absolute; left: 0; top: 0; height: 8px; border-radius: 4px; width: {{r.barW}}; background: {{r.barColor}}; display: block"></span>
+<span aria-hidden="true" style="position: absolute; left: 93.75%; top: -3px; width: 2px; height: 14px; background: #1c1e2c; display: block"></span>
+</span>
+</div>
+</td>
+<td style="padding: 6px 10px; text-align: right; color: {{r.mddColor}}">{{r.mdd}}</td>
+<td style="padding: 6px 10px; text-align: right">{{r.trades}}</td>
+<td style="padding: 6px 10px; text-align: right; color: {{r.excessColor}}">{{r.excess}}</td>
+<td style="padding: 6px 10px; text-align: center; color: {{r.hColor}}; font-weight: 600">{{r.h}}</td>
+<td style="padding: 6px 10px; text-align: center; color: {{r.e2Color}}; font-weight: 600">{{r.e2}}</td>
+</tr>
+</sc-for>
+</tbody>
+</table>
+</div>
+<div style="padding: 8px 12px; color: #75798c; font-size: 11px; border-top: 1px solid #f0f1f8">행을 클릭하면 위 카드와 차트가 그 변형으로 바뀝니다. 수치: NEX-59 비용 1× 원장. BM1 = KODEX 200TR.</div>
+</section>
+
+<footer style="display: flex; flex-direction: column; gap: 8px">
+<div style="color: #75798c; font-size: 12px">Done 22:07:05 · 101 runs · 194 names · 2021-01-04 → 2024-12-30</div>
+<div style="background: #ffffff; border: 1px solid #e4e7f5; border-radius: 8px; padding: 6px 10px; color: #75798c; font-size: 11px">Research and backtesting signal generator, not investment advice. Backtests use today's KOSPI constituents (survivorship bias) and the cost assumptions of trend_following.md 4-1; nothing here places orders.</div>
+</footer>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1240}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { sel: 'A1' }; }
+  renderVals() {
+    const P = '#3b6fc4', L = '#d1453b', OK = '#2e7d5b', NG = '#b3362e', MUTED = '#75798c';
+    const data = [
+      ['A0','Donchian 20',-3.1,21.5,-0.19,-46.2,267,-0.1,'pass'],
+      ['A1','Donchian 20 + L1',21.5,19.0,0.98,-18.6,124,24.5,'fail'],
+      ['A2','+ Volume',12.9,19.0,0.59,-18.8,133,16.0,'fail'],
+      ['A3','+ Flows',13.7,19.0,0.62,-20.0,134,16.8,'fail'],
+      ['A4','+ Volume + Flows',13.2,19.0,0.60,-19.4,135,16.2,'fail'],
+      ['A5','+ Flow exit',14.4,18.4,0.67,-19.5,153,17.5,'fail'],
+      ['B','52W high rank',-2.5,18.4,-0.22,-38.9,349,0.5,'fail'],
+      ['C1','Trend + pullback',9.0,12.8,0.51,-14.2,168,12.0,'na'],
+      ['C2','C1, no vol-norm',6.0,12.7,0.29,-13.7,176,9.1,'na'],
+      ['C3','C1, 52W proximity',7.6,13.1,0.40,-15.5,159,10.7,'na'],
+      ['BM1','KODEX 200TR',-3.1,18.0,-0.29,-34.4,0,null,'bm']
+    ];
+    const sign = (x) => (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(x).toFixed(1);
+    const pct = (x) => (x < 0 ? '−' : '') + Math.abs(x).toFixed(1) + '%';
+    const sel = this.state.sel;
+    const pick = (id) => () => this.setState({ sel: id });
+    const rows = data.map(([id, entry, cagr, vol, sh, mdd, tr, ex, e2]) => {
+      const isBm = e2 === 'bm';
+      const hOk = sh >= 1.5 && Math.abs(mdd) <= 15;
+      return {
+        id, entry, pick: pick(id),
+        bg: id === sel ? '#f5f4ff' : '#ffffff',
+        idColor: isBm ? MUTED : '#1c1e2c',
+        cagr: pct(cagr), cagrColor: cagr >= 0 ? P : L,
+        vol: vol.toFixed(1) + '%',
+        sharpe: (sh < 0 ? '−' : '') + Math.abs(sh).toFixed(2),
+        barW: Math.max(0, Math.min(sh, 1.6)) / 1.6 * 100 + '%',
+        barColor: isBm ? '#c3c6d4' : '#9184d9',
+        mdd: pct(mdd), mddColor: Math.abs(mdd) <= 15 ? OK : NG,
+        trades: String(tr),
+        excess: ex === null ? '—' : sign(ex), excessColor: ex === null ? MUTED : (ex >= 0 ? P : L),
+        h: isBm ? '—' : (hOk ? '✓' : '✕'), hColor: isBm ? MUTED : (hOk ? OK : NG),
+        e2: isBm ? '—' : e2 === 'pass' ? '✓' : e2 === 'fail' ? '✕' : '–',
+        e2Color: e2 === 'pass' ? OK : e2 === 'fail' ? NG : MUTED,
+        raw: { cagr, vol, sh, mdd, tr, ex, e2 }
+      };
+    });
+    const cur = rows.find((r) => r.id === sel) || rows[1];
+    const c = cur.raw;
+    return {
+      rows,
+      variants: data.map(([id]) => ({ id, active: id === sel, inactive: id !== sel, pick: pick(id) })),
+      kpi: {
+        id: cur.id,
+        sharpe: cur.sharpe, sharpeOk: c.sh >= 1.5, sharpeNg: c.sh < 1.5,
+        mdd: cur.mdd, mddOk: Math.abs(c.mdd) <= 15, mddNg: Math.abs(c.mdd) > 15,
+        cagr: cur.cagr, cagrColor: cur.cagrColor,
+        excess: c.ex === null ? '—' : sign(c.ex) + '%p', excessColor: cur.excessColor,
+        vol: cur.vol, trades: cur.trades,
+        e2Pass: c.e2 === 'pass', e2Fail: c.e2 === 'fail', e2Na: c.e2 === 'na' || c.e2 === 'bm'
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>

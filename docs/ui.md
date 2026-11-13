@@ -12,6 +12,9 @@ Strategy 탭은 2026-09-28 옛 전략 계층과 함께 제거됐다가 같은 �
 | Trading History | `Trading History Redesign.dc.html` | 10건 |
 | Total Assets | `Total Assets Redesign.dc.html` | 9건 |
 | ~~Strategy~~ | `Strategy Redesign.dc.html` | 9건 — 옛 Strategy 탭 기준. 지금의 Strategy 탭(Trend Following)과는 다른 화면이라 5장은 기록용 |
+| Strategy › Trend Following (2026-11) | `docs/ui_mockups/2026-11/Main.dc.html` | 8.10 — 실행 화면 `impl_strategy.png` |
+| Trading Universe 상세 패널 (2026-11) | `docs/ui_mockups/2026-11/Universe.dc.html` | 8.10 — 구현 후 철회, 점수 구성은 MA 차트 팝업으로 |
+| 토큰·배지 (2026-11) | `docs/ui_mockups/2026-11/Tokens.dc.html` | 8.10 |
 
 ---
 
@@ -716,3 +719,99 @@ app.setStyleSheet(app_qss(FONT_FAMILY_CSS))
 - **한 경로**: 표의 행 숨김과 뷰 건수 모두 `ui/universe_views.py`의 `matches()`를 쓴다(Qt 없음). 표는 행을
   `StockTable.row_values()`로 dict로 바꿔 넘긴다. 그래서 뷰의 건수는 그 뷰를 골랐을 때 보이는 행 수와 항상 같다.
 - 헤더 클릭은 계속 정렬이다. 열마다 필터 아이콘을 두지 않은 이유는 58px 열에서 라벨과 겹치고 클릭이 정렬과 충돌하기 때문.
+
+### 8.10 Strategy 결과 화면·Universe 상세 패널 (2026-11)
+
+구현 지시서 `docs/ui_redesign_2026-11.md`(P0~P3)의 결정 요약. 시안과 이 장이 다른 곳은 이 장(8장)을 따랐다(지시서 0.3).
+
+- **배지 4종**(`ui.common.make_badge` / `set_badge`, QSS `QLabel#badgeOk/Warn/Fail/Na`): 판정 표시이며 버튼이 아니므로
+  ✓ ✕ 같은 기호를 허용한다(버튼 라벨은 여전히 기호 금지, 8.1). 글자색은 OK/WARN/DANGER보다 한 단계 진해 작은 글씨도 대비 4.5:1.
+- **KpiCard**(`ui.common`): 대문자 라벨, 우상단 배지 자리, 값(16pt = `FONT_TITLE`), 한 줄 풀이(`kpiHelp`). History의 `KpiStrip`은 그대로.
+- **Strategy › Trend Following** (`ui/trend_following_tab.py` + `ui/strategy_widgets.py`), 위에서 아래로:
+  1. 실행 설정 카드: 폼 값을 칩(`settingsChip`)으로 요약, 오른쪽에 Edit settings · Save Report · Stop · Run Research(primary 맨 끝).
+     폼은 **실행 전 첫 화면에서는 펼쳐 두고, 결과가 오면 접는다**(Edit settings로 다시 펼침).
+  2. 변형 세그먼트(결과의 ID 순서, BM1~BM4 포함, 고정 폭 52)와 비용 세그먼트 0x | 1x | 2x(결과에 있는 배수만 활성).
+     기본 선택은 1x와 1x Sharpe가 가장 높은 전략 — 선택 초기값일 뿐 순위·채택 표시가 아니다.
+  3. KPI 카드 6장(Sharpe · Max drawdown · CAGR · vs BM1 · Volatility · Trades), 폭 960px 미만이면 3×2.
+     목표 배지는 Sharpe ≥ 1.5, |MDD| ≤ 15%(`TARGET_SHARPE`, `TARGET_MDD`; 사용자 성과 기준 H). 벤치마크 선택 시 배지 숨김.
+  4. 차트(`sharex`, 3:1): 위 NAV(100 기준)는 **선택 변형 + BM1만**(`SERIES_SELECTED` 실선 / `SERIES_BENCH` 점선), Show all이면 나머지를
+     `TEXT_EMPTY` 가는 선으로. 아래 낙폭은 `LOSS` 채움(`DRAWDOWN_ALPHA`)과 −15% 목표선(`SERIES_TARGET`). 낙폭의 고점은 시드 1.0에서
+     시작해 `metrics.max_drawdown`과 같은 값이 된다. readout·crosshair는 두 축에 같은 x.
+  5. Target check 카드: **앱이 직접 계산하는 것만**(Sharpe, MDD, 둘 다 = H). E2·A5는 "Not run here" — 검증 리포트의 고정 문구·J1 판정을 넣지 않는다.
+  6. 결과 탭: Variant comparison(기본; 한 비용 배수의 전략 + BM1~BM4, Sharpe 막대 0~1.6에 1.5 눈금, MDD 글자는 기준 판정이므로
+     상태 채널 OK/FAIL, 행 클릭 = 세그먼트 선택) · All metrics(이전 전체 열 표 그대로) · Monthly returns(`heatmap_bg(v*100, 10)`) ·
+     Trades · Event study · Warnings (n)(n > 0이면 탭 글자 WARN — 전역 QSS가 탭 색을 정하므로 `QTabWidget#ResultTabs[warn="true"]
+     QTabBar::tab:last` 규칙으로 칠한다).
+  7. 변형·비용 전환은 재실행 없이 이미 받은 `ResearchResult`로 다시 그린다.
+- **Trading Universe → MA 차트 팝업** (2026-11-13, 지시서 P2를 구현했다가 사용자 결정으로 철회):
+  Score 열·이름 앞 순위 배지·오른쪽 상세 패널을 Universe 표에 넣으니 표가 좁아져(1500px 창에서 가로 스크롤, MA Div 헤더와
+  이름 잘림) 원래 정보가 제대로 보이지 않았다. Universe 표는 개편 전 그대로 두고(Trend Score는 상위/하위 고정 순서와
+  이름 옆 `· Top 3 (+0.79)` 태그만), 점수 구성은 종목 하나를 깊게 보는 **MA 차트 팝업**(`StockMaDialog`) 오른쪽 패널 맨 위의
+  Trend Score 섹션(`ui/trend_score_section.py`)으로 옮겼다.
+  - KOSPI/KOSDAQ 종목에만: 주간 평균·최신 총점·Top/Bottom 순위, pct(MA50Div)·pct(Range52)·pct(R3) 카드 3장, 게이트 4줄 Pass/Fail 배지.
+  - 팝업을 연 시점의 마지막 실행(`UniverseTab._last_recommendation`, 고정 해제 뒤에도 유지)을 쓰므로 제목에 그 실행의 기준일을 적는다.
+    열린 팝업은 이후 실행으로 갱신되지 않는다.
+  - 실행 전: "Run Trend Score in Trading Universe to see the score breakdown", 미채점 종목: 사유 한 줄.
+- 한국어 문구: KPI 카드 풀이 줄, 점수 구성 카드 풀이, E2·A5 툴팁은 지시서 문구 그대로 한국어(CLAUDE.md 예외).
+
+### 8.11 화면 문구 한글화 (2026-11-13)
+
+사용자 결정으로 화면에 보이는 문구의 1·2순위를 한국어로 바꿨다. 코드·주석·로그·테스트 코드는 영어 그대로(CLAUDE.md).
+
+- **바꾼 것**: 우클릭 메뉴(이평 차트 보기, AI 종목 리포트, 유니버스에서 제거..., 거래 삭제..., 기록 삭제..., 보유로 표시/관심으로 표시/보유/관심 해제),
+  확인·경고 창 문구, 다이얼로그 공통 버튼(저장·취소·닫기·확인·적용·지우기), 거래 입력 창(제목 거래 추가/매수 수정/매도 수정, 필드 라벨, 안내 문구),
+  상태 표기 보유/관심(Held/Target), 각 탭 툴바(Universe 새로고침·종목 추가·필터·저장된 보기·추세 점수, History 거래 추가·예수금 조회·종목별 요약·
+  다시 읽기·상태별/월별·오래된 시세 숨김·전체, Total Assets 기록 추가·이번 주·그래프·내보내기·날짜/총자산/현재 총자산/주간 손익/통화),
+  기본 보기 이름(저PER, 52주 신고가 근접), 범위 필터 패널, Strategy 탭(실행 설정 칩, 설정 편집·리포트 저장·중지·리서치 실행, 폼 라벨, 변형/비용,
+  전체 표시, 결과 탭 변형 비교·전체 지표·월별 수익률·매매 내역·이벤트 스터디·경고 (n), 목표 점검 카드와 판정 배지), 변형 선택 창 버튼.
+- **영어로 둔 것**: 상위 탭 이름 4개(사용자 결정), 메시지 박스 제목(= 탭 이름, 8.5), 지표 약어(CAGR·MDD·Sharpe·Vol·tPER·MA20 Div·RSI),
+  좁은 숫자 열 머리글(3D~120D, 1M/3M/YTD), 변형·벤치마크 ID, 시장 이름, ALL/KOSPI/KOSDAQ 버튼.
+- **아직 영어**: 표 머리글(History Buy/Sell/Position, Universe Name/Cap/Price 등), MA 차트 팝업(Trend Score 섹션 포함), KPI 띠 라벨,
+  푸터·상태바 진행 문구, 빈 표 안내 일부 — 3순위로 남김.
+- Qt 기본 대화상자(예/아니요, 입력·파일 대화상자)는 `main.py`가 설치하는 `qtbase_ko` 번역으로 한국어.
+- 8.1 버튼 라벨 기호 금지 검사는 "화살표·기호·이모지 영역(U+2190~U+2BFF, U+1F000~)"으로 좁혀 한글을 허용(`test_ux_consistency.py`).
+- 고정 폭 칸에서 잘리던 안내 문구는 짧게: Universe 종목 입력 "코드 예: 005930", Total Assets 총자산 입력 "자동 입력".
+
+### 8.12 Strategy 실행 설정 배치와 종료일 (2026-11-13)
+
+- **시장 선택**(2026-11-13): 1줄의 기간 옆에 KOSPI·KOSDAQ·NASDAQ·NYSE 토글 버튼(여러 개 선택, 최소 하나 — 마지막 하나는 해제되지 않음).
+  여러 시장이면 선택 시장 전체에서 원화 환산 시가총액 순으로 고르고, 칩은 `KOSPI+NASDAQ 상위 200`처럼 보인다(스펙 9-25).
+  묶음 순서는 기간 · 시장 · 유니버스 · 유동성 하한 · 최대 보유 · 점검 요일 · 비용 · 수급/이벤트 스터디 · 변형 선택 · 선택 요약.
+- **배치**: 실행 설정 카드 안에서 접힘 = 칩 한 줄, 펼침 = 칩 자리에 폼 2줄. 폼은 처음에 펼쳐져 있고 **리서치 실행 뒤에도 펼친 채로 둔다**
+  (사용자 결정 2026-11-13, 8.10의 "결과가 오면 접는다"를 대체) — 결과를 보면서 바로 다시 고를 수 있게. 접기는 설정 편집 버튼으로.
+  이전에는 칩 줄 아래 3×3 격자 3줄 + 변형 줄 1줄로 총 5줄이었다. 긴 설명은 툴팁으로(유니버스·유동성·점검 요일·비용·종료일).
+- **줄바꿈 배치**(2026-11-13, `review_codex.md` UI 실패 2건 후속): 폼은 `ui.common.FlowLayout` — 라벨+컨트롤 묶음을 왼쪽부터 놓고
+  폭이 모자라면 다음 줄로 넘긴다. 폼은 카드 오른쪽 끝까지 쓰되 **첫 줄만** 그 모서리에 얹힌 버튼(설정 편집 · 리포트 저장 · 중지 ·
+  리서치 실행) 폭만큼 비운다(`set_first_line_inset`). 보통 창(앱 테마 1440px)에서는 2줄, 좁아지면 3~4줄이 되고 컨트롤이 잘리지 않는다.
+  두 줄 고정 배치는 글꼴 폭이 넓은 환경(offscreen 플랫폼)에서 최소 폭이 1348~1459px까지 커졌고, 시장 버튼을 넣으며 더 넓어졌다.
+- **최소 폭**: 폼의 최소 폭은 한 줄 전체가 아니라 묶음 하나(또는 첫 묶음 + 버튼)다(앱 테마 기준 탭 최소 폭 1170 → 811px).
+  변형 선택 요약 라벨은 최소 180px로 세고 그 줄의 남는 폭을 차지하며(`QSizePolicy.Ignored`), 길면 잘리고 전체 문구는 툴팁. 칩 줄도
+  최소 폭을 정하지 않는다. 배치 테스트는 px 상수가 아니라 위젯의 size hint 기준으로 검사한다(플랫폼·글꼴이 달라도 같은 조건).
+- **종료일**: 기본값·최댓값이 오늘. 2024-12-31(`DEV_END`) 이후면 폼에 "홀드아웃 포함"(`#warn`), 칩도 같은 문구를 주황
+  (`QLabel#settingsChip[warn="true"]`)으로 표시하고, 결과의 경고 탭 첫 줄과 저장 리포트에 홀드아웃 포함 결과임을 적는다(스펙 9-23).
+- **매매 내역 탭**: 종목명 열을 티커 앞에 둔다(`ResearchResult.dataset_info["names"]`, 스펙 9-24).
+
+### 8.13 Strategy 매매 내역과 상세 팝업 (2026-11-13)
+
+- **탭과 팝업이 같은 목록**(2026-11-13 개정): 둘 다 `ui/dialogs/strategy_trades.py`의 `StrategyTradesView` — 검색창 · 청산 사유 필터 · 표 · 요약 줄.
+  열: 진입일 · 청산일(가운데 정렬) · 종목명 · 티커 · 시장 · 수량 · 매입가 · 매도가 · 매입금액 · 매도금액 · 손익(원) · 수익률 · 보유일 · 비용(원) · 청산 사유
+  (가격·금액은 원, 미국 종목은 환산가). 청산 사유는 한국어 라벨(`strategy_widgets.EXIT_REASONS`)이고 원래 코드는 툴팁.
+  열 머리글 정렬(숫자는 값으로, 날짜는 날짜로, 기본은 청산일 최신순), 종목명/티커 검색, 청산 사유 필터(필터 결과로 요약 줄 재계산), Ctrl+C TSV 복사.
+  요약 줄: 건수(청산 건수) · 승률 · 평균 수익률 · 평균 보유일 · 손익 합계(비중 축소·연말 정산은 승률·평균에서 제외).
+  기준 변형이 바뀌어도 검색어·정렬은 유지되고, 사유 필터는 그 사유가 새 목록에 있을 때만 유지된다.
+- **열 폭**: 머리글과 가장 긴 셀에 맞춘다(최소 폭은 `COLUMNS`, 종목명 200px·청산 사유 140px 상한, 전체 문구는 툴팁).
+- **상세 팝업**(`StrategyTradesDialog`): "크게 보기" 버튼, 또는 행 더블클릭·Enter(그 거래가 선택된 채 열림). 같은 목록을 큰 창으로 보여 주고,
+  **모든 열이 가로 스크롤 없이 보이는 폭**(열 폭 합 + 세로 스크롤바 + 여백)으로 열린다. 화면이 그보다 좁으면 화면 폭(−40px)까지.
+  모달이 아니며 크기 조절·최대화 가능. 벤치마크를 고르면 버튼이 꺼진다.
+
+### 8.14 전략·BM 여러 개 선택 (2026-11-13)
+
+- 결과 화면의 변형 세그먼트(A0…C3, BM1…BM4)는 **여러 개 선택**이다. 기본은 비용 1x에서 Sharpe가 가장 높은 전략 + BM1(이전 화면과 같은 모습).
+  - 선택 안 된 버튼: 선택에 추가하고 기준으로 · 선택됐지만 기준이 아닌 버튼: 기준으로 · 기준 버튼: 선택 해제(마지막 하나는 남는다).
+  - **기준**(진한 테두리, `QPushButton[segFocus="true"]`; `focus`는 QWidget의 읽기 전용 속성이라 쓰지 않음)이 KPI 카드·목표 점검·월별 수익률·
+    매매 내역(과 상세 팝업)에 보인다. 이미 선택된 변형을 기준으로 바꿔도 선택 순서는 그대로라 차트 색이 바뀌지 않는다.
+  - 변형 비교 표는 같은 선택을 행 선택으로 보여 주고, Ctrl/Shift 클릭으로 여러 행을 고르면 세그먼트가 따라간다. 그냥 클릭은 그 행 하나만 선택.
+  - 비용 배수를 바꿔도 선택과 기준이 유지된다.
+- **차트**: 선택한 실행을 모두 그린다. 전략은 실선, BM은 점선; BM1은 `SERIES_BENCH`, 나머지는 선택 순서대로 `colors.SERIES_PALETTE`
+  (accent 보라부터 8색, PROFIT/LOSS로 읽히는 순수 파랑·빨강은 제외). 기준은 가장 굵고 맨 위에 그린다. 낙폭 패널은 기준만 LOSS로 채우고
+  나머지는 각자 색의 선. readout은 기준 → 나머지 선택 순. "전체 표시"는 선택하지 않은 실행을 회색 가는 선으로 더한다.
