@@ -30,7 +30,7 @@ from PyQt6.QtCore import Qt, QDate
 from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QComboBox,
-    QSpinBox, QDateEdit, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QMessageBox,
+    QSpinBox, QDoubleSpinBox, QDateEdit, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QMessageBox,
     QSplitter, QFrame, QDialog, QTabWidget, QScrollArea, QSizePolicy, QGridLayout,
 )
 
@@ -53,6 +53,7 @@ from ui.colors import LOSS, WARN, SERIES_BENCH, SERIES_TARGET, DRAWDOWN_ALPHA, S
 from ui.theme import TEXT, TEXT_MUTED, TEXT_FAINT, TEXT_EMPTY, LINE
 from ui.strategy_widgets import (
     TARGET_MDD, SegmentRow, KpiRow, TargetCheckCard, SharpeBarDelegate, COMPARISON_HEADERS, SHARPE_COL,
+    DEFAULT_TARGET_SHARPE, TARGET_SHARPE_RANGE, comparison_headers, fmt_target,
     MONTH_HEADERS, comparison_rows, fill_comparison, fill_monthly,
     drawdown_series, sorted_trades,
 )
@@ -106,6 +107,10 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self._sel_ids: list[str] = []
         self._sel_id: str | None = None
         self._syncing = False
+        # The Sharpe target the shown result is judged against, and the form's
+        # value captured at Run for the result that run will bring.
+        self.target_sharpe = DEFAULT_TARGET_SHARPE
+        self._pending_target_sharpe = DEFAULT_TARGET_SHARPE
         # Hover readout state: (label, color, x as matplotlib date numbers, y) per plotted series.
         self._chart_series: list[tuple[str, str, np.ndarray, np.ndarray]] = []
         self._crosshair = None
@@ -166,7 +171,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         for sig in (self.start_edit.dateChanged, self.end_edit.dateChanged, self.universe_spin.valueChanged,
                     self.liquidity_spin.valueChanged, self.positions_spin.valueChanged,
                     self.weekday_combo.currentIndexChanged, self.cost_combo.currentIndexChanged,
-                    self.flows_cb.toggled, self.event_cb.toggled):
+                    self.flows_cb.toggled, self.event_cb.toggled, self.target_spin.valueChanged):
             sig.connect(self._update_chips)
         # A3-A5 cannot run without investor flows: the selection shown and sent
         # is what a run will actually do (review_codex.md S1).
@@ -287,6 +292,17 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             self.cost_combo.addItem(label)
         self.cost_combo.setToolTip("trend_following.md 4-1 비용 민감도")
 
+        # The Sharpe bar a run is judged against (KPI badge, target check, the
+        # comparison table's H column and Sharpe tick). It takes effect when Run
+        # is pressed, so a result keeps the target it was run with.
+        self.target_spin = QDoubleSpinBox()
+        self.target_spin.setRange(*TARGET_SHARPE_RANGE)
+        self.target_spin.setDecimals(1)
+        self.target_spin.setSingleStep(0.1)
+        self.target_spin.setValue(DEFAULT_TARGET_SHARPE)
+        self.target_spin.setToolTip("결과를 판정할 Sharpe 목표(기본 1.0). 리서치 실행 시점의 값이 그 결과에 적용됩니다. "
+                                    f"MDD 목표는 {TARGET_MDD * 100:g}% 고정.")
+
         self.flows_cb = QCheckBox("투자자 수급")
         self.flows_cb.setToolTip("네이버 투자자별 매매 동향으로 F/FX 신호 계산(한국 종목만). 처음 실행은 느림")
         self.event_cb = QCheckBox("이벤트 스터디")
@@ -324,6 +340,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             _group("최대 보유", self.positions_spin),
             _group("점검 요일", self.weekday_combo),
             _group("비용", self.cost_combo),
+            _group("목표 Sharpe ≥", self.target_spin),
             _group(self.flows_cb, self.event_cb),
             self.variants_btn,
             self.variants_lbl,
@@ -510,6 +527,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             f"최대 {self.positions_spin.value()}종목",
             f"점검: {self.weekday_combo.currentText()}",
             "비용 " + "/".join(f"{m:g}x" for m in mults),
+            f"목표 Sharpe ≥ {fmt_target(self.target_spin.value())}",
             variants,
         ]
         if self.includes_holdout():
@@ -608,6 +626,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             QMessageBox.warning(self, "Strategy", "변형을 하나 이상 고르거나 이벤트 스터디를 켜세요.")
             return
         req = self.build_request()
+        self._pending_target_sharpe = float(self.target_spin.value())
         thread = TrendFollowingResearchThread(req)
         thread.progress.connect(self._on_progress)
         thread.finished.connect(self._on_research_finished)
@@ -637,6 +656,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             return
         self._result = result
         self.save_btn.setEnabled(True)
+        self.set_target_sharpe(self._pending_target_sharpe)
         self.populate(result)
         self._show_warnings(result)
         n_runs = len(result.runs)
@@ -644,6 +664,16 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.status_lbl.setText(
             f"Done {result.created_at:%H:%M:%S} · {n_runs} runs · {result.dataset_info.get('n_tickers', 0)} names · "
             f"{result.dataset_info.get('eval_start', '')} → {result.dataset_info.get('eval_end', '')}{skipped}")
+
+    def set_target_sharpe(self, target: float):
+        """Judge the shown result against `target` (cards, target check,
+        comparison table); the form's value is applied at Run."""
+        self.target_sharpe = float(target)
+        self.kpi_row.set_target_sharpe(self.target_sharpe)
+        self.target_card.set_target_sharpe(self.target_sharpe)
+        self._sharpe_delegate.target = self.target_sharpe
+        self.compare_table.setHorizontalHeaderLabels(comparison_headers(self.target_sharpe))
+        self.compare_table.viewport().update()
 
     # -------------------------------------------------------------- warnings
     def _show_warnings(self, result: ResearchResult):
@@ -714,7 +744,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.variant_seg.set_keys([r.id for r in rows], tooltips={r.id: r.label for r in rows})
         self._syncing = True
         try:
-            fill_comparison(self.compare_table, rows)
+            fill_comparison(self.compare_table, rows, self.target_sharpe)
         finally:
             self._syncing = False
         ids = [r.id for r in rows]

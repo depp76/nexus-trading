@@ -839,11 +839,75 @@ class TestTradeList(unittest.TestCase):
         self.assertEqual(len(copy_rows_tsv(dlg.table).split("	")), dlg.table.columnCount())
         dlg.close()
 
+class TestSharpeTarget(unittest.TestCase):
+    """The Sharpe target is set in the form (default 1.0) and applies to the
+    result of the run started with it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.result = _result(("A0", "A1"), (1.0,))
+
+    def _run_with(self, tab, target):
+        tab.target_spin.setValue(target)
+        _FakeThread.instances.clear()
+        with patch("ui.trend_following_tab.TrendFollowingResearchThread", _FakeThread):
+            tab._on_run_clicked()
+        tab.target_spin.setValue(2.5)                     # changed while running: not this result's target
+        _FakeThread.instances[0].finished.emit(self.result, "")
+
+    def test_cost_switch_does_not_stack_segment_buttons(self):
+        tab = TrendFollowingTab()
+        tab._on_research_finished(self.result, "")
+        tab.set_cost(1.0)
+        tab.set_cost(1.0)                                 # no event loop in between
+        lay = tab.variant_seg._layout
+        shown = [lay.itemAt(i).widget() for i in range(lay.count())
+                 if lay.itemAt(i).widget() is not None and not lay.itemAt(i).widget().isHidden()]
+        self.assertEqual(len(shown), len(tab.variant_seg.buttons))
+
+    def test_default_is_one_and_shows_in_the_chips(self):
+        tab = TrendFollowingTab()
+        self.assertEqual(tab.target_spin.value(), 1.0)
+        self.assertIn("목표 Sharpe ≥ 1.0", tab._chip_texts())
+        tab.target_spin.setValue(1.3)
+        self.assertIn("목표 Sharpe ≥ 1.3", [c.text() for c in tab.chips if not c.isHidden()])
+
+    def test_run_judges_against_the_target_it_was_started_with(self):
+        from ui.common import _BADGE_NAMES
+        from ui.strategy_widgets import SHARPE_COL, meets_targets
+        tab = TrendFollowingTab()
+        self._run_with(tab, 0.1)
+        self.assertEqual(tab.target_sharpe, 0.1)
+        self.assertEqual(tab.target_card.labels["sharpe"].text(), "Sharpe ≥ 0.1")
+        self.assertIn("목표 ≥ 0.1", tab.kpi_row.cards["sharpe"].help.text())
+        self.assertIn("0.1", tab.compare_table.horizontalHeaderItem(SHARPE_COL).text())
+        self.assertEqual(tab._sharpe_delegate.target, 0.1)
+        run = tab.selected_run()
+        want = "ok" if run.metrics["sharpe"] >= 0.1 else "fail"
+        self.assertEqual(tab.target_card.badges["sharpe"].objectName(), _BADGE_NAMES[want])
+        row = next(r for r in range(tab.compare_table.rowCount()) if tab.compare_table.item(r, 0).text() == "A0")
+        a0 = next(r for r in self.result.runs_at(1.0) if r.id == "A0")
+        h = meets_targets(a0.metrics, 0.1)
+        self.assertEqual(tab.compare_table.item(row, 8).text(), "-" if h is None else ("✓" if h else "✕"))
+        self.assertIn("Sharpe ≥ 0.1", tab.compare_table.item(row, 8).toolTip())
+
+        self._run_with(tab, 3.0)                          # a high bar fails every finite Sharpe below it
+        self.assertEqual(tab.target_card.labels["sharpe"].text(), "Sharpe ≥ 3.0")
+        run = tab.selected_run()
+        if run.metrics["sharpe"] < 3.0:
+            self.assertEqual(tab.target_card.badges["sharpe"].text(), "✕ 3.0 미만")
+
+
 class TestTargetsAndDrawdown(unittest.TestCase):
     def test_sharpe_and_mdd_badge_boundaries(self):
         from ui.strategy_widgets import sharpe_badge, mdd_badge, meets_targets
-        self.assertEqual(sharpe_badge(1.5)[0], "ok")
-        self.assertEqual(sharpe_badge(1.4999)[0], "fail")
+        self.assertEqual(sharpe_badge(1.0)[0], "ok")               # default target 1.0
+        self.assertEqual(sharpe_badge(0.9999)[0], "fail")
+        self.assertEqual(sharpe_badge(1.4999, 1.5), ("fail", "✕ 1.5 미만"))
+        self.assertEqual(sharpe_badge(1.5, 1.5)[0], "ok")
+        self.assertFalse(meets_targets({"sharpe": 1.2, "mdd": -0.1}, 1.5))
+        self.assertEqual(sharpe_badge(0.5), ("fail", "✕ 1.0 미만"))
+        self.assertTrue(meets_targets({"sharpe": 1.2, "mdd": -0.1}))
         self.assertEqual(sharpe_badge(float("nan"))[0], "na")
         self.assertEqual(mdd_badge(-0.15)[0], "ok")
         self.assertEqual(mdd_badge(-0.1500001)[0], "fail")

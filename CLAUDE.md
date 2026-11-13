@@ -119,7 +119,7 @@ Dev tooling is in `requirements-dev.txt`
   target-check card, result tabs (comparison, all metrics, monthly, trades, event study,
   warnings), "Save Report" to `reports/`; docs/ui.md 8.10), `strategy_widgets.py` (that
   screen's widgets: `KpiRow`, `TargetCheckCard`, `SharpeBarDelegate`, `SegmentRow`, table
-  fillers, `TARGET_SHARPE`/`TARGET_MDD`; the trade list shared by the tab and its popup is
+  fillers, `DEFAULT_TARGET_SHARPE` (1.0; the run's target comes from the form)/`TARGET_MDD`; the trade list shared by the tab and its popup is
   `dialogs/strategy_trades.py` `StrategyTradesView`), `trend_score_section.py` (`TrendScoreSection`: the
   MA chart dialog's block with the last Trend Score run's breakdown and gate for a KOSPI/KOSDAQ name;
   `UniverseTab._last_recommendation` is passed in through `StockMaDialog(trend_rec=...)`),

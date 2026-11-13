@@ -2,7 +2,8 @@
 screen (docs/ui_redesign_2026-11.md P1, docs/ui.md 8.10), kept out of
 ui/trend_following_tab.py so the tab module stays about wiring.
 
-  - target checks: TARGET_SHARPE / TARGET_MDD and the badge they give a run
+  - target checks: the Sharpe target (set per run in the tab's form, default
+    DEFAULT_TARGET_SHARPE) / TARGET_MDD and the badge they give a run
   - drawdown_series: the drawdown curve under the NAV chart
   - SegmentRow: a row of fixed-width toggle buttons, one checked at a time
   - KpiRow: the six KpiCards for the selected run, reflowing to 3x2 when narrow
@@ -34,10 +35,12 @@ from ui.delegates import CellDelegate
 from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_EMPTY, LINE_STRONG
 
 # ---------------------------------------------------------------------------
-# Targets (user's performance bar, Nexus README "H"): Sharpe >= 1.5 and a
-# maximum drawdown no deeper than 15% over the whole window.
+# Targets (user's performance bar, Nexus README "H"): Sharpe >= the target
+# set in the Strategy form (default 1.0, user direction 2026-11-13; it was a
+# fixed 1.5) and a maximum drawdown no deeper than 15% over the whole window.
 # ---------------------------------------------------------------------------
-TARGET_SHARPE = 1.5
+DEFAULT_TARGET_SHARPE = 1.0
+TARGET_SHARPE_RANGE = (0.1, 3.0)
 TARGET_MDD = 0.15
 TARGET_SOURCE = "사용자 성과 기준 (Nexus README, 기준 H)"
 
@@ -49,8 +52,8 @@ def _finite(x) -> bool:
     return x is not None and isinstance(x, (int, float)) and math.isfinite(x)
 
 
-def sharpe_ok(sharpe) -> bool | None:
-    return (sharpe >= TARGET_SHARPE) if _finite(sharpe) else None
+def sharpe_ok(sharpe, target: float = DEFAULT_TARGET_SHARPE) -> bool | None:
+    return (sharpe >= target - 1e-12) if _finite(sharpe) else None
 
 
 def mdd_ok(mdd) -> bool | None:
@@ -58,19 +61,29 @@ def mdd_ok(mdd) -> bool | None:
     return (abs(mdd) <= TARGET_MDD + 1e-12) if _finite(mdd) else None
 
 
-def meets_targets(metrics: dict) -> bool | None:
+def meets_targets(metrics: dict, target_sharpe: float = DEFAULT_TARGET_SHARPE) -> bool | None:
     """Both targets at once (criterion H); None when either value is missing."""
-    s, m = sharpe_ok(metrics.get("sharpe")), mdd_ok(metrics.get("mdd"))
+    s, m = sharpe_ok(metrics.get("sharpe"), target_sharpe), mdd_ok(metrics.get("mdd"))
     if s is None or m is None:
         return None
     return s and m
 
 
-def sharpe_badge(sharpe) -> tuple[str, str]:
-    ok = sharpe_ok(sharpe)
+def sharpe_badge(sharpe, target: float = DEFAULT_TARGET_SHARPE) -> tuple[str, str]:
+    ok = sharpe_ok(sharpe, target)
     if ok is None:
         return "na", "값 없음"
-    return ("ok", "✓ 목표 충족") if ok else ("fail", f"✕ {TARGET_SHARPE:g} 미만")
+    return ("ok", "✓ 목표 충족") if ok else ("fail", f"✕ {fmt_target(target)} 미만")
+
+
+def fmt_target(target_sharpe: float) -> str:
+    """A Sharpe target as the form shows it (one decimal: 1.0, 1.5)."""
+    return f"{target_sharpe:.1f}"
+
+
+def target_text(target_sharpe: float = DEFAULT_TARGET_SHARPE) -> str:
+    """Criterion H in words, for tooltips."""
+    return f"Sharpe ≥ {fmt_target(target_sharpe)} and |MDD| ≤ {TARGET_MDD * 100:g}%"
 
 
 def mdd_badge(mdd) -> tuple[str, str]:
@@ -150,6 +163,10 @@ class SegmentRow(QWidget):
     def set_keys(self, keys, labels: dict | None = None, enabled=None, tooltips: dict | None = None):
         for btn in self.buttons.values():
             self._group.removeButton(btn)
+            # Out of the layout and hidden now: deleteLater only runs once the
+            # event loop gets to it, and two set_keys in a row would show both sets.
+            self._layout.removeWidget(btn)
+            btn.hide()
             btn.deleteLater()
         self.buttons = {}
         for key in keys:
@@ -206,7 +223,7 @@ class SegmentRow(QWidget):
 # KPI cards
 # ---------------------------------------------------------------------------
 KPI_CARDS = [
-    ("sharpe", "Sharpe", f"위험 1단위당 초과수익 · 목표 ≥ {TARGET_SHARPE:g}"),
+    ("sharpe", "Sharpe", f"위험 1단위당 초과수익 · 목표 ≥ {fmt_target(DEFAULT_TARGET_SHARPE)}"),
     ("mdd", "Max drawdown", f"고점 대비 최대 하락 · 목표 |MDD| ≤ {TARGET_MDD * 100:g}%"),
     ("cagr", "CAGR", "연평균 수익률"),
     ("excess", "vs BM1", "시장(KODEX 200TR) 대비 CAGR 차이"),
@@ -228,8 +245,13 @@ class KpiRow(QWidget):
         self.cards = {key: KpiCard(label, help_text) for key, label, help_text in KPI_CARDS}
         for key in ("sharpe", "mdd"):
             self.cards[key].badge.setToolTip(TARGET_SOURCE)
+        self.target_sharpe = DEFAULT_TARGET_SHARPE
         self._cols = 0
         self._reflow(6)
+
+    def set_target_sharpe(self, target: float):
+        self.target_sharpe = float(target)
+        self.cards["sharpe"].help.setText(f"위험 1단위당 초과수익 · 목표 ≥ {fmt_target(self.target_sharpe)}")
 
     def _reflow(self, cols: int):
         if cols == self._cols:
@@ -254,7 +276,8 @@ class KpiRow(QWidget):
         m = run.metrics
         judged = run.kind == "strategy"       # benchmarks are not held to the target (no badge)
         sharpe, mdd = m.get("sharpe"), m.get("mdd")
-        self.cards["sharpe"].set(fmt_num(sharpe), badge=sharpe_badge(sharpe) if judged else None)
+        self.cards["sharpe"].set(fmt_num(sharpe),
+                                 badge=sharpe_badge(sharpe, self.target_sharpe) if judged else None)
         self.cards["mdd"].set(fmt_pct(mdd), _hex(mdd) if _finite(mdd) and mdd < 0 else None,
                               badge=mdd_badge(mdd) if judged else None)
         cagr = m.get("cagr")
@@ -276,7 +299,7 @@ class TargetCheckCard(QFrame):
     fixed verdict from an earlier validation report."""
 
     ROWS = [
-        ("sharpe", f"Sharpe ≥ {TARGET_SHARPE:g}"),
+        ("sharpe", f"Sharpe ≥ {fmt_target(DEFAULT_TARGET_SHARPE)}"),
         ("mdd", f"|MDD| ≤ {TARGET_MDD * 100:g}% (전체 구간)"),
         ("both", "두 목표 동시 충족 (H)"),
         ("robust", "강건성 (E2) · 미래정보 (A5)"),
@@ -310,7 +333,12 @@ class TargetCheckCard(QFrame):
         self.badges["robust"].setToolTip("독립 검증은 Validation 리포트(NEX-59 등)에서 확인")
         self.badges["sharpe"].setToolTip(TARGET_SOURCE)
         self.badges["mdd"].setToolTip(TARGET_SOURCE)
+        self.target_sharpe = DEFAULT_TARGET_SHARPE
         box.addStretch()
+
+    def set_target_sharpe(self, target: float):
+        self.target_sharpe = float(target)
+        self.labels["sharpe"].setText(f"Sharpe ≥ {fmt_target(self.target_sharpe)}")
 
     def clear(self):
         self.subject.setText("-")
@@ -324,9 +352,9 @@ class TargetCheckCard(QFrame):
                 set_badge(self.badges[key], "na", "벤치마크")
             return
         m = run.metrics
-        set_badge(self.badges["sharpe"], *sharpe_badge(m.get("sharpe")))
+        set_badge(self.badges["sharpe"], *sharpe_badge(m.get("sharpe"), self.target_sharpe))
         set_badge(self.badges["mdd"], *mdd_badge(m.get("mdd")))
-        both = meets_targets(m)
+        both = meets_targets(m, self.target_sharpe)
         if both is None:
             set_badge(self.badges["both"], "na", "값 없음")
         else:
@@ -343,8 +371,16 @@ class SharpeBarDelegate(CellDelegate):
     """The number on the left, then a bar over 0..`MAX` (ACCENT, benchmarks
     TEXT_EMPTY) with a tick at the target. Negative values draw no bar."""
 
-    MAX = 1.6
     NUM_W = 40
+
+    def __init__(self, parent=None, target: float = DEFAULT_TARGET_SHARPE):
+        super().__init__(parent)
+        self.target = float(target)
+
+    @property
+    def MAX(self) -> float:
+        """The bar's full scale: 1.6, or a bit beyond a higher target."""
+        return max(1.6, self.target * 1.25)
 
     def paint(self, painter, option, index):
         data = index.data(SHARPE_ROLE) or {}
@@ -359,7 +395,7 @@ class SharpeBarDelegate(CellDelegate):
         if _finite(value) and value > 0:
             w = int(bar.width() * min(value, self.MAX) / self.MAX)
             painter.fillRect(QRect(bar.x(), bar.y(), w, bar.height()), QColor(TEXT_EMPTY if bench else ACCENT))
-        tx = bar.x() + int(bar.width() * TARGET_SHARPE / self.MAX)
+        tx = bar.x() + int(bar.width() * self.target / self.MAX)
         painter.setPen(QPen(QColor(LINE_STRONG), 1))
         painter.drawLine(tx, bar.y() - 3, tx, bar.bottom() + 3)
         painter.restore()
@@ -368,8 +404,12 @@ class SharpeBarDelegate(CellDelegate):
 # ---------------------------------------------------------------------------
 # Tables
 # ---------------------------------------------------------------------------
-COMPARISON_HEADERS = ["ID", "Entry", "CAGR", "Vol", f"Sharpe (| = {TARGET_SHARPE:g})", "MDD", "Trades",
-                      "vs BM1 (%p)", "Target (H)"]
+def comparison_headers(target_sharpe: float = DEFAULT_TARGET_SHARPE) -> list[str]:
+    return ["ID", "Entry", "CAGR", "Vol", f"Sharpe (| = {fmt_target(target_sharpe)})", "MDD", "Trades",
+            "vs BM1 (%p)", "Target (H)"]
+
+
+COMPARISON_HEADERS = comparison_headers()
 SHARPE_COL = 4
 
 
@@ -390,7 +430,7 @@ def comparison_rows(result, mult: float) -> list:
     return sorted(runs, key=lambda r: (r.kind != "strategy", order.get(r.id, 99), r.id))
 
 
-def fill_comparison(table: QTableWidget, runs: list) -> None:
+def fill_comparison(table: QTableWidget, runs: list, target_sharpe: float = DEFAULT_TARGET_SHARPE) -> None:
     table.setUpdatesEnabled(False)
     try:
         table.setRowCount(len(runs))
@@ -400,7 +440,7 @@ def fill_comparison(table: QTableWidget, runs: list) -> None:
             muted = TEXT_MUTED if bench else None
             mdd = m.get("mdd")
             excess = m.get("bm1_excess_cagr")
-            h = None if bench else meets_targets(m)
+            h = None if bench else meets_targets(m, target_sharpe)
             sharpe = _item(fmt_num(m.get("sharpe")))
             sharpe.setData(SHARPE_ROLE, {"value": m.get("sharpe"), "bench": bench})
             ok_mdd = mdd_ok(mdd)
@@ -416,7 +456,7 @@ def fill_comparison(table: QTableWidget, runs: list) -> None:
                  else _item(fmt_pp(excess).removesuffix("%p"), color=_hex(excess))),
                 _item("-" if h is None else ("✓" if h else "✕"), Qt.AlignmentFlag.AlignCenter,
                       TEXT_MUTED if h is None else (OK_TEXT if h else FAIL_TEXT),
-                      "" if bench else f"Sharpe ≥ {TARGET_SHARPE:g} and |MDD| ≤ {TARGET_MDD * 100:g}%"),
+                      "" if bench else target_text(target_sharpe)),
             ]
             for c, item in enumerate(cells):
                 item.setData(Qt.ItemDataRole.UserRole + 1, r.id)

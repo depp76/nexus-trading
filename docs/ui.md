@@ -733,12 +733,12 @@ app.setStyleSheet(app_qss(FONT_FAMILY_CSS))
   2. 변형 세그먼트(결과의 ID 순서, BM1~BM4 포함, 고정 폭 52)와 비용 세그먼트 0x | 1x | 2x(결과에 있는 배수만 활성).
      기본 선택은 1x와 1x Sharpe가 가장 높은 전략 — 선택 초기값일 뿐 순위·채택 표시가 아니다.
   3. KPI 카드 6장(Sharpe · Max drawdown · CAGR · vs BM1 · Volatility · Trades), 폭 960px 미만이면 3×2.
-     목표 배지는 Sharpe ≥ 1.5, |MDD| ≤ 15%(`TARGET_SHARPE`, `TARGET_MDD`; 사용자 성과 기준 H). 벤치마크 선택 시 배지 숨김.
+     목표 배지는 Sharpe ≥ 목표(폼에서 설정, 기본 1.0 — 8.15), |MDD| ≤ 15%(`TARGET_MDD`; 사용자 성과 기준 H). 벤치마크 선택 시 배지 숨김.
   4. 차트(`sharex`, 3:1): 위 NAV(100 기준)는 **선택 변형 + BM1만**(`SERIES_SELECTED` 실선 / `SERIES_BENCH` 점선), Show all이면 나머지를
      `TEXT_EMPTY` 가는 선으로. 아래 낙폭은 `LOSS` 채움(`DRAWDOWN_ALPHA`)과 −15% 목표선(`SERIES_TARGET`). 낙폭의 고점은 시드 1.0에서
      시작해 `metrics.max_drawdown`과 같은 값이 된다. readout·crosshair는 두 축에 같은 x.
   5. Target check 카드: **앱이 직접 계산하는 것만**(Sharpe, MDD, 둘 다 = H). E2·A5는 "Not run here" — 검증 리포트의 고정 문구·J1 판정을 넣지 않는다.
-  6. 결과 탭: Variant comparison(기본; 한 비용 배수의 전략 + BM1~BM4, Sharpe 막대 0~1.6에 1.5 눈금, MDD 글자는 기준 판정이므로
+  6. 결과 탭: Variant comparison(기본; 한 비용 배수의 전략 + BM1~BM4, Sharpe 막대 0~max(1.6, 목표×1.25)에 목표 눈금, MDD 글자는 기준 판정이므로
      상태 채널 OK/FAIL, 행 클릭 = 세그먼트 선택) · All metrics(이전 전체 열 표 그대로) · Monthly returns(`heatmap_bg(v*100, 10)`) ·
      Trades · Event study · Warnings (n)(n > 0이면 탭 글자 WARN — 전역 QSS가 탭 색을 정하므로 `QTabWidget#ResultTabs[warn="true"]
      QTabBar::tab:last` 규칙으로 칠한다).
@@ -815,3 +815,12 @@ app.setStyleSheet(app_qss(FONT_FAMILY_CSS))
 - **차트**: 선택한 실행을 모두 그린다. 전략은 실선, BM은 점선; BM1은 `SERIES_BENCH`, 나머지는 선택 순서대로 `colors.SERIES_PALETTE`
   (accent 보라부터 8색, PROFIT/LOSS로 읽히는 순수 파랑·빨강은 제외). 기준은 가장 굵고 맨 위에 그린다. 낙폭 패널은 기준만 LOSS로 채우고
   나머지는 각자 색의 선. readout은 기준 → 나머지 선택 순. "전체 표시"는 선택하지 않은 실행을 회색 가는 선으로 더한다.
+
+### 8.15 목표 Sharpe 설정 (2026-11-13)
+
+- 설정 폼에 **목표 Sharpe ≥** 입력(`QDoubleSpinBox`, 0.1~3.0, 0.1 단위, **기본 1.0**; 이전에는 1.5 고정). 칩 줄에 "목표 Sharpe ≥ 1.0".
+- **리서치 실행 시점의 값**이 그 결과의 판정에 쓰인다(실행 중에 바꿔도 이번 결과에는 적용 안 됨): KPI Sharpe 배지와 설명,
+  목표 점검 카드("Sharpe ≥ x", 두 목표 동시 충족 H), 변형 비교 표의 Sharpe 머리글·막대 눈금·Target (H) 열과 툴팁.
+  표시는 소수 한 자리(`fmt_target`). MDD 목표 15%는 고정. 전략 계산(`strategy/`)과 리포트 파일은 바뀌지 않는다.
+- 세그먼트 버튼 재생성(`SegmentRow.set_keys`)은 이전 버튼을 레이아웃에서 바로 빼고 숨긴다 — `deleteLater`만으로는 이벤트 루프 전에
+  `set_cost`가 두 번 불리면 두 벌이 겹쳐 보였다.

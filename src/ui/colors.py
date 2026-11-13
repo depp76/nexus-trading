@@ -42,7 +42,7 @@ NA_BG, NA_TEXT = "#f0f1f8", "#595d6c"
 # Chart series roles (strategy charts; ui_redesign_2026-11 P0-1).
 SERIES_SELECTED = "#9184d9"   # = theme.ACCENT, solid
 SERIES_BENCH = "#9397ab"      # = theme.TEXT_FAINT, dashed
-SERIES_TARGET = WARN          # target lines (Sharpe 1.5, -15% drawdown), dashed
+SERIES_TARGET = WARN          # target lines (the -15% drawdown), dashed
 DRAWDOWN_ALPHA = 0.18         # LOSS fill under the drawdown curve
 # Several runs on one chart (docs/ui.md 8.14): one hue per selected run, in
 # selection order, the accent first. Pure blue/red are left out so a series
