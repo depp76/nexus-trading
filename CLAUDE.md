@@ -95,7 +95,7 @@ Dev tooling is in `requirements-dev.txt`
   SHA-256 manifest, for byte-identical reruns), `run.py` (headless CLI: `--build-snapshot`,
   `--snapshot`, `--factor-ic`, `--robustness`, `--variants`, ...), `raw_check.py` (A5 sample check
   of split-adjusted vs unadjusted prices), `variant_info.py` (`describe_variant`: each matrix
-  row's rules in plain English, built from the `Variant` flags and `StrategyParams`). The
+  row's rules in Korean, built from the `Variant` flags and `StrategyParams`). The
   Strategy tab runs the research matrix; its variants are picked in `VariantPickerDialog`
   (list + description of the highlighted row; A3-A5 untickable while Investor flows is off);
   factor IC and robustness reports come from `run.py` only.
@@ -236,6 +236,10 @@ not fixtures. Trading History principal/deposit/withdrawal live in `QSettings`
   (`data/collectors/naver.py`, `data/collectors/krx.py`), and the `'맑은 고딕 Semilight'`
   font-family fallback name (`ui/common.py`). `gemini_helper.py`'s prompts were included in
   the sweep — see the note on that file above for the response-language consequence.
+  A second exception (user direction, 2026-11-13): the strategy-variant descriptions the
+  Strategy tab's picker shows (`strategy/trend_following/variant_info.py` strings, the
+  `ui/dialogs/variant_picker.py` list labels) are Korean, and the tests assert those
+  literals; their identifiers, comments and docstrings stay English.
 - UI 변경은 `docs/ui.md` 의 전역 규칙을 따른다.
 - One font family app-wide, Malgun Gothic Semilight (user direction, 2026-09-19): every
   widget goes through `create_font()` (sizes from the `FONT_*` scale in `ui/common.py`),

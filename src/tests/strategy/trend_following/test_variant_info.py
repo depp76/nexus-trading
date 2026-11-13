@@ -16,33 +16,33 @@ class TestDescribeVariant(unittest.TestCase):
             self.assertEqual(d.id, vid)
             self.assertTrue(d.title and d.summary)
             self.assertEqual(d.needs_flows, v.needs_flows)
-            self.assertIn("Data", [h for h, _ in d.sections])
+            self.assertIn("데이터", [h for h, _ in d.sections])
 
     def test_text_follows_the_variant_flags(self):
-        self.assertNotIn("L1 market regime", _text(describe_variant("A0")))
-        self.assertIn("L1 market regime", _text(describe_variant("A1")))
-        self.assertNotIn("V: breakout-day volume", _text(describe_variant("A1")))
-        self.assertIn("V: breakout-day volume", _text(describe_variant("A2")))
-        self.assertIn("F: foreign + institution", _text(describe_variant("A3")))
+        self.assertNotIn("L1 시장 국면", _text(describe_variant("A0")))
+        self.assertIn("L1 시장 국면", _text(describe_variant("A1")))
+        self.assertNotIn("V: 돌파일 거래량", _text(describe_variant("A1")))
+        self.assertIn("V: 돌파일 거래량", _text(describe_variant("A2")))
+        self.assertIn("F: 최근", _text(describe_variant("A3")))
         self.assertNotIn("FX:", _text(describe_variant("A4")))
         self.assertIn("FX:", _text(describe_variant("A5")))
-        self.assertIn("Needs investor-flow data", _text(describe_variant("A5")))
-        self.assertIn("Price data only", _text(describe_variant("C1")))
+        self.assertIn("투자자 수급 데이터 필요", _text(describe_variant("A5")))
+        self.assertIn("가격 데이터만 사용", _text(describe_variant("C1")))
 
     def test_scoring_rows_reflect_their_overrides(self):
-        self.assertIn("volatility normalised", _text(describe_variant("C1")))
-        self.assertIn("no volatility normalisation", _text(describe_variant("C2")))
+        self.assertIn("ATR20 / 종가로 나눔", _text(describe_variant("C1")))
+        self.assertIn("변동성 정규화 없음", _text(describe_variant("C2")))
         self.assertIn("Range52", _text(describe_variant("C1")))
-        self.assertIn("252-day high", _text(describe_variant("C3")))
-        self.assertIn("No Donchian 10 exit", _text(describe_variant("C1")))
+        self.assertIn("252일 최고가", _text(describe_variant("C3")))
+        self.assertIn("Donchian 10 청산은 쓰지 않으며", _text(describe_variant("C1")))
 
     def test_numbers_come_from_the_params(self):
         p = StrategyParams(max_positions=8, min_avg_trading_value=50e8, breakout_window=25)
         text = _text(describe_variant("A1", p))
-        self.assertIn("up to 8 names", text)
-        self.assertIn("50억 KRW", text)
+        self.assertIn("최대 8종목", text)
+        self.assertIn("50억 원", text)
         self.assertIn("Donchian 25", text)
-        self.assertIn("top 8", _text(describe_variant("B", p)))
+        self.assertIn("상위 8종목", _text(describe_variant("B", p)))
 
 
 if __name__ == "__main__":

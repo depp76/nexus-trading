@@ -5,6 +5,9 @@ row's rules shown next to the list (strategy.trend_following.describe_variant).
 Opened from the Strategy tab's "Variants..." button. Rows that need investor
 flows (A3-A5) stay listed so their description can be read, but cannot be
 ticked while the tab's Investor flows box is off.
+
+The list labels and descriptions are Korean (user direction, 2026-11-13);
+the buttons stay English like the rest of the app's chrome.
 """
 from __future__ import annotations
 
@@ -22,9 +25,9 @@ from ui.theme import TEXT, TEXT_MUTED, TEXT_SUB
 
 # List groups, in VARIANTS order within each (spec 6-2).
 _GROUPS = (
-    ("A-series — Donchian breakout", lambda v: v.mode == "breakout"),
-    ("B — 52-week-high holding", lambda v: v.mode == "high52"),
-    ("C-series — trend + pullback score", lambda v: v.mode == "score"),
+    ("A 계열 — Donchian 돌파", lambda v: v.mode == "breakout"),
+    ("B — 52주 고가 보유", lambda v: v.mode == "high52"),
+    ("C 계열 — 추세 + 눌림 점수", lambda v: v.mode == "score"),
 )
 _VID_ROLE = Qt.ItemDataRole.UserRole
 
@@ -112,13 +115,13 @@ class VariantPickerDialog(QDialog):
         v = VARIANTS[vid]
         d = describe_variant(vid, self._params)
         blocked = v.needs_flows and not self._flows_on
-        item = QListWidgetItem(f"{vid}  {d.title}" + ("  (needs flows)" if blocked else ""))
+        item = QListWidgetItem(f"{vid}  {d.title}" + ("  (수급 필요)" if blocked else ""))
         item.setData(_VID_ROLE, vid)
         flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
         if blocked:
             # Still selectable so the description can be read, just not tickable.
             item.setForeground(QBrush(QColor(TEXT_MUTED)))
-            item.setToolTip("Tick Investor flows on the Strategy tab to run this variant.")
+            item.setToolTip("Strategy 탭에서 Investor flows를 체크하면 이 변형을 실행할 수 있습니다.")
         else:
             flags |= Qt.ItemFlag.ItemIsUserCheckable
         item.setFlags(flags)
@@ -143,8 +146,8 @@ class VariantPickerDialog(QDialog):
     def _update_count(self, *_):
         n = len(self.selected_ids())
         available = sum(1 for item in self._items.values() if self._checkable(item))
-        note = "" if available == len(self._items) else " · flow variants need Investor flows"
-        self.count_lbl.setText(f"{n} of {available} selected{note}")
+        note = "" if available == len(self._items) else " · 수급 변형은 Investor flows를 켜야 선택 가능"
+        self.count_lbl.setText(f"{available}개 중 {n}개 선택{note}")
 
     def select(self, vid: str):
         """Show `vid`'s description (as a click on its row would)."""

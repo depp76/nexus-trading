@@ -276,8 +276,8 @@ class TestVariantPickerDialog(unittest.TestCase):
         dlg.select("C2")
         text = dlg.detail.toPlainText()
         self.assertIn("C2", text)
-        self.assertIn("no volatility normalisation", text)
-        self.assertIn("2 of 10 selected", dlg.count_lbl.text())
+        self.assertIn("변동성 정규화 없음", text)
+        self.assertIn("10개 중 2개 선택", dlg.count_lbl.text())
 
     def test_all_none_and_flow_rows_without_flows(self):
         from strategy.trend_following import VARIANTS
@@ -287,9 +287,9 @@ class TestVariantPickerDialog(unittest.TestCase):
         self.assertFalse(flow_ids & set(dlg.selected_ids()))
         a3 = dlg._items["A3"]
         self.assertFalse(a3.flags() & Qt.ItemFlag.ItemIsUserCheckable)
-        self.assertIn("needs flows", a3.text())
+        self.assertIn("수급 필요", a3.text())
         dlg.select("A3")                                              # still readable
-        self.assertIn("investor-flow", dlg.detail.toPlainText())
+        self.assertIn("투자자 수급 데이터 필요", dlg.detail.toPlainText())
         dlg._set_all(False)
         self.assertEqual(dlg.selected_ids(), ())
         dlg._set_all(True)
