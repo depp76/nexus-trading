@@ -135,23 +135,23 @@ class TestTrendFollowingTab(unittest.TestCase):
         self.assertEqual(result.skipped, {"A3": "no investor-flow data"})
         self.assertNotIn("A3", {r.id for r in result.runs})
         self.assertIn("A3 (no investor-flow data)", result.to_markdown())
+        from ui.colors import WARN
+        from ui.trend_following_tab import TAB_WARNINGS
         tab = TrendFollowingTab()
-        self.assertFalse(tab.warn_btn.isVisibleTo(tab))
+        self.assertEqual(tab.result_tabs.tabText(TAB_WARNINGS), "Warnings (0)")
         tab._on_research_finished(result, "")
         n = len(result.warnings) + 1
-        self.assertTrue(tab.warn_btn.isVisibleTo(tab))
-        self.assertEqual(tab.warn_btn.text(), f"Warnings ({n})")
-        self.assertFalse(tab.warn_lbl.isVisibleTo(tab))
-        tab.warn_btn.click()
-        self.assertTrue(tab.warn_lbl.isVisibleTo(tab))
+        # ui_redesign_2026-11 P1-1 item 5: the toggle panel became a result tab.
+        self.assertEqual(tab.result_tabs.tabText(TAB_WARNINGS), f"Warnings ({n})")
+        self.assertEqual(tab.result_tabs.tabBar().tabTextColor(TAB_WARNINGS).name(), WARN)
         self.assertIn("A3 not run", tab.warn_lbl.text())
         self.assertIn("skipped A3", tab.status_lbl.text())
 
     def test_tables_copy_selected_rows(self):
-        """review_codex.md S4: both result tables get the app-wide Ctrl+C."""
+        """review_codex.md S4: every result table gets the app-wide Ctrl+C."""
         tab = TrendFollowingTab()
-        self.assertTrue(hasattr(tab.table, "_table_keys"))
-        self.assertTrue(hasattr(tab.event_table, "_table_keys"))
+        for tbl in (tab.table, tab.event_table, tab.compare_table, tab.monthly_table, tab.trades_table):
+            self.assertTrue(hasattr(tbl, "_table_keys"))
 
     def test_run_tooltip_lists_every_variant(self):
         from strategy.trend_following import VARIANTS
@@ -263,6 +263,159 @@ class TestTrendFollowingTab(unittest.TestCase):
             tab._on_run_clicked()
         warn.assert_called_once()
         self.assertEqual(_FakeThread.instances, [])
+
+
+def _result(variants=("A0", "A1"), mults=(1.0,), **kw):
+    ds = synthetic_dataset()
+    return run_research(ds, ResearchRequest(start=date(2021, 1, 4), variant_ids=variants,
+                                            cost_multipliers=mults, run_event_study=False, **kw))
+
+
+class TestResultScreen(unittest.TestCase):
+    """docs/ui_redesign_2026-11.md P1: segments, KPI cards, target check,
+    drawdown chart and the result tabs, all redrawn from one result."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.result = _result(("A0", "A1"), (0.0, 1.0, 2.0))
+
+    def _tab(self):
+        tab = TrendFollowingTab()
+        tab._on_research_finished(self.result, "")
+        return tab
+
+    def test_default_selection_is_1x_and_the_best_sharpe_strategy(self):
+        tab = self._tab()
+        self.assertEqual(tab._mult, 1.0)
+        strategies = self.result.runs_at(1.0, "strategy")
+        best = max(strategies, key=lambda r: r.metrics["sharpe"])
+        self.assertEqual(tab._sel_id, best.id)
+        self.assertEqual(tab.variant_seg.current(), best.id)
+        self.assertEqual(tab.cost_seg.current(), "1")
+        self.assertTrue(tab.selector_row.isVisibleTo(tab))
+        self.assertFalse(tab.form_box.isVisibleTo(tab))       # a result folds the form away
+        self.assertFalse(tab.edit_btn.isChecked())
+
+    def test_variant_pick_updates_cards_target_check_and_tabs(self):
+        from ui.strategy_widgets import fmt_num, fmt_pct
+        tab = self._tab()
+        tab.variant_seg.buttons["A0"].click()
+        a0 = next(r for r in self.result.runs_at(1.0) if r.id == "A0")
+        cards = tab.kpi_row.cards
+        self.assertEqual(cards["sharpe"].value.text(), fmt_num(a0.metrics["sharpe"]))
+        self.assertEqual(cards["mdd"].value.text(), fmt_pct(a0.metrics["mdd"]))
+        self.assertEqual(cards["trades"].value.text(), str(a0.metrics["n_trades"]))
+        self.assertFalse(cards["sharpe"].badge.isHidden())
+        self.assertIn("A0", tab.target_card.subject.text())
+        self.assertEqual(tab.compare_table.item(tab.compare_table.currentRow(), 0).text(), "A0")
+        self.assertEqual(tab.monthly_table.rowCount(), len({d.year for d in a0.dates}))
+        self.assertEqual(tab.trades_table.rowCount(), len(a0.trades))
+        self.assertEqual(tab.ax.get_legend().get_texts()[-1].get_text(), "A0")
+
+    def test_benchmark_hides_the_badges(self):
+        tab = self._tab()
+        tab.select_variant("BM1")
+        cards = tab.kpi_row.cards
+        self.assertTrue(cards["sharpe"].badge.isHidden())
+        self.assertTrue(cards["mdd"].badge.isHidden())
+        self.assertEqual(tab.target_card.badges["sharpe"].text(), "Benchmark")
+        self.assertEqual(tab.trades_table.rowCount(), 0)
+        self.assertIn("Benchmarks have no trades", tab.trades_table._empty_hint.text)
+
+    def test_comparison_row_click_selects_the_variant(self):
+        tab = self._tab()
+        row = next(i for i in range(tab.compare_table.rowCount()) if tab.compare_table.item(i, 0).text() == "BM2")
+        tab.compare_table.setCurrentCell(row, 2)
+        self.assertEqual(tab._sel_id, "BM2")
+        self.assertEqual(tab.variant_seg.current(), "BM2")
+
+    def test_cost_segment_switches_rows_and_keeps_the_selection(self):
+        tab = self._tab()
+        tab.select_variant("A0")
+        tab.cost_seg.buttons["2"].click()
+        self.assertEqual(tab._mult, 2.0)
+        self.assertEqual(tab._sel_id, "A0")
+        a0_2x = next(r for r in self.result.runs_at(2.0) if r.id == "A0")
+        self.assertIs(tab.selected_run(), a0_2x)
+        self.assertEqual(tab.compare_table.rowCount(), len(self.result.runs_at(2.0)))
+        self.assertIn("2x", tab.ax.get_title(loc="left"))
+
+    def test_only_run_costs_are_enabled(self):
+        tab = TrendFollowingTab()
+        tab._on_research_finished(_result(("A0",), (1.0,)), "")
+        self.assertTrue(tab.cost_seg.buttons["1"].isEnabled())
+        self.assertFalse(tab.cost_seg.buttons["0"].isEnabled())
+        self.assertFalse(tab.cost_seg.buttons["2"].isEnabled())
+
+    def test_chart_draws_selected_and_bm1_unless_show_all(self):
+        tab = self._tab()
+        n = len(self.result.runs_at(1.0))
+        self.assertEqual(len(tab._chart_series), 2)
+        tab.show_all_cb.setChecked(True)
+        self.assertEqual(len(tab._chart_series), n)
+        self.assertEqual(tab._chart_series[0][0], tab._sel_id)
+        self.assertTrue(tab.ax_dd.collections)                   # the drawdown fill
+
+    def test_all_metrics_tab_keeps_every_summary_column(self):
+        from strategy.trend_following.research import SUMMARY_COLUMNS
+        tab = self._tab()
+        headers = [tab.table.horizontalHeaderItem(c).text() for c in range(tab.table.columnCount())]
+        self.assertEqual(headers, ["ID", "Cost"] + [h for h, _ in SUMMARY_COLUMNS[1:]])
+        self.assertEqual(tab.table.rowCount(), len(self.result.runs))
+
+    def test_settings_chips_follow_the_form(self):
+        tab = TrendFollowingTab()
+        tab.universe_spin.setValue(120)
+        tab.cost_combo.setCurrentIndex(1)
+        texts = [c.text() for c in tab.chips if not c.isHidden()]
+        self.assertIn("KOSPI Top 120", texts)
+        self.assertIn("Costs 1x", texts)
+        tab.edit_btn.click()
+        self.assertFalse(tab.form_box.isVisibleTo(tab))
+
+    def test_empty_state(self):
+        tab = TrendFollowingTab()
+        self.assertEqual(tab.kpi_row.cards["sharpe"].value.text(), "-")
+        self.assertFalse(tab.selector_row.isVisibleTo(tab))
+        self.assertEqual(tab.compare_table.rowCount(), 0)
+
+
+class TestTargetsAndDrawdown(unittest.TestCase):
+    def test_sharpe_and_mdd_badge_boundaries(self):
+        from ui.strategy_widgets import sharpe_badge, mdd_badge, meets_targets
+        self.assertEqual(sharpe_badge(1.5)[0], "ok")
+        self.assertEqual(sharpe_badge(1.4999)[0], "fail")
+        self.assertEqual(sharpe_badge(float("nan"))[0], "na")
+        self.assertEqual(mdd_badge(-0.15)[0], "ok")
+        self.assertEqual(mdd_badge(-0.1500001)[0], "fail")
+        self.assertEqual(mdd_badge(None)[0], "na")
+        self.assertTrue(meets_targets({"sharpe": 1.5, "mdd": -0.15}))
+        self.assertFalse(meets_targets({"sharpe": 1.6, "mdd": -0.2}))
+        self.assertIsNone(meets_targets({"sharpe": 1.6}))
+
+    def test_drawdown_series_matches_max_drawdown(self):
+        import numpy as np
+        from strategy.trend_following.metrics import max_drawdown
+        from ui.strategy_widgets import drawdown_series
+        nav = np.array([0.98, 1.10, 1.05, 1.21, 0.99, 1.30])
+        dd = drawdown_series(nav)
+        expected = nav / np.maximum.accumulate(np.concatenate([[1.0], nav]))[1:] - 1
+        np.testing.assert_allclose(dd, expected)
+        self.assertAlmostEqual(dd[0], -0.02)                     # first session vs the 1.0 seed
+        self.assertAlmostEqual(dd.min(), max_drawdown(nav))
+        self.assertEqual(len(drawdown_series([])), 0)
+
+    def test_kpi_row_reflows_when_narrow(self):
+        from ui.strategy_widgets import KpiRow
+        row = KpiRow(wrap_width=900)
+        row.resize(1200, 100)
+        row.show()
+        app.processEvents()
+        self.assertEqual(row._cols, 6)
+        row.resize(600, 200)
+        app.processEvents()
+        self.assertEqual(row._cols, 3)
+        row.hide()
 
 
 class TestVariantPickerDialog(unittest.TestCase):

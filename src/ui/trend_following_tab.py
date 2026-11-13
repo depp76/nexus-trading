@@ -2,12 +2,18 @@
 strategy.trend_following (trend_following.md, version in SPEC_VERSION).
 
 One form (window, universe, sizing, variant matrix, cost scenarios, flows,
-event study) -> one background run (threads.strategy_threads) -> a scorecard
-table for every variant and benchmark per cost multiplier, a rebased NAV
-chart, the event-study table, a Warnings panel (the run's caveats and the
-variants it skipped, readable without saving), and "Save Report" for the
-markdown the spec asks to keep per version. Signal generation / research only: nothing here
-places orders (docs/ui.md 5.6 banner).
+event study) -> one background run (threads.strategy_threads) -> the result
+screen of docs/ui_redesign_2026-11.md P1 (docs/ui.md 8.10):
+
+  run-settings card (chips; "Edit settings" opens the form) -> variant and
+  cost segments -> six KPI cards of the selected run -> NAV + drawdown chart
+  next to the target-check card -> result tabs (variant comparison, all
+  metrics, monthly returns, trades, event study, warnings).
+
+Picking a variant or a cost multiplier redraws from the result already
+received; nothing re-runs. "Save Report" writes the markdown the spec asks to
+keep per version. Signal generation / research only: nothing here places
+orders (docs/ui.md 5.6 banner). The widgets live in ui/strategy_widgets.py.
 """
 from __future__ import annotations
 
@@ -25,7 +31,7 @@ from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QCheckBox, QComboBox,
     QSpinBox, QDateEdit, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QMessageBox,
-    QSplitter, QFrame, QDialog,
+    QSplitter, QFrame, QDialog, QTabWidget, QScrollArea,
 )
 
 from matplotlib.figure import Figure
@@ -43,13 +49,25 @@ from ui.common import (
     create_font, make_button, setup_table, make_footer_label, install_table_keys, ThreadOwnerMixin,
     TAB_MARGINS, TAB_SPACING, FONT_SMALL,
 )
-from ui.theme import TEXT, TEXT_SUB, TEXT_MUTED, TEXT_FAINT, TEXT_EMPTY, LINE
+from ui.colors import LOSS, WARN, SERIES_SELECTED, SERIES_BENCH, SERIES_TARGET, DRAWDOWN_ALPHA
+from ui.theme import TEXT, TEXT_MUTED, TEXT_FAINT, TEXT_EMPTY, LINE
+from ui.strategy_widgets import (
+    TARGET_MDD, SegmentRow, KpiRow, TargetCheckCard, SharpeBarDelegate, COMPARISON_HEADERS, SHARPE_COL,
+    MONTH_HEADERS, TRADE_HEADERS, comparison_rows, fill_comparison, fill_monthly, fill_trades,
+    drawdown_series,
+)
 
 logger = logging.getLogger(__name__)
 
 _WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"]
 _COST_CHOICES = [("0x / 1x / 2x", COST_MULTIPLIERS), ("1x only", (1.0,))]
-_BENCHMARK_STYLE = {"BM1": (TEXT_SUB, "--"), "BM2": (TEXT_FAINT, ":"), "BM3": (TEXT, "-."), "BM4": (TEXT_EMPTY, ":")}
+_ID_ROLE = Qt.ItemDataRole.UserRole + 1      # run id on every comparison-table item
+
+# Result tabs, in order (docs/ui_redesign_2026-11.md P1-1 item 5).
+TAB_COMPARISON, TAB_ALL, TAB_MONTHLY, TAB_TRADES, TAB_EVENTS, TAB_WARNINGS = range(6)
+
+_TRADES_EMPTY = "Run Research to list the selected variant's trades"
+_TRADES_EMPTY_BM = "Benchmarks have no trades; pick a strategy variant"
 
 
 def _fmt_event(value, pct=True, digits=1) -> str:
@@ -63,6 +81,10 @@ def _fmt_event(value, pct=True, digits=1) -> str:
     return f"{value * 100:.{digits}f}%" if pct else str(value)
 
 
+def _mult_key(m: float) -> str:
+    return f"{m:g}"
+
+
 class TrendFollowingTab(ThreadOwnerMixin, QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -71,9 +93,14 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         # Investor flows is off but are not sent; ticking flows brings them back.
         self._chosen_variants: set[str] = set(VARIANTS)
         self._research_thread = None
+        # What the result screen shows: one cost multiplier and one run id of it.
+        self._mult: float | None = None
+        self._sel_id: str | None = None
+        self._syncing = False
         # Hover readout state: (label, color, x as matplotlib date numbers, y) per plotted series.
         self._chart_series: list[tuple[str, str, np.ndarray, np.ndarray]] = []
         self._crosshair = None
+        self._crosshair_dd = None
         self._build_ui()
 
     # ------------------------------------------------------------------ UI
@@ -87,6 +114,93 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
                              f"{', '.join(VARIANTS)} against BM1–BM4 with the 0x/1x/2x cost scenarios "
                              f"and the 6-1 event study.")
 
+        root.addWidget(self._build_settings_card())
+        self.form_box = self._build_form()
+        root.addWidget(self.form_box)
+        self.selector_row = self._build_selector_row()
+        root.addWidget(self.selector_row)
+
+        self.kpi_row = KpiRow()
+        root.addWidget(self.kpi_row)
+
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        top = QWidget()
+        top_layout = QHBoxLayout(top)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setSpacing(TAB_SPACING)
+        top_layout.addWidget(self._build_chart(), 2)
+        self.target_card = TargetCheckCard()
+        top_layout.addWidget(self.target_card, 1)
+        splitter.addWidget(top)
+        splitter.addWidget(self._build_result_tabs())
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        root.addWidget(splitter, 1)
+
+        # Footer: status and errors in their own line, never over the results
+        # (docs/ui.md 5.2), under the results like every tab's footer (8.4).
+        self.status_lbl = make_footer_label("Ready")
+        root.addWidget(self.status_lbl)
+
+        banner = QFrame()
+        banner.setObjectName("DashboardCard")
+        banner_layout = QHBoxLayout(banner)
+        banner_layout.setContentsMargins(10, 6, 10, 6)
+        notice = QLabel("Research and backtesting signal generator, not investment advice. Backtests use today's "
+                        "KOSPI constituents (survivorship bias) and the cost assumptions of trend_following.md 4-1; "
+                        "nothing here places orders.")
+        notice.setWordWrap(True)
+        notice.setFont(create_font(FONT_SMALL))
+        # Information, not an error: muted text on the card, not DANGER red (docs/ui.md 8.3).
+        notice.setObjectName("muted")
+        banner_layout.addWidget(notice)
+        root.addWidget(banner)
+
+        for sig in (self.start_edit.dateChanged, self.end_edit.dateChanged, self.universe_spin.valueChanged,
+                    self.liquidity_spin.valueChanged, self.positions_spin.valueChanged,
+                    self.weekday_combo.currentIndexChanged, self.cost_combo.currentIndexChanged,
+                    self.flows_cb.toggled, self.event_cb.toggled):
+            sig.connect(self._update_chips)
+        # A3-A5 cannot run without investor flows: the selection shown and sent
+        # is what a run will actually do (review_codex.md S1).
+        self.flows_cb.toggled.connect(self._update_variants_label)
+        self._update_variants_label()
+
+    def _build_settings_card(self) -> QFrame:
+        """One line summing up the form as chips, then the tab's actions with
+        Run (the one primary) last (docs/ui.md 8.4)."""
+        card = QFrame()
+        card.setObjectName("DashboardCard")
+        row = QHBoxLayout(card)
+        row.setContentsMargins(10, 6, 10, 6)
+        row.setSpacing(6)
+        title = QLabel("RUN SETTINGS")
+        title.setObjectName("kpiLabel")
+        row.addWidget(title)
+        self.chips: list[QLabel] = []
+        self._chips_layout = QHBoxLayout()
+        self._chips_layout.setSpacing(4)
+        row.addLayout(self._chips_layout)
+        row.addStretch()
+        # Open by default so a first run starts from the form; a result folds it
+        # away (docs/ui.md 8.10).
+        self.edit_btn = make_button("Edit settings", on_click=self._on_edit_toggled, checkable=True, checked=True,
+                                    tooltip="Show or hide the run settings form")
+        # Stop cancels a run, it does not destroy anything, so it stays neutral (8.1).
+        self.run_btn = make_button("Run Research", "primary", self._on_run_clicked, tooltip=self._run_tooltip)
+        self.stop_btn = make_button("Stop", on_click=self._on_stop_clicked)
+        self.stop_btn.setEnabled(False)
+        self.save_btn = make_button("Save Report", on_click=self._on_save_clicked)
+        self.save_btn.setEnabled(False)
+        for btn in (self.edit_btn, self.save_btn, self.stop_btn, self.run_btn):
+            row.addWidget(btn)
+        return card
+
+    def _build_form(self) -> QWidget:
+        box = QWidget()
+        outer = QVBoxLayout(box)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(6)
         form = QGridLayout()
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(6)
@@ -154,7 +268,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         form.addWidget(self.flows_cb, 2, 2, 1, 2)
         form.addWidget(self.event_cb, 2, 4, 1, 2)
         form.setColumnStretch(6, 1)
-        root.addLayout(form)
+        outer.addLayout(form)
 
         # The variants are picked in a dialog that also explains each one
         # (ui.dialogs.VariantPickerDialog); the row shows what is selected.
@@ -165,40 +279,83 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.variants_lbl = QLabel("")
         variants_row.addWidget(self.variants_lbl)
         variants_row.addStretch()
-        # Run is the tab's one primary action and sits last (docs/ui.md 8.4);
-        # Stop cancels a run, it does not destroy anything, so it stays neutral (8.1).
-        self.run_btn = make_button("Run Research", "primary", self._on_run_clicked, tooltip=self._run_tooltip)
-        self.stop_btn = make_button("Stop", on_click=self._on_stop_clicked)
-        self.stop_btn.setEnabled(False)
-        self.save_btn = make_button("Save Report", on_click=self._on_save_clicked)
-        self.save_btn.setEnabled(False)
-        variants_row.addWidget(self.save_btn)
-        variants_row.addWidget(self.stop_btn)
-        variants_row.addWidget(self.run_btn)
-        root.addLayout(variants_row)
-        # A3-A5 cannot run without investor flows: the selection shown and sent
-        # is what a run will actually do (review_codex.md S1).
-        self.flows_cb.toggled.connect(self._update_variants_label)
-        self._update_variants_label()
+        outer.addLayout(variants_row)
+        return box
 
-        # The shown result's caveats (benchmark substitutions, flow coverage,
-        # skipped variants), readable here instead of only in the saved report
-        # (review_codex.md S3). Hidden until a result has any.
-        self.warn_btn = make_button("Warnings", on_click=self._on_warnings_toggled, checkable=True)
-        self.warn_btn.setVisible(False)
-        self.warn_lbl = QLabel("")
-        self.warn_lbl.setObjectName("warn")
-        self.warn_lbl.setWordWrap(True)
-        self.warn_lbl.setTextFormat(Qt.TextFormat.RichText)
-        self.warn_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.warn_lbl.setVisible(False)
-        warn_row = QHBoxLayout()
-        warn_row.addWidget(self.warn_btn, 0, Qt.AlignmentFlag.AlignTop)
-        warn_row.addWidget(self.warn_lbl, 1)
-        root.addLayout(warn_row)
+    def _build_selector_row(self) -> QWidget:
+        """Variant segments (one per run id of the shown cost) and the cost
+        segments; hidden until a result exists."""
+        box = QWidget()
+        row = QHBoxLayout(box)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        lbl = QLabel("Variant")
+        lbl.setObjectName("muted")
+        row.addWidget(lbl)
+        self.variant_seg = SegmentRow(width=52)
+        self.variant_seg.selected.connect(self._on_variant_picked)
+        row.addWidget(self.variant_seg)
+        row.addStretch()
+        lbl = QLabel("Cost")
+        lbl.setObjectName("muted")
+        row.addWidget(lbl)
+        self.cost_seg = SegmentRow(width=40)
+        self.cost_seg.selected.connect(self._on_cost_picked)
+        row.addWidget(self.cost_seg)
+        box.setVisible(False)
+        return box
 
-        splitter = QSplitter(Qt.Orientation.Vertical)
+    def _build_chart(self) -> QWidget:
+        self.fig = Figure(figsize=(6, 3.2), constrained_layout=True)
+        self.ax, self.ax_dd = self.fig.subplots(2, 1, sharex=True, gridspec_kw={"height_ratios": [3, 1]})
+        self._draw_empty_chart()
+        self.canvas = FigureCanvas(self.fig)
+        self.canvas.setMinimumHeight(220)
+        self.canvas.mpl_connect("motion_notify_event", self._on_chart_motion)
+        self.canvas.mpl_connect("axes_leave_event", self._on_chart_leave)
+        self.canvas.mpl_connect("figure_leave_event", self._on_chart_leave)
+        # Values under the mouse (latest bar when the mouse is off the chart).
+        self.readout_lbl = QLabel("")
+        self.readout_lbl.setFont(create_font(FONT_SMALL))
+        self.readout_lbl.setTextFormat(Qt.TextFormat.RichText)
+        self.readout_lbl.setWordWrap(True)
+        self.show_all_cb = QCheckBox("Show all")
+        self.show_all_cb.setToolTip("Also draw every other variant and benchmark at this cost, thin and grey")
+        self.show_all_cb.toggled.connect(self._redraw_chart)
+        head = QHBoxLayout()
+        head.addWidget(self.readout_lbl, 1)
+        head.addWidget(self.show_all_cb, 0, Qt.AlignmentFlag.AlignTop)
+        box = QFrame()
+        box.setObjectName("DashboardCard")
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(2)
+        layout.addLayout(head)
+        layout.addWidget(self.canvas, 1)
+        return box
 
+    def _build_result_tabs(self) -> QTabWidget:
+        self.result_tabs = QTabWidget()
+        self.result_tabs.setObjectName("ResultTabs")   # theme.py colors the last (Warnings) tab
+        self.result_tabs.setProperty("warn", False)
+
+        self.compare_table = setup_table(QTableWidget(0, len(COMPARISON_HEADERS)),
+                                         empty_text="Run Research to compare the variants")
+        self.compare_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.compare_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.compare_table.setHorizontalHeaderLabels(COMPARISON_HEADERS)
+        for c, w in enumerate((50, 190, 70, 64, 170, 70, 60, 84, 76)):
+            self.compare_table.setColumnWidth(c, w)
+        # The description column takes the spare width, not the narrow verdict column.
+        self.compare_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self._sharpe_delegate = SharpeBarDelegate(self.compare_table)
+        self.compare_table.setItemDelegateForColumn(SHARPE_COL, self._sharpe_delegate)
+        self.compare_table.currentCellChanged.connect(self._on_compare_row_changed)
+        install_table_keys(self.compare_table)
+        self.result_tabs.addTab(self.compare_table, "Variant comparison")
+
+        # Every scorecard column for every run and cost (the table this tab had
+        # before the 2026-11 redesign, unchanged).
         self.table = setup_table(QTableWidget(), empty_text="Run Research to fill the scorecard")
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         headers = ["ID", "Cost"] + [h for h, _ in SUMMARY_COLUMNS[1:]]
@@ -209,32 +366,25 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.table.setColumnWidth(0, 60)
         self.table.setColumnWidth(1, 50)
         install_table_keys(self.table)      # Ctrl+C copies the selected rows as TSV (docs/ui.md 8.6)
-        splitter.addWidget(self.table)
+        self.result_tabs.addTab(self.table, "All metrics")
 
-        self.fig = Figure(figsize=(6, 2.6), constrained_layout=True)
-        self.ax = self.fig.add_subplot(111)
-        # Empty state (docs/ui.md 8.2): a hint instead of a bare 0-1 axis.
-        self.ax.text(0.5, 0.5, "Run Research to plot the rebased NAV of each variant and benchmark",
-                     ha="center", va="center", transform=self.ax.transAxes, color=TEXT_FAINT,
-                     fontsize=FONT_SMALL)
-        self.ax.set_axis_off()
-        self.canvas = FigureCanvas(self.fig)
-        self.canvas.setMinimumHeight(180)
-        self.canvas.mpl_connect("motion_notify_event", self._on_chart_motion)
-        self.canvas.mpl_connect("axes_leave_event", self._on_chart_leave)
-        self.canvas.mpl_connect("figure_leave_event", self._on_chart_leave)
-        # Values under the mouse (latest bar when the mouse is off the chart).
-        self.readout_lbl = QLabel("")
-        self.readout_lbl.setFont(create_font(FONT_SMALL))
-        self.readout_lbl.setTextFormat(Qt.TextFormat.RichText)
-        self.readout_lbl.setWordWrap(True)
-        chart_box = QWidget()
-        chart_layout = QVBoxLayout(chart_box)
-        chart_layout.setContentsMargins(0, 0, 0, 0)
-        chart_layout.setSpacing(2)
-        chart_layout.addWidget(self.readout_lbl)
-        chart_layout.addWidget(self.canvas, 1)
-        splitter.addWidget(chart_box)
+        self.monthly_table = setup_table(QTableWidget(0, len(MONTH_HEADERS)),
+                                         empty_text="Run Research to see the selected variant's monthly returns (%)")
+        self.monthly_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.monthly_table.setHorizontalHeaderLabels(MONTH_HEADERS)
+        self.monthly_table.horizontalHeader().setDefaultSectionSize(58)
+        self.monthly_table.setColumnWidth(len(MONTH_HEADERS) - 1, 80)
+        install_table_keys(self.monthly_table)
+        self.result_tabs.addTab(self.monthly_table, "Monthly returns")
+
+        self.trades_table = setup_table(QTableWidget(0, len(TRADE_HEADERS)), empty_text=_TRADES_EMPTY)
+        self.trades_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.trades_table.setHorizontalHeaderLabels(TRADE_HEADERS)
+        for c, w in enumerate((90, 90, 80, 70, 50)):
+            self.trades_table.setColumnWidth(c, w)
+        self.trades_table.horizontalHeader().setStretchLastSection(True)
+        install_table_keys(self.trades_table)
+        self.result_tabs.addTab(self.trades_table, "Trades")
 
         self.event_table = setup_table(QTableWidget(), empty_text="The 6-1 event study appears here after a run")
         self.event_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -243,30 +393,70 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.event_table.setHorizontalHeaderLabels(ev_headers)
         self.event_table.setColumnWidth(0, 300)
         install_table_keys(self.event_table)
-        splitter.addWidget(self.event_table)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
-        splitter.setStretchFactor(2, 2)
-        root.addWidget(splitter, 1)
+        self.result_tabs.addTab(self.event_table, "Event study")
 
-        # Footer: status and errors in their own line, never over the results
-        # (docs/ui.md 5.2), under the results like every tab's footer (8.4).
-        self.status_lbl = make_footer_label("Ready")
-        root.addWidget(self.status_lbl)
+        # The shown result's caveats (benchmark substitutions, flow coverage,
+        # skipped variants), readable here instead of only in the saved report
+        # (review_codex.md S3).
+        self.warn_lbl = QLabel("No warnings.")
+        self.warn_lbl.setObjectName("warn")
+        self.warn_lbl.setWordWrap(True)
+        self.warn_lbl.setTextFormat(Qt.TextFormat.RichText)
+        self.warn_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.warn_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.warn_lbl.setContentsMargins(8, 8, 8, 8)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(self.warn_lbl)
+        self.result_tabs.addTab(scroll, "Warnings (0)")
+        return self.result_tabs
 
-        banner = QFrame()
-        banner.setObjectName("DashboardCard")
-        banner_layout = QHBoxLayout(banner)
-        banner_layout.setContentsMargins(10, 6, 10, 6)
-        notice = QLabel("Research and backtesting signal generator, not investment advice. Backtests use today's "
-                        "KOSPI constituents (survivorship bias) and the cost assumptions of trend_following.md 4-1; "
-                        "nothing here places orders.")
-        notice.setWordWrap(True)
-        notice.setFont(create_font(FONT_SMALL))
-        # Information, not an error: muted text on the card, not DANGER red (docs/ui.md 8.3).
-        notice.setObjectName("muted")
-        banner_layout.addWidget(notice)
-        root.addWidget(banner)
+    def _draw_empty_chart(self):
+        for ax in (self.ax, self.ax_dd):
+            ax.clear()
+            ax.set_axis_off()
+        # Empty state (docs/ui.md 8.2): a hint instead of a bare 0-1 axis.
+        self.ax.text(0.5, 0.5, "Run Research to plot the selected variant's NAV and drawdown against BM1",
+                     ha="center", va="center", transform=self.ax.transAxes, color=TEXT_FAINT,
+                     fontsize=FONT_SMALL)
+
+    # ------------------------------------------------------- settings chips
+    def _chip_texts(self) -> list[str]:
+        start = self.start_edit.date().toPyDate()
+        end = self.end_edit.date().toPyDate()
+        mults = _COST_CHOICES[self.cost_combo.currentIndex()][1]
+        n = len(self._selected_variants())
+        variants = f"All {len(VARIANTS)} variants" if n == len(VARIANTS) else f"{n} of {len(VARIANTS)} variants"
+        chips = [
+            f"{start:%Y-%m-%d} → {end:%Y-%m-%d}",
+            f"KOSPI Top {self.universe_spin.value()}",
+            f"Liquidity ≥ {self.liquidity_spin.value()}억",
+            f"Max {self.positions_spin.value()} positions",
+            f"Check: {self.weekday_combo.currentText()}",
+            "Costs " + "/".join(f"{m:g}x" for m in mults),
+            variants,
+        ]
+        if self.flows_cb.isChecked():
+            chips.append("Investor flows")
+        if not self.event_cb.isChecked():
+            chips.append("No event study")
+        return chips
+
+    def _update_chips(self, *_):
+        texts = self._chip_texts()
+        while len(self.chips) < len(texts):
+            chip = QLabel()
+            chip.setObjectName("settingsChip")
+            self._chips_layout.addWidget(chip)
+            self.chips.append(chip)
+        for i, chip in enumerate(self.chips):
+            chip.setVisible(i < len(texts))
+            if i < len(texts):
+                chip.setText(texts[i])
+
+    def _on_edit_toggled(self, checked: bool):
+        self.form_box.setVisible(checked)
 
     # --------------------------------------------------------------- request
     def _selected_variants(self) -> tuple[str, ...]:
@@ -298,6 +488,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         if waiting:
             text += f" · {', '.join(waiting)} need Investor flows"
         self.variants_lbl.setText(text)
+        self._update_chips()
 
     def _on_variants_clicked(self):
         dlg = VariantPickerDialog(self._selected_variants(), self.flows_cb.isChecked(),
@@ -363,6 +554,8 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.save_btn.setEnabled(True)
         self.populate(result)
         self._show_warnings(result)
+        self.edit_btn.setChecked(False)       # the result takes the form's place
+        self._on_edit_toggled(False)
         n_runs = len(result.runs)
         skipped = f" · skipped {', '.join(result.skipped)}" if result.skipped else ""
         self.status_lbl.setText(
@@ -371,24 +564,118 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
 
     # -------------------------------------------------------------- warnings
     def _show_warnings(self, result: ResearchResult):
-        """Fill the Warnings panel from `result` (not from the current form)."""
+        """Fill the Warnings tab from `result` (not from the current form)."""
         lines = [f"{escape(vid)} not run: {escape(why)}" for vid, why in result.skipped.items()]
         lines += [escape(w) for w in result.warnings]
-        self.warn_lbl.setText("<br>".join(f"• {line}" for line in lines))
-        self.warn_btn.setText(f"Warnings ({len(lines)})")
-        self.warn_btn.setVisible(bool(lines))
-        if not lines:
-            self.warn_btn.setChecked(False)
-        self.warn_lbl.setVisible(bool(lines) and self.warn_btn.isChecked())
-
-    def _on_warnings_toggled(self, checked: bool):
-        self.warn_lbl.setVisible(checked)
+        self.warn_lbl.setText("<br>".join(f"• {line}" for line in lines) if lines else "No warnings.")
+        self.result_tabs.setTabText(TAB_WARNINGS, f"Warnings ({len(lines)})")
+        self.result_tabs.tabBar().setTabTextColor(TAB_WARNINGS, QColor(WARN if lines else TEXT_MUTED))
+        # The app QSS sets every tab's color, which wins over setTabTextColor; a
+        # property rule on the last tab (QTabBar::tab:last) carries the WARN color.
+        self.result_tabs.setProperty("warn", bool(lines))
+        bar = self.result_tabs.tabBar()
+        bar.style().unpolish(bar)
+        bar.style().polish(bar)
+        bar.update()
 
     # --------------------------------------------------------------- results
     def populate(self, result: ResearchResult):
+        self._result = result
         self._fill_summary(result)
-        self._draw_chart(result)
         self._fill_events(result)
+        mults = sorted({r.cost_mult for r in result.runs})
+        keys = sorted(set(COST_MULTIPLIERS) | set(mults))
+        self.cost_seg.set_keys([_mult_key(m) for m in keys], labels={_mult_key(m): f"{m:g}x" for m in keys},
+                               enabled={_mult_key(m) for m in mults})
+        self.selector_row.setVisible(bool(result.runs))
+        if not result.runs:
+            self._mult, self._sel_id = None, None
+            self.kpi_row.clear()
+            self.target_card.clear()
+            self.compare_table.setRowCount(0)
+            fill_monthly(self.monthly_table, None)
+            fill_trades(self.trades_table, None)
+            self._chart_series = []
+            self._draw_empty_chart()
+            self._update_readout(None)
+            self.canvas.draw_idle()
+            return
+        self._sel_id = None
+        self.set_cost(1.0 if 1.0 in mults else mults[0])
+
+    def selected_run(self):
+        if self._result is None or self._mult is None:
+            return None
+        return next((r for r in self._result.runs_at(self._mult) if r.id == self._sel_id), None)
+
+    def set_cost(self, mult: float):
+        """Show the runs at `mult`; keep the selected id when it ran at that
+        cost, else pick the strategy with the best Sharpe (an initial choice
+        only, never shown as a ranking)."""
+        if self._result is None or not self._result.runs_at(mult):
+            return
+        self._mult = mult
+        self.cost_seg.select(_mult_key(mult))
+        rows = comparison_rows(self._result, mult)
+        self.variant_seg.set_keys([r.id for r in rows], tooltips={r.id: r.label for r in rows})
+        self._syncing = True
+        try:
+            fill_comparison(self.compare_table, rows)
+        finally:
+            self._syncing = False
+        ids = [r.id for r in rows]
+        sel = self._sel_id if self._sel_id in ids else self._default_id(rows)
+        self._sel_id = None
+        self.select_variant(sel)
+
+    @staticmethod
+    def _default_id(rows) -> str:
+        strategies = [r for r in rows if r.kind == "strategy"]
+        if strategies:
+            def key(r):
+                s = r.metrics.get("sharpe")
+                return s if isinstance(s, (int, float)) and np.isfinite(s) else -np.inf
+            return max(strategies, key=key).id
+        return next((r.id for r in rows if r.id == "BM1"), rows[0].id)
+
+    def select_variant(self, run_id: str):
+        """Show one run of the current cost in the cards, chart and the
+        per-variant tabs; the segment and the comparison row follow."""
+        if self._result is None or run_id == self._sel_id:
+            return
+        if not any(r.id == run_id for r in self._result.runs_at(self._mult)):
+            return
+        self._sel_id = run_id
+        run = self.selected_run()
+        self.variant_seg.select(run_id)
+        self._syncing = True
+        try:
+            for row in range(self.compare_table.rowCount()):
+                item = self.compare_table.item(row, 0)
+                if item is not None and item.data(_ID_ROLE) == run_id:
+                    self.compare_table.setCurrentCell(row, max(self.compare_table.currentColumn(), 0))
+                    break
+        finally:
+            self._syncing = False
+        self.kpi_row.show_run(run)
+        self.target_card.show_run(run)
+        fill_monthly(self.monthly_table, run)
+        self.trades_table._empty_hint.text = _TRADES_EMPTY if run.kind == "strategy" else _TRADES_EMPTY_BM
+        fill_trades(self.trades_table, run)
+        self._redraw_chart()
+
+    def _on_variant_picked(self, run_id: str):
+        self.select_variant(run_id)
+
+    def _on_cost_picked(self, key: str):
+        self.set_cost(float(key))
+
+    def _on_compare_row_changed(self, row, _col, _prev_row, _prev_col):
+        if self._syncing or row < 0:
+            return
+        item = self.compare_table.item(row, 0)
+        if item is not None:
+            self.select_variant(item.data(_ID_ROLE))
 
     def _fill_summary(self, result: ResearchResult):
         rows = sorted(result.runs, key=lambda r: (r.cost_mult, r.kind != "strategy", r.id))
@@ -409,48 +696,82 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         finally:
             self.table.setUpdatesEnabled(True)
 
-    def _draw_chart(self, result: ResearchResult):
-        ax = self.ax
+    # ----------------------------------------------------------------- chart
+    def _redraw_chart(self, *_):
+        run = self.selected_run()
+        if run is None:
+            return
+        ax, ax_dd = self.ax, self.ax_dd
         ax.clear()
+        ax_dd.clear()
         ax.set_axis_on()
+        ax_dd.set_axis_on()
         self._chart_series = []
-        self._crosshair = None
-        base_mult = 1.0 if result.runs_at(1.0) else (result.request.cost_multipliers[0] if result.runs else 1.0)
-        for r in result.runs_at(base_mult):
+        self._crosshair = self._crosshair_dd = None
+        runs = self._result.runs_at(self._mult)
+        bm1 = next((r for r in runs if r.id == "BM1" and r.id != run.id), None)
+
+        def plot(r, color, width, style="-", legend=True):
             if len(r.nav) == 0:
-                continue
-            if r.kind == "benchmark":
-                color, style = _BENCHMARK_STYLE.get(r.id, (TEXT_FAINT, ":"))
-                line, = ax.plot(r.dates, r.nav * 100.0, linestyle=style, linewidth=1.2, color=color, label=r.id)
-            else:
-                line, = ax.plot(r.dates, r.nav * 100.0, linewidth=1.5, label=r.id)
+                return
+            line, = ax.plot(r.dates, r.nav * 100.0, linestyle=style, linewidth=width, color=color,
+                            label=r.id if legend else f"_{r.id}")
             self._chart_series.append((r.id, line.get_color(), np.asarray(date2num(r.dates), dtype=float),
                                        np.asarray(r.nav, dtype=float) * 100.0))
-        ax.set_title(f"NAV rebased to 100 ({base_mult:g}x costs)", fontsize=FONT_SMALL)
-        ax.grid(True, color=LINE, linewidth=0.6)
-        ax.tick_params(labelsize=FONT_SMALL - 1)
-        for spine in ("top", "right"):
-            ax.spines[spine].set_visible(False)
-        if ax.lines:
-            ax.legend(fontsize=FONT_SMALL - 1, ncol=min(6, len(ax.lines)), frameon=False)
-            self._crosshair = ax.axvline(self._chart_series[0][2][-1], color=TEXT_MUTED, linewidth=0.8,
-                                         linestyle="--", label="_nolegend_", visible=False)
+
+        if self.show_all_cb.isChecked():
+            for r in runs:
+                if r is not run and r is not bm1:
+                    plot(r, TEXT_EMPTY, 0.9, legend=False)
+        if bm1 is not None:
+            plot(bm1, SERIES_BENCH, 1.3, "--")
+        plot(run, SERIES_SELECTED, 2.2)
+        # The readout lists the selected run first, then BM1, then the rest.
+        self._chart_series.reverse()
+
+        ax.set_title(f"NAV rebased to 100 · {self._mult:g}x costs", fontsize=FONT_SMALL, loc="left", color=TEXT)
+        ax.legend(fontsize=FONT_SMALL - 1, frameon=False, loc="upper left")
+
+        if len(run.nav):
+            dd = drawdown_series(run.nav) * 100.0
+            ax_dd.fill_between(run.dates, dd, 0.0, color=LOSS, alpha=DRAWDOWN_ALPHA, linewidth=0)
+            ax_dd.plot(run.dates, dd, color=LOSS, linewidth=0.8)
+            ax_dd.set_ylim(min(float(np.nanmin(dd)), -TARGET_MDD * 100) * 1.15, 1.0)
+        ax_dd.axhline(-TARGET_MDD * 100, color=SERIES_TARGET, linestyle="--", linewidth=1.0)
+        ax_dd.set_ylabel("Drawdown %", fontsize=FONT_SMALL - 1, color=TEXT_MUTED)
+
+        for a in (ax, ax_dd):
+            a.grid(True, color=LINE, linewidth=0.6)
+            a.tick_params(labelsize=FONT_SMALL - 1, colors=TEXT_MUTED)
+            for spine in ("top", "right"):
+                a.spines[spine].set_visible(False)
+            for spine in ("left", "bottom"):
+                a.spines[spine].set_color(LINE)
+        ax.tick_params(labelbottom=False)
+        if self._chart_series:
+            x0 = self._chart_series[0][2][-1]
+            self._crosshair = ax.axvline(x0, color=TEXT_MUTED, linewidth=0.8, linestyle="--",
+                                         label="_nolegend_", visible=False)
+            self._crosshair_dd = ax_dd.axvline(x0, color=TEXT_MUTED, linewidth=0.8, linestyle="--",
+                                               label="_nolegend_", visible=False)
         self._update_readout(None)
         self.canvas.draw_idle()
 
     # ----------------------------------------------------------- chart hover
     def _on_chart_motion(self, event):
-        if event.inaxes is not self.ax or event.xdata is None or not self._chart_series:
+        if event.inaxes not in (self.ax, self.ax_dd) or event.xdata is None or not self._chart_series:
             return
         x = self._update_readout(float(event.xdata))
         if self._crosshair is not None and x is not None:
-            self._crosshair.set_xdata([x, x])
-            self._crosshair.set_visible(True)
+            for line in (self._crosshair, self._crosshair_dd):
+                line.set_xdata([x, x])
+                line.set_visible(True)
             self.canvas.draw_idle()
 
     def _on_chart_leave(self, _event):
         if self._crosshair is not None and self._crosshair.get_visible():
             self._crosshair.set_visible(False)
+            self._crosshair_dd.set_visible(False)
             self.canvas.draw_idle()
         self._update_readout(None)
 

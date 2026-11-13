@@ -116,6 +116,10 @@ def app_qss(font_css: str) -> str:
        direction, 2026-09-20). */
     QTabWidget#MainTabs QTabBar::tab {{ font-size: 12pt; font-weight: 700; }}
 
+    /* Strategy result tabs: the last one is "Warnings (n)", amber while n > 0
+       (set through the "warn" property; docs/ui.md 8.10). */
+    QTabWidget#ResultTabs[warn="true"] QTabBar::tab:last {{ color: {WARN}; }}
+
     QLineEdit, QComboBox, QDateEdit {{
         background: {SURFACE}; color: {TEXT};
         border: 1px solid {LINE_STRONG}; border-radius: 6px;
