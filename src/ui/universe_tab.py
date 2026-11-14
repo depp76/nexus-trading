@@ -150,11 +150,11 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             bar.addWidget(btn)
             self._market_buttons[m] = btn
 
-        # Status filter: one button cycling blank (no filter) -> Held -> Target
-        # (user direction 2026-09-29); fixed width so the label change never
-        # resizes it. Blank = unchecked, Held/Target = checked.
+        # Status filter: one button cycling All (no filter) -> Held -> Target
+        # (user direction 2026-09-29; "All" label since 2026-11-14); fixed width
+        # so the label change never resizes it. All = unchecked, Held/Target = checked.
         self.tg_filter_btn = self._filter_button(self._STATUS_FILTER_STATES[0][1])
-        self.tg_filter_btn.setToolTip("상태 필터: 없음 / 보유 / 관심")
+        self.tg_filter_btn.setToolTip("상태 필터: 전체 / 보유 / 관심")
         self.tg_filter_btn.clicked.connect(self._on_status_filter_clicked)
         bar.addWidget(self.tg_filter_btn)
 
@@ -238,7 +238,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     # (highlight status to show, button label): "" = no status filter. The
     # status values are the ones custom_settings.json stores ("On" = Held,
     # "Tg" = Target; docs/ui.md 1.7).
-    _STATUS_FILTER_STATES = (("", ""), ("On", "보유"), ("Tg", "관심"))
+    _STATUS_FILTER_STATES = (("", "전체"), ("On", "보유"), ("Tg", "관심"))
 
     @classmethod
     def _filter_button(cls, text: str, checked: bool = False) -> QPushButton:
@@ -375,7 +375,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         return self._STATUS_FILTER_STATES[self._status_filter_idx][0]
 
     def _on_status_filter_clicked(self):
-        """Advance the status filter button: blank -> Port -> Target -> blank."""
+        """Advance the status filter button: All -> Held -> Target -> All."""
         self._status_filter_idx = (self._status_filter_idx + 1) % len(self._STATUS_FILTER_STATES)
         status, label = self._STATUS_FILTER_STATES[self._status_filter_idx]
         self.tg_filter_btn.setText(label)
