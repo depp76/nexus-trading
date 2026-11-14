@@ -35,14 +35,16 @@ from paths import UNIVERSE_CACHE_FILE, CUSTOM_SETTINGS_FILE
 from threads.fetch_threads import (
     SingleStockFetchThread,
     AllDataFetchThread,
+    DEFAULT_UNIVERSE_MARKETS,
+    UNIVERSE_MARKET_SIZES,
     UniverseLightweightFetchThread,
     GeminiStockReportThread,
 )
 from threads.strategy_threads import TrendScoreThread, CANCELLED_MESSAGE
 from ui.widgets import StockTable, HeatLegend, RangeFilterPopup
 from ui.universe_views import (
-    BUILTIN_VIEWS, count_matches, describe_ranges, describe_view, empty_state as empty_view,
-    normalize as normalize_view, same_state as same_view,
+    BUILTIN_VIEWS, MARKETS, count_matches, describe_ranges, describe_view, empty_state as empty_view,
+    market_list, normalize as normalize_view, same_state as same_view,
 )
 from ui.dialogs.stock_report import show_stock_report_result
 from ui.ma_chart import StockMaLauncherMixin
@@ -79,7 +81,11 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         super().__init__(parent)
         self.all_data = []
         self.market_status = {}
-        self._market_filter = "ALL"
+        # Markets switched on in the toolbar: both what a refresh fetches and
+        # which rows show (docs/ui.md 2.1). Restored from custom_settings.json
+        # once it is loaded; KOSPI + KOSDAQ by default, the US ones off.
+        self._markets = set(DEFAULT_UNIVERSE_MARKETS)
+        self._markets_pending = False     # a market was switched on while a fetch ran
         self._status_filter_idx = 0      # index into _STATUS_FILTER_STATES
         self._ranges = {}                # Filters panel: column key -> [lo, hi] (docs/ui.md 8.9)
         # ticker -> (group 0=Top/1=Bottom, rank, label) of the pinned Trend
@@ -98,6 +104,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._startup_render_timer.timeout.connect(self._render_startup_batch)
         self._build_ui()
         self.load_custom_settings()
+        self._markets = self._saved_markets()
+        self._sync_market_buttons()
         self._update_filters_button()
         self._refresh_views_combo()   # filled even before any data arrives
 
@@ -126,16 +134,19 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.search_input.textChanged.connect(self.filter_table)
         bar.addWidget(self.search_input)
 
-        # Market filter (docs/ui.md 2.1): ALL/KOSPI/KOSDAQ toolbar buttons,
-        # replacing the old Excel-style dropdown on a Market table column
-        # (Market isn't a column anymore -- see the identity cell's meta text).
-        # The four filter toggles (ALL/KOSPI/KOSDAQ and the status cycle)
-        # share one size and one gap (user direction 2026-09-19).
+        # Markets (docs/ui.md 2.1): KOSPI/KOSDAQ/NASDAQ/S&P500 toggles, any
+        # combination, at least one. A market that is on is fetched by a
+        # refresh and shown; switching one on after a refresh fetches just
+        # that market (user direction 2026-11-14; replaced the single-choice
+        # ALL/KOSPI/KOSDAQ filter). Index rows always show. The filter
+        # toggles share one size and one gap (user direction 2026-09-19).
         bar.addSpacing(8)
         self._market_buttons = {}
-        for m in ("ALL", "KOSPI", "KOSDAQ"):
-            btn = self._filter_button(m, checked=(m == "ALL"))
-            btn.clicked.connect(lambda checked, mk=m: self._on_market_filter_changed(mk))
+        for m, label in MARKETS.items():
+            btn = self._filter_button(label.replace("&", "&&"), checked=(m in DEFAULT_UNIVERSE_MARKETS))
+            btn.setToolTip(f"{label}: 켜면 새로고침이 이 시장(상위 {UNIVERSE_MARKET_SIZES[m]}종목)을 받아 와 "
+                           "표에 보여 줍니다. 최소 한 시장은 켜져 있어야 합니다.")
+            btn.clicked.connect(lambda checked, mk=m: self._on_market_toggled(mk, checked))
             bar.addWidget(btn)
             self._market_buttons[m] = btn
 
@@ -234,11 +245,130 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         # checked state: ui/theme.py's QPushButton:checked rule
         return make_button(text, width=cls._FILTER_BTN_W, checkable=True, checked=checked)
 
-    def _on_market_filter_changed(self, market):
-        self._market_filter = market
+    # ---Markets (docs/ui.md 2.1) ---
+    def selected_markets(self) -> list:
+        return [m for m in MARKETS if m in self._markets]
+
+    def _saved_markets(self) -> set:
+        saved = market_list(self.custom_settings.get("markets"))
+        return set(DEFAULT_UNIVERSE_MARKETS) if saved == "ALL" else set(saved)
+
+    def _sync_market_buttons(self):
         for m, btn in self._market_buttons.items():
-            btn.setChecked(m == market)
-        self.filter_table()
+            btn.setChecked(m in self._markets)
+
+    def _on_market_toggled(self, market: str, checked: bool):
+        if not checked and self._markets == {market}:
+            self._market_buttons[market].setChecked(True)     # at least one market stays on
+            return
+        self.set_markets(self._markets | {market} if checked else self._markets - {market})
+
+    def set_markets(self, markets, refilter: bool = True):
+        """Switch the markets on/off: remembered in custom_settings.json; a
+        market switched off drops its rows (user-added tickers stay, hidden),
+        one switched on is fetched unless its rows are already here."""
+        picked = market_list(markets)
+        markets = set(DEFAULT_UNIVERSE_MARKETS) if picked == "ALL" else set(picked)
+        removed = self._markets - markets
+        self._markets = markets
+        self._sync_market_buttons()
+        self.custom_settings["markets"] = self.selected_markets()
+        self.save_custom_settings()
+        if removed:
+            self.all_data = self._rows_for_markets(self.all_data)
+            self._sort_all_data()
+            self._reload_table()
+            self._save_universe_cache()
+        if refilter:
+            self.filter_table()
+        self._fetch_missing_markets()
+
+    def _fetch_missing_markets(self, only=None):
+        """Fetch the switched-on markets that have no rows yet (only those
+        rows, no indices); `only` limits it to those markets. Waits for a
+        running full refresh, which calls this again for the markets switched
+        on while it ran (a market that refresh itself failed to load is not
+        retried here); a second switch while one fetch runs is picked up when
+        it ends."""
+        if not self.refresh_btn.isEnabled():
+            return
+        running = getattr(self, "_market_fetch_thread", None)
+        if running is not None and running.isRunning():
+            self._markets_pending = True
+            return
+        # A user-added ticker alone does not make its market "loaded".
+        added = self._added_tickers()
+        present = {x.get("market") for x in self.all_data if x.get("ticker") not in added}
+        missing = [m for m in self.selected_markets() if m not in present and (only is None or m in only)]
+        if not missing:
+            return
+        for m in missing:
+            self.market_status[m] = "Waiting"
+        thread = AllDataFetchThread(markets=missing, include_indices=False)
+        self._track_thread(thread, "_market_fetch_thread")
+        thread.market_progress.connect(self.on_market_progress)
+        thread.failed.connect(self._on_market_fetch_failed)
+        thread.finished_all.connect(self._on_markets_fetched)
+        thread.start()
+
+    def _on_market_fetch_failed(self, reason: str, parts: list):
+        self.status_text_changed.emit(f"Could not load {', '.join(parts)} ({reason}).")
+        self.refresh_failed.emit(f"market fetch: {reason}")
+
+    def _added_tickers(self) -> set:
+        return {x.get("ticker") for x in self.custom_settings.get("added", [])}
+
+    def _rows_for_markets(self, rows: list) -> list:
+        """The rows the switched-on markets keep: index rows, rows of an
+        on-market, and user-added tickers (hidden while their market is off).
+        A row of an off-market that also belongs to an on-market (`also_in`:
+        AAPL in NASDAQ 100 and S&P500) moves under that market instead of
+        going."""
+        added = self._added_tickers()
+        out = []
+        for x in rows:
+            market = x.get("market")
+            if market == "Index" or market in self._markets:
+                out.append(x)
+                continue
+            other = next((m for m in MARKETS if m in self._markets and m in x.get("also_in", ())), None)
+            if other is not None:
+                x["also_in"] = [market] + [m for m in x.get("also_in", []) if m not in (market, other)]
+                x["market"] = other
+                out.append(x)
+            elif x.get("ticker") in added:
+                out.append(x)
+        return out
+
+    def _on_markets_fetched(self, data: list):
+        """Rows of markets switched on after a refresh, merged in place. A
+        name that is already here records the new market in `also_in`."""
+        # This fetch is over even if its QThread has not quite returned from
+        # run() yet (a queued finished_all can arrive first): forget it, so a
+        # market switched on meanwhile is fetched below instead of waiting on
+        # it forever. The object stays in _tracked_threads for shutdown.
+        self._market_fetch_thread = None
+        deleted = set(self.custom_settings.get("deleted", []))
+        by_ticker = {x.get("ticker"): x for x in self.all_data}
+        for x in data:
+            old = by_ticker.get(x.get("ticker"))
+            market = x.get("market")
+            if old is not None and old.get("market") not in ("Index", market) \
+                    and market not in old.get("also_in", []):
+                old.setdefault("also_in", []).append(market)
+        have = set(by_ticker)
+        new = [x for x in data if x.get("market") in self._markets
+               and x.get("ticker") not in deleted and x.get("ticker") not in have]
+        if new:
+            self.all_data.extend(new)
+            self._sort_all_data()
+            self._reload_table()
+            self.filter_table()
+            self._save_universe_cache()
+            self.update_total_status(prefix=f"Loaded {len(new)} rows.")
+        if self._markets_pending:
+            self._markets_pending = False
+            self._fetch_missing_markets()
 
     @property
     def _status_filter(self) -> str:
@@ -457,22 +587,22 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     def filter_table(self, text=None):
         if text is None:
             text = self.search_input.text()
-        self.table.apply_col_filters(text, status=self._status_filter, market=self._market_filter,
+        self.table.apply_col_filters(text, status=self._status_filter, market=self.selected_markets(),
                                      ranges=self._ranges)
         self._update_filters_button()
         self._refresh_views_combo()
 
     # ---Range filters and saved views (docs/ui.md 2.6 / 8.9) ---
     def current_view_state(self) -> dict:
-        return normalize_view({"market": self._market_filter, "status": self._status_filter,
+        return normalize_view({"market": self.selected_markets(), "status": self._status_filter,
                                "search": self.search_input.text(), "ranges": self._ranges})
 
     def apply_view_state(self, state: dict):
         """Set every filter control from a view state and re-filter once."""
         state = normalize_view(state)
-        self._market_filter = state["market"]
-        for m, btn in self._market_buttons.items():
-            btn.setChecked(m == self._market_filter)
+        # "ALL" (built-in views, clear filters) leaves the markets as they are.
+        if state["market"] != "ALL" and set(state["market"]) != self._markets:
+            self.set_markets(state["market"], refilter=False)
         self._status_filter_idx = next(
             (i for i, (s, _) in enumerate(self._STATUS_FILTER_STATES) if s == state["status"]), 0)
         status, label = self._STATUS_FILTER_STATES[self._status_filter_idx]
@@ -514,17 +644,22 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         view that matches the current filters, if any."""
         rows = self.table.all_row_values()
         current = self.current_view_state()
-        is_filtered = not same_view(current, empty_view())
+
+        def resolved(view):
+            # A view with market "ALL" means "the markets that are on".
+            return dict(view, market=current["market"]) if market_list(view.get("market")) == "ALL" else view
+
+        is_filtered = not same_view(current, resolved(empty_view()))
         combo = self.views_combo
         combo.blockSignals(True)
         combo.clear()
         combo.addItem("저장된 보기", None)
         active = 0
         for v in self._all_views():
-            combo.addItem(f"{v['name']}  ({count_matches(rows, v)})", ("view", v["name"]))
+            combo.addItem(f"{v['name']}  ({count_matches(rows, resolved(v))})", ("view", v["name"]))
             tip = describe_view(v)
             combo.setItemData(combo.count() - 1, tip, Qt.ItemDataRole.ToolTipRole)
-            if is_filtered and active == 0 and same_view(v, current):
+            if is_filtered and active == 0 and same_view(resolved(v), current):
                 active = combo.count() - 1
         combo.insertSeparator(combo.count())
         if is_filtered:
@@ -721,10 +856,11 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._prev_data = list(self.all_data)
         self._full_failure = None
         self.all_data = []
-        self.market_status = {m: "Waiting" for m in ("Indices", "KOSPI", "KOSDAQ")} #, "NASDAQ 100", "S&P500")}
+        self._refresh_markets = set(self._markets)
+        self.market_status = {m: "Waiting" for m in ["Indices"] + self.selected_markets()}
         self.update_status_display()
 
-        self._track_thread(AllDataFetchThread(), 'fetch_thread')
+        self._track_thread(AllDataFetchThread(markets=self.selected_markets()), 'fetch_thread')
         self.fetch_thread.market_loaded.connect(self.on_market_loaded)
         self.fetch_thread.market_progress.connect(self.on_market_progress)
         self.fetch_thread.failed.connect(self._on_full_refresh_failed)
@@ -737,6 +873,9 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         """Called every 60s by MainWindow's global auto timer (roadmap: Auto Update checkbox)."""
         if not self.refresh_btn.isEnabled():
             return
+        market_fetch = getattr(self, "_market_fetch_thread", None)
+        if market_fetch is not None and market_fetch.isRunning():
+            return          # rows are being added; the tick's copy would drop them
 
         if self.all_data:
             # If all_data is already populated, do a lightweight in-place update for Universe
@@ -775,6 +914,10 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         # That lets us tell which rows actually need a UI refresh by object
         # identity, without a value-by-value diff.
         #
+        if [x.get("ticker") for x in updated_data] != [x.get("ticker") for x in self.all_data]:
+            # Rows were added or removed while the tick ran (a market switched
+            # on/off, a ticker added): its copy is stale, the next tick redoes it.
+            return
         changed_rows = {
             i for i, (old_item, new_item) in enumerate(zip(self.all_data, updated_data))
             if old_item.get("changes") is not new_item.get("changes")
@@ -815,7 +958,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
     def update_total_status(self, prefix="Data Loaded."):
         market_counts = Counter(item.get("market", "Unknown") for item in self.all_data)
-        order = ["Index", "KOSPI", "KOSDAQ"] #, "NASDAQ 100", "S&P500"]
+        order = ["Index", *MARKETS]
         summary_parts = [
             f"{m} {market_counts[m]}" for m in order if m in market_counts
         ] + [
@@ -830,7 +973,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         # Accumulate data incrementally so the table updates as each market finishes
         self.all_data.extend(data)
 
-    _PART_MARKET = {"Indices": "Index", "KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ"}
+    _PART_MARKET = {"Indices": "Index", **{m: m for m in MARKETS}}
 
     def _on_full_refresh_failed(self, reason: str, parts: list):
         # Arrives before finished_all (same emitting thread, queued in order).
@@ -856,7 +999,10 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
             if failure:
                 all_data = self._with_previous_rows(all_data, failure[1])
-            filtered_data = [x for x in all_data if x.get("ticker", "") not in deleted]
+            # A market switched off while the refresh ran: its rows go
+            # (user-added tickers stay, hidden by the market filter).
+            filtered_data = self._rows_for_markets(
+                [x for x in all_data if x.get("ticker", "") not in deleted])
 
             self.all_data = filtered_data
             self._sort_all_data()      # keeps a pinned Trend Score run on top
@@ -888,3 +1034,5 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             self.status_text_changed.emit(f"Data sort/load error: {e}")
         finally:
             self.refresh_btn.setEnabled(True)
+            # a market switched on while the refresh ran
+            self._fetch_missing_markets(only=self._markets - getattr(self, "_refresh_markets", self._markets))

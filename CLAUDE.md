@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A single-user PyQt6 desktop app for tracking a Korean/US equity portfolio, with four
 top-level tabs: "Trading Universe" (KOSPI/KOSDAQ watchlist with live prices and indicators;
-the US market code paths still exist but are commented out in the UI), "Trading History"
+NASDAQ 100 and S&P500 can be switched on in its market toggles, off by default; docs/ui.md 2.1), "Trading History"
 (manually-entered trade log backed by SQLite), "Total Assets" (weekly asset snapshots vs.
 KOSPI and USD) and "Strategy" (research backtests; one sub-tab per strategy package, currently
 only Trend Following). Nothing places orders.
@@ -114,7 +114,7 @@ Dev tooling is in `requirements-dev.txt`
 - **`src/ui/`**: `universe_tab.py` (`UniverseTab`), `history_tab.py` (`TradingHistoryTab`),
   `assets_tab.py` (`TradingRecordTab`), `strategy_tab.py` (`StrategyTab`, the sub-tab host
   that merges its children's `collect_threads_to_stop()`), `trend_following_tab.py`
-  (`TrendFollowingTab`: request form (a wrapping `FlowLayout`) or its chip-row summary ->
+  (`TrendFollowingTab`: request form (three-column card, two meaning rows that each wrap, docs/ui.md 8.18) or its chip-row summary ->
   `TrendFollowingResearchThread` -> variant/cost segments, KPI cards, NAV + drawdown chart,
   target-check card, result tabs (comparison, all metrics, monthly, trades, event study,
   warnings), "Save Report" to `reports/`; docs/ui.md 8.10), `strategy_widgets.py` (that

@@ -279,14 +279,28 @@ class AssetReportThread(QThread):
 # ---------------------------------------------------------------------------
 # All-market data fetch thread (full load)
 # ---------------------------------------------------------------------------
+# The Trading Universe's markets and how many names each brings, in display
+# order (docs/ui.md 2.1). Only the markets switched on in the toolbar are
+# fetched; NASDAQ 100 and S&P500 are off by default.
+UNIVERSE_MARKET_SIZES = {"KOSPI": 350, "KOSDAQ": 300, "NASDAQ 100": 150, "S&P500": 510}
+DEFAULT_UNIVERSE_MARKETS = ("KOSPI", "KOSDAQ")
+
+
 class AllDataFetchThread(QThread):
     market_loaded = pyqtSignal(str, list)
     market_progress = pyqtSignal(str, int, int)
     finished_all = pyqtSignal(list)
     # (reason, failed parts) just before finished_all when any part --
-    # "Indices", "KOSPI", "KOSDAQ" -- raised or came back empty, so the tab
-    # can keep its previous rows for those parts (docs/ui.md 8.8).
+    # "Indices" or one of the markets -- raised or came back empty, so the
+    # tab can keep its previous rows for those parts (docs/ui.md 8.8).
     failed = pyqtSignal(str, list)
+
+    def __init__(self, markets=DEFAULT_UNIVERSE_MARKETS, include_indices: bool = True):
+        """`markets`: which of UNIVERSE_MARKET_SIZES to fetch; `include_indices`
+        False for a market switched on after a refresh (only its rows)."""
+        super().__init__()
+        self.markets = tuple(m for m in UNIVERSE_MARKET_SIZES if m in set(markets))
+        self.include_indices = include_indices
 
     def run(self):
         from data_fetcher import fetch_major_indices_as_stocks
@@ -295,24 +309,20 @@ class AllDataFetchThread(QThread):
         failed_parts = []
         try:
             # ---Step 1: Fetch indices first (fast, one concurrent call per index) ---
-            try:
-                self.market_progress.emit("Indices", 0, len(INDEX_TICKERS))
-                indices_data = fetch_major_indices_as_stocks()
-                self.market_loaded.emit("Indices", indices_data)
-                all_data.extend(indices_data)
-                if not indices_data:
+            if self.include_indices:
+                try:
+                    self.market_progress.emit("Indices", 0, len(INDEX_TICKERS))
+                    indices_data = fetch_major_indices_as_stocks()
+                    self.market_loaded.emit("Indices", indices_data)
+                    all_data.extend(indices_data)
+                    if not indices_data:
+                        failed_parts.append("Indices")
+                except Exception as e:
+                    logger.warning("Error fetching indices: %s", e, exc_info=True)
                     failed_parts.append("Indices")
-            except Exception as e:
-                logger.warning("Error fetching indices: %s", e, exc_info=True)
-                failed_parts.append("Indices")
 
-            # ---Step 2: Fetch all 4 markets IN PARALLEL ---
-            markets_config = [
-                ("KOSPI",  350),
-                ("KOSDAQ", 300),
-                # ("NASDAQ 100", 150),
-                # ("S&P500", 510),
-            ]
+            # ---Step 2: Fetch the selected markets IN PARALLEL ---
+            markets_config = [(m, UNIVERSE_MARKET_SIZES[m]) for m in self.markets]
 
             for market, top_n in markets_config:
                 self.market_progress.emit(market, 0, top_n)
@@ -323,7 +333,7 @@ class AllDataFetchThread(QThread):
                 return market, fetch_market_data(market, top_n, progress_cb)
 
             market_results = {}
-            with ThreadPoolExecutor(max_workers=4) as executor:
+            with ThreadPoolExecutor(max_workers=max(1, len(markets_config))) as executor:
                 futures = {
                     executor.submit(fetch_market_task, m, n): m
                     for m, n in markets_config
@@ -338,14 +348,26 @@ class AllDataFetchThread(QThread):
                         logger.warning("Error fetching %s: %s", market, e, exc_info=True)
                         market_results[market] = []
 
+            # A name in both NASDAQ 100 and S&P500 (AAPL, MSFT, ...) is one
+            # row, under the first market in display order; `also_in` lists
+            # its other markets, so switching the first one off keeps the row
+            # under the other (UniverseTab._rows_for_markets).
+            first = {x.get("ticker"): x for x in all_data}
             for market, _ in markets_config:
-                all_data.extend(market_results.get(market, []))
-                if not market_results.get(market):
+                rows = market_results.get(market, [])
+                for x in rows:
+                    kept = first.get(x.get("ticker"))
+                    if kept is None:
+                        first[x.get("ticker")] = x
+                        all_data.append(x)
+                    elif kept.get("market") != market and market not in kept.get("also_in", []):
+                        kept.setdefault("also_in", []).append(market)
+                if not rows:
                     failed_parts.append(market)
             del market_results  # release the intermediate dict to free memory
         except Exception as e:
             logger.warning("Error inside AllDataFetchThread.run: %s", e, exc_info=True)
-            failed_parts = ["Indices", "KOSPI", "KOSDAQ"]
+            failed_parts = (["Indices"] if self.include_indices else []) + list(self.markets)
         finally:
             if failed_parts:
                 parts = list(dict.fromkeys(failed_parts))
