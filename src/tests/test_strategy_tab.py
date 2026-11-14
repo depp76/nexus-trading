@@ -5,7 +5,7 @@ from datetime import date
 from unittest.mock import patch
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication, QDialog
+from PyQt6.QtWidgets import QApplication, QDialog, QLabel
 from PyQt6.QtGui import QPixmap
 
 app = QApplication.instance() or QApplication([])
@@ -62,7 +62,7 @@ class TestTrendFollowingTab(unittest.TestCase):
         tab.liquidity_spin.setValue(50)
         tab.positions_spin.setValue(8)
         tab.weekday_combo.setCurrentIndex(2)
-        tab.cost_combo.setCurrentIndex(1)
+        tab.run_cost_seg.buttons["1"].click()
         tab.flows_cb.setChecked(True)
         tab.set_variant_choice([vid for vid in tab._selected_variants() if vid != "A3"])
         tab.event_cb.setChecked(False)
@@ -90,9 +90,18 @@ class TestTrendFollowingTab(unittest.TestCase):
         req = tab.build_request()
         self.assertFalse(set(flow_ids) & set(req.variant_ids))
         self.assertIn("A0", req.variant_ids)
-        self.assertIn("투자자 수급 필요", tab.variants_lbl.text())
+        # the warning sits next to the flows switch (docs/ui.md 8.18); the
+        # summary is the selection only, the full sentence on its tooltip
+        self.assertFalse(tab.flows_warn_lbl.isHidden())
+        self.assertEqual(tab.flows_warn_lbl.objectName(), "warn")
+        self.assertEqual(tab.flows_warn_lbl.text(), f"꺼져 있어 {'·'.join(flow_ids)} 제외")
+        self.assertNotIn("투자자 수급", tab.variants_lbl.text())
+        self.assertIn("투자자 수급 필요", tab.variants_lbl.toolTip())
+        n = len(VARIANTS) - len(flow_ids)
+        self.assertTrue(tab.variants_lbl.text().endswith(f"({n}/{len(VARIANTS)})"))
 
         tab.flows_cb.setChecked(True)
+        self.assertTrue(tab.flows_warn_lbl.isHidden())
         self.assertEqual(tab._selected_variants(), tuple(VARIANTS))
         self.assertEqual(tab.variants_lbl.text(), f"변형 {len(VARIANTS)}개 전체")
         tab.set_variant_choice([v for v in VARIANTS if v != flow_ids[0]])
@@ -124,6 +133,38 @@ class TestTrendFollowingTab(unittest.TestCase):
         self.assertEqual(seen["params"].max_positions, 8)     # descriptions quote the form's numbers
         self.assertEqual(tab._selected_variants(), ("A1", "C1"))
         self.assertIn("A1, C1", tab.variants_lbl.text())
+
+    def test_run_cost_and_markets_are_segments(self):
+        """docs/ui.md 8.18: the two cost choices and the markets are joined
+        segments; the cost segment is _COST_CHOICES, in order."""
+        from ui.strategy_widgets import SegmentRow
+        from ui.trend_following_tab import _COST_CHOICES
+        tab = TrendFollowingTab()
+        self.assertIsInstance(tab.run_cost_seg, SegmentRow)
+        self.assertEqual([b.text() for b in tab.run_cost_seg.buttons.values()], [lbl for lbl, _ in _COST_CHOICES])
+        self.assertEqual(tab.run_cost_mults(), tuple(_COST_CHOICES[0][1]))
+        tab.run_cost_seg.buttons["1"].click()
+        self.assertEqual(tab.build_request().cost_multipliers, tuple(_COST_CHOICES[1][1]))
+        self.assertIn("실행 비용 1x", tab._chip_texts())
+        self.assertIsInstance(tab.market_seg, SegmentRow)
+        self.assertIs(tab.market_buttons, tab.market_seg.buttons)
+        self.assertEqual(tab.market_seg.checked_keys(), ["KOSPI"])
+
+    def test_flows_warning_only_while_a_flow_variant_waits(self):
+        from strategy.trend_following import VARIANTS
+        tab = TrendFollowingTab()
+        tab.flows_cb.setChecked(True)
+        tab.set_variant_choice(["A0", "B"])                # no flow variant chosen: nothing to warn about
+        tab.flows_cb.setChecked(False)
+        self.assertTrue(tab.flows_warn_lbl.isHidden())
+        flow_id = next(vid for vid, v in VARIANTS.items() if v.needs_flows)
+        tab.flows_cb.setChecked(True)
+        tab.set_variant_choice(["A0", flow_id])
+        tab.flows_cb.setChecked(False)
+        self.assertFalse(tab.flows_warn_lbl.isHidden())
+        self.assertEqual(tab.flows_warn_lbl.text(), f"꺼져 있어 {flow_id} 제외")
+        tab.flows_cb.setChecked(True)
+        self.assertTrue(tab.flows_warn_lbl.isHidden())
 
     def test_skipped_variants_and_warnings_are_shown_without_saving(self):
         """review_codex.md S1/S3: a run that could not load flows names the
@@ -295,7 +336,8 @@ class TestResultScreen(unittest.TestCase):
         self.assertTrue(tab.selector_row.isVisibleTo(tab))
         # The form stays open after a run (back to choosing, docs/ui.md 8.12).
         self.assertTrue(tab.form_box.isVisibleTo(tab))
-        self.assertTrue(tab.edit_btn.isChecked())
+        self.assertTrue(tab.form_open())
+        self.assertFalse(tab.edit_btn.isCheckable())     # not drawn like a second primary (8.17)
 
     def test_variant_pick_updates_cards_target_check_and_tabs(self):
         from ui.strategy_widgets import fmt_num, fmt_pct
@@ -409,7 +451,7 @@ class TestResultScreen(unittest.TestCase):
     def test_settings_chips_follow_the_form(self):
         tab = TrendFollowingTab()
         tab.universe_spin.setValue(120)
-        tab.cost_combo.setCurrentIndex(1)
+        tab.run_cost_seg.buttons["1"].click()
         texts = [c.text() for c in tab.chips if not c.isHidden()]
         self.assertIn("KOSPI 상위 120", texts)
         self.assertIn("실행 비용 1x", texts)
@@ -417,6 +459,44 @@ class TestResultScreen(unittest.TestCase):
         tab.edit_btn.click()
         self.assertFalse(tab.form_box.isVisibleTo(tab))
         self.assertEqual(tab.edit_btn.text(), "설정 펼치기")   # names the action it will do (8.17)
+
+    def test_chips_follow_the_form_order(self):
+        """docs/ui.md 8.18: folding never moves an item; the chips run in the
+        form's order, 데이터 row then 규칙·실행 row."""
+        tab = TrendFollowingTab()
+        tab.flows_cb.setChecked(True)
+        tab.event_cb.setChecked(False)
+        texts = tab._chip_texts()
+        self.assertEqual(texts[1], "홀드아웃 포함")
+        keys = ("KOSPI", "유동성", "투자자 수급", "최대", "점검", "실행 비용", "변형", "이벤트 스터디 제외",
+                "목표 Sharpe")
+        idx = {k: next(i for i, t in enumerate(texts) if t.startswith(k)) for k in keys}
+        self.assertEqual(sorted(idx, key=idx.get), list(keys))
+        self.assertEqual(len(texts), len(keys) + 2)                         # + window, hold-out
+        labels = [g.findChild(QLabel).text() for g in tab.form_groups if g.findChild(QLabel)]
+        self.assertLess(labels.index("실행 비용"), labels.index("판정 목표 Sharpe ≥"))
+        self.assertIn(tab.variants_group, tab.rule_groups)
+
+    def test_variant_button_and_summary_share_a_line(self):
+        tab = TrendFollowingTab()
+        tab.show()
+        for width in (1440, tab.minimumSizeHint().width()):
+            tab.resize(width, 900)
+            for _ in range(3):
+                app.processEvents()
+            btn_y = tab.variants_btn.mapTo(tab, tab.variants_btn.rect().center()).y()
+            lbl_y = tab.variants_lbl.mapTo(tab, tab.variants_lbl.rect().center()).y()
+            self.assertLess(abs(btn_y - lbl_y), 6)
+        tab.hide()
+
+    def test_benchmarks_are_a_separate_segment_group(self):
+        tab = TrendFollowingTab()
+        tab._on_research_finished(self.result, "")
+        lay = tab.variant_seg._layout
+        kinds = [("gap" if lay.itemAt(i).spacerItem() else lay.itemAt(i).widget().text())
+                 for i in range(lay.count())]
+        self.assertEqual(kinds.count("gap"), 1)
+        self.assertEqual(kinds[kinds.index("gap") + 1], "BM1")
 
     def test_empty_state(self):
         tab = TrendFollowingTab()
@@ -477,77 +557,96 @@ class TestWindowEndAndFormLayout(unittest.TestCase):
     # a pixel constant: font metrics differ between the Windows platform, the
     # offscreen platform and the app theme (review_codex.md, the two UI failures).
     @staticmethod
-    def _two_line_width(tab) -> int:
-        """A tab width at which the form is guaranteed to fit on two lines."""
-        flow = tab.form_flow
+    def _need(flow) -> int:
+        """Width one settings row needs to sit on one line."""
         widths = [flow._width(flow.itemAt(i)) for i in range(flow.count())
                   if not flow.itemAt(i).widget().isHidden()]
-        need = (sum(widths) + flow._h * len(widths) + flow._inset + max(widths)) // 2 + 60
-        return need + (tab.width() - tab.form_box.width())
+        return sum(widths) + flow._h * (len(widths) - 1)
+
+    def _one_line_width(self, tab) -> int:
+        """A tab width at which both rows fit on one line each, capped at the
+        screen (a top-level window is not made wider than it)."""
+        want = tab.width() + max(self._need(f) - f.parentWidget().width() for f in tab.form_flows) + 20
+        return min(want, app.primaryScreen().availableGeometry().width())
 
     def _settle(self, tab, width):
         tab.resize(width, 900)
         for _ in range(3):
             app.processEvents()
 
-    def test_form_takes_the_chips_place_in_two_lines(self):
+    @staticmethod
+    def _y(tab, w) -> int:
+        return w.mapTo(tab, w.rect().center()).y()
+
+    def test_two_rows_by_meaning_each_on_one_line_when_wide(self):
+        """docs/ui.md 8.18: 데이터 over 규칙·실행, buttons in their own column."""
         tab = TrendFollowingTab()
         tab.show()
         self._settle(tab, 1440)
-        self._settle(tab, self._two_line_width(tab))
+        self._settle(tab, self._one_line_width(tab))
         self.assertTrue(tab.form_box.isVisible())
         self.assertFalse(tab.chips_box.isVisible())
-        lines = tab.form_flow.lines(tab.form_box.width())
-        self.assertLessEqual(len(lines), 2)
-        rows = {w.mapTo(tab, w.rect().center()).y() for w in
-                (tab.start_edit, tab.end_edit, tab.universe_spin, tab.liquidity_spin, tab.positions_spin,
-                 tab.weekday_combo, tab.cost_combo, tab.flows_cb, tab.event_cb, tab.variants_btn,
-                 *tab.market_buttons.values())}
-        self.assertLessEqual(len({y // 12 for y in rows}), 2)             # two lines of controls
-        # the summary label keeps at least its floor and takes the rest of its line
+        self.assertEqual([lbl.text() for lbl in tab.row_name_lbls], ["데이터", "규칙·실행"])
+        for flow in tab.form_flows:
+            # one line whenever the row fits (the screen may be narrower than that)
+            self.assertEqual(len(flow.lines(self._need(flow))), 1)
+            if self._need(flow) <= flow.parentWidget().width():
+                self.assertEqual(len(flow.lines(flow.parentWidget().width())), 1)
+        data = [self._y(tab, w) for w in (tab.start_edit, tab.end_edit, tab.universe_spin,
+                                          tab.liquidity_spin, tab.flows_cb, *tab.market_buttons.values())]
+        rule = [self._y(tab, w) for w in (tab.positions_spin, tab.weekday_combo, tab.variants_btn,
+                                          tab.event_cb, tab.target_spin, *tab.run_cost_seg.buttons.values())]
+        self.assertLess(max(data), min(rule))                               # 데이터 entirely above 규칙·실행
+        # the summary label keeps at least its floor and takes the spare width
         from ui.trend_following_tab import _VARIANTS_LBL_MIN_W
         self.assertGreaterEqual(tab.variants_lbl.width(), _VARIANTS_LBL_MIN_W)
-        # the first line stops short of the buttons laid over the corner
-        first_right = max(i.widget().mapTo(tab, i.widget().rect().topRight()).x() for i in lines[0])
-        self.assertLess(first_right, tab.stop_btn.mapTo(tab, tab.stop_btn.rect().topLeft()).x())
+        # every control left of the button column
+        btn_left = tab.actions_box.mapTo(tab, tab.actions_box.rect().topLeft()).x()
+        for g in tab.form_groups:
+            self.assertLess(g.mapTo(tab, g.rect().topRight()).x(), btn_left)
         tab.edit_btn.click()
         self.assertFalse(tab.form_box.isVisible())
         self.assertTrue(tab.chips_box.isVisible())
         tab.hide()
 
-    def test_form_wraps_instead_of_widening_the_tab(self):
-        """At the tab's own minimum width the form takes more lines and every
-        control is still fully inside the card and clear of the buttons."""
+    def test_rows_wrap_on_their_own_at_the_minimum_width(self):
+        """At the tab's own minimum width each row takes more lines, the two
+        rows never mix, every control is inside the card, and a section that
+        opens a line does not draw its divider."""
         tab = TrendFollowingTab()
         tab.show()
         self._settle(tab, 1440)
-        wide_lines = len(tab.form_flow.lines(tab.form_box.width()))
         min_w = tab.minimumSizeHint().width()
-        self.assertLess(min_w, self._two_line_width(tab))                  # narrower than the two-line layout
+        self.assertLess(min_w, self._one_line_width(tab))
         self._settle(tab, min_w)
         self.assertEqual(tab.width(), min_w)
-        lines = tab.form_flow.lines(tab.form_box.width())
-        self.assertGreater(len(lines), wide_lines)
-        card_right = tab.form_box.mapTo(tab, tab.form_box.rect().topRight()).x()
-        btn_left = tab.stop_btn.mapTo(tab, tab.stop_btn.rect().topLeft()).x()
-        btn_bottom = tab.stop_btn.mapTo(tab, tab.stop_btn.rect().bottomLeft()).y()
-        for g in tab.form_groups:
-            if g is tab.variants_lbl or g.isHidden():
-                continue
+        self.assertGreater(sum(len(f.lines(f.parentWidget().width())) for f in tab.form_flows), 2)
+        visible = lambda groups: [g for g in groups if not g.isHidden()]   # noqa: E731
+        data_bottom = max(g.mapTo(tab, g.rect().bottomLeft()).y() for g in visible(tab.data_groups))
+        rule_top = min(g.mapTo(tab, g.rect().topLeft()).y() for g in visible(tab.rule_groups))
+        self.assertLess(data_bottom, rule_top)
+        form_right = tab.form_box.mapTo(tab, tab.form_box.rect().topRight()).x()
+        btn_left = tab.actions_box.mapTo(tab, tab.actions_box.rect().topLeft()).x()
+        for g in visible(tab.form_groups):
             right = g.mapTo(tab, g.rect().topRight()).x()
-            top = g.mapTo(tab, g.rect().topLeft()).y()
-            self.assertLessEqual(right, card_right)                        # nothing cut at the card edge
-            if top < btn_bottom:
-                self.assertLess(right, btn_left)                           # nothing under the buttons
+            self.assertLessEqual(right, form_right)                         # nothing cut at the card edge
+            self.assertLess(right, btn_left)                                # nothing under the buttons
+        for flow in tab.form_flows:
+            for line in flow.lines(flow.parentWidget().width()):
+                for k, item in enumerate(line):
+                    sep = getattr(item.widget(), "section_sep", None)
+                    if sep is not None:
+                        self.assertEqual(sep.is_drawn(), k > 0)
+        tab.hide()
 
     def test_form_minimum_width_is_one_group_not_a_row(self):
         tab = TrendFollowingTab()
         tab.show()
         app.processEvents()
-        flow = tab.form_flow
-        widths = [flow._width(flow.itemAt(i)) for i in range(flow.count())
-                  if not flow.itemAt(i).widget().isHidden()]
-        self.assertEqual(tab.form_box.minimumSizeHint().width(), max(max(widths), widths[0] + flow._inset))
+        for flow in tab.form_flows:
+            widths = [flow._width(flow.itemAt(i)) for i in range(flow.count())
+                      if not flow.itemAt(i).widget().isHidden()]
+            self.assertEqual(flow.minimumSize().width(), max(widths))
         # a long variant summary does not change it
         before = tab.minimumSizeHint().width()
         tab.variants_lbl.setText("A0, A1, A2, A3, A4, A5, B, C1, C2, C3 " * 6)
@@ -558,6 +657,32 @@ class TestWindowEndAndFormLayout(unittest.TestCase):
         app.processEvents()
         self.assertLessEqual(tab.minimumSizeHint().width(), before)
         tab.hide()
+
+    def test_folding_never_moves_the_run_button(self):
+        tab = TrendFollowingTab()
+        tab.show()
+        for width in (1440, 1100):
+            self._settle(tab, width)
+            if not tab.form_open():
+                tab.edit_btn.click()
+                self._settle(tab, width)
+            pos = tab.run_btn.mapTo(tab, tab.run_btn.rect().topLeft())
+            tab.edit_btn.click()
+            self._settle(tab, width)
+            self.assertEqual(tab.run_btn.mapTo(tab, tab.run_btn.rect().topLeft()), pos)
+            self.assertEqual(tab.stop_btn.objectName(), "")                 # Stop stays neutral (8.1)
+        tab.hide()
+
+    def test_fold_control_is_a_link_and_checked_toggles_lose_the_accent_outline(self):
+        from ui.theme import app_qss, ACCENT, LINE_STRONG
+        tab = TrendFollowingTab()
+        self.assertEqual(tab.edit_btn.objectName(), "link")
+        qss = app_qss("")
+        checked = qss[qss.index("QPushButton:checked {"):]
+        checked = checked[:checked.index("}")]
+        self.assertIn(f"border-color: {LINE_STRONG}", checked)
+        self.assertNotIn(f"border-color: {ACCENT};", checked)
+        self.assertIn("QPushButton#link", qss)
 
 
 class TestFlowLayout(unittest.TestCase):

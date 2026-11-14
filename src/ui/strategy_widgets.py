@@ -160,16 +160,24 @@ class SegmentRow(QWidget):
         self._group.setExclusive(not multi)
         self.buttons: dict[str, object] = {}
 
-    def set_keys(self, keys, labels: dict | None = None, enabled=None, tooltips: dict | None = None):
+    GROUP_GAP = 14      # between groups of keys (docs/ui.md 8.17: 12-16 px between task groups)
+
+    def set_keys(self, keys, labels: dict | None = None, enabled=None, tooltips: dict | None = None,
+                 group_starts=()):
+        """`group_starts`: keys that open a new group (a GROUP_GAP before them,
+        e.g. the first benchmark after the strategies)."""
         for btn in self.buttons.values():
             self._group.removeButton(btn)
             # Out of the layout and hidden now: deleteLater only runs once the
             # event loop gets to it, and two set_keys in a row would show both sets.
-            self._layout.removeWidget(btn)
             btn.hide()
             btn.deleteLater()
+        while self._layout.count():          # the buttons and any group gaps
+            self._layout.takeAt(0)
         self.buttons = {}
         for key in keys:
+            if self.buttons and key in group_starts:
+                self._layout.addSpacing(self.GROUP_GAP)
             btn = make_button((labels or {}).get(key, key), width=self._width, checkable=True,
                               tooltip=(tooltips or {}).get(key, ""))
             btn.setEnabled(enabled is None or key in enabled)

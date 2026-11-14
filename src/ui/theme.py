@@ -146,8 +146,12 @@ def app_qss(font_css: str) -> str:
     QPushButton:hover    {{ background: {HDR_BG}; }}
     QPushButton:pressed  {{ background: {LINE_SOFT}; }}
     QPushButton:disabled {{ color: {TEXT_EMPTY}; border-color: {LINE_SOFT}; background: {BG}; }}
+    /* Checked toggles/segments: tinted fill and accent text on the normal
+       outline. No accent outline, so the tab's primary (filled, light
+       outline, white text) stays the only button that looks like an action
+       (docs/ui.md 8.18). */
     QPushButton:checked {{
-        background: {ACCENT_BG}; color: {TEXT}; border-color: {ACCENT}; font-weight: 600;
+        background: {ACCENT_BG}; color: {ACCENT_TEXT}; border-color: {LINE_STRONG}; font-weight: 600;
     }}
     /* A multi-select segment's focused button (Strategy variants, docs/ui.md 8.14). */
     QPushButton[segFocus="true"]:checked {{ border: 2px solid {ACCENT}; }}
@@ -156,6 +160,14 @@ def app_qss(font_css: str) -> str:
     }}
     QPushButton#primary:hover {{ background: {PRIMARY_HOVER}; }}
     QPushButton#primary:disabled {{ background: {ACCENT_BG}; color: {TEXT_FAINT}; border-color: {LINE}; }}
+    /* A text-only action next to a title (Strategy 설정 접기/펼치기, 8.18):
+       lighter than an outlined button, so it never reads as the form's first input. */
+    QPushButton#link {{
+        background: transparent; border: none; padding: 0px; color: {ACCENT_TEXT};
+        text-decoration: underline; font-weight: 400;
+    }}
+    QPushButton#link:hover {{ background: transparent; color: {TEXT}; }}
+    QPushButton#link:pressed {{ background: transparent; }}
     QPushButton#danger  {{ color: {DANGER}; border-color: {DANGER_LINE}; }}
     QPushButton#danger:hover {{ background: {DANGER_BG}; }}
     QToolButton {{ color: {TEXT}; }}
