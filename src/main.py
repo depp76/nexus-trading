@@ -6,10 +6,16 @@ import trade_db
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QTabWidget,
-    QCheckBox,
+    QCheckBox, QMessageBox,
 )
-from PyQt6.QtCore import Qt, QTimer, QTranslator, QLibraryInfo
+from PyQt6.QtCore import Qt, QTimer, QTranslator, QLibraryInfo, QProcess
 from PyQt6.QtGui import QFont, QShortcut, QKeySequence
+
+# The UI language must be set before any ui module is imported: module-level
+# label constants are built with i18n.tr() at import time (docs/ui.md 8.20).
+import i18n
+i18n.load_language()
+from i18n import tr
 
 from paths import ENV_FILE, APP_LOG_FILE
 from ui.common import (
@@ -23,6 +29,7 @@ from ui.common import (
     refresh_state,
     RefreshFailures,
 )
+from ui.language_switch import LanguageSwitch
 from ui.theme import app_qss, app_palette, apply_matplotlib_theme, TEXT_EMPTY
 from ui.colors import OK, WARN, DANGER
 
@@ -114,6 +121,11 @@ class MainWindow(QMainWindow):
         self.update_time_label.setFont(create_font(FONT_SMALL, style_name="Semilight"))
         header_layout.addSpacing(6)
         header_layout.addWidget(self.update_time_label)
+        header_layout.addSpacing(14)
+        # UI language flags (docs/ui.md 8.20).
+        self.language_switch = LanguageSwitch()
+        self.language_switch.language_requested.connect(self._on_language_requested)
+        header_layout.addWidget(self.language_switch)
         # Re-evaluates "late" between updates.
         self._indicator_timer = QTimer(self)
         self._indicator_timer.setInterval(15000)
@@ -190,6 +202,22 @@ class MainWindow(QMainWindow):
         self._auto_backup_thread = AutoBackupThread()
         self._auto_backup_thread.backup_done.connect(self._on_thread_status_message)
         self._auto_backup_thread.start()
+
+    restart_requested = False
+
+    def _on_language_requested(self, lang: str) -> None:
+        """Save the language and restart: labels are built once at startup,
+        so a switch takes a fresh process."""
+        answer = QMessageBox.question(
+            self, "Nexus Trading",
+            tr("언어를 바꾸려면 앱을 다시 시작해야 합니다. 지금 다시 시작할까요?",
+               "The app needs to restart to change the language. Restart now?"))
+        if answer != QMessageBox.StandardButton.Yes:
+            self.language_switch.reset()
+            return
+        i18n.save_language(lang)
+        self.restart_requested = True
+        self.close()
 
     def _tab_next(self):
         """Ctrl+Tab: Move to the Next Tab (Circular)."""
@@ -303,10 +331,12 @@ if __name__ == "__main__":
     # (docs/ui.md 6.4).
     app.setStyle("Fusion")
     # Qt's own buttons and dialogs (message-box Yes/No, input dialogs, file
-    # dialogs) in Korean, like the app's labels (docs/ui.md 8.11).
-    _qt_ko = QTranslator(app)
-    if _qt_ko.load("qtbase_ko", QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
-        app.installTranslator(_qt_ko)
+    # dialogs) in Korean, like the app's labels (docs/ui.md 8.11); English
+    # needs no translator.
+    if i18n.language() == "ko":
+        _qt_ko = QTranslator(app)
+        if _qt_ko.load("qtbase_ko", QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
+            app.installTranslator(_qt_ko)
     app_font = create_font(style_name="Semilight")
     app.setFont(app_font)
     apply_matplotlib_font()
@@ -319,6 +349,10 @@ if __name__ == "__main__":
     window = MainWindow()
     window.showMaximized()
     ret = app.exec()
+    if window.restart_requested:
+        # Language switch (docs/ui.md 8.20): the window has stopped its
+        # threads in closeEvent; start a fresh process with the same command.
+        QProcess.startDetached(sys.executable, sys.argv)
     # Ensure all remaining non-daemon threads (ThreadPoolExecutor workers
     # started by data_fetcher) don't block process exit.
     os._exit(ret if ret else 0)

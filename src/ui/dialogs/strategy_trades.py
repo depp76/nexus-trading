@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem, QHeaderView,
 )
 
+from i18n import tr
 from ui.colors import fg_for
 from ui.common import make_button, setup_table, install_table_keys, make_footer_label
 from ui.strategy_widgets import reason_label, fmt_price, trade_summary
@@ -31,15 +32,17 @@ _CENTER = Qt.AlignmentFlag.AlignCenter
 # a column to its contents; the name and reason columns are capped (tooltips
 # carry the full text).
 COLUMNS = [
-    ("진입일", 84), ("청산일", 84), ("종목명", 120), ("티커", 60), ("시장", 56), ("수량", 50),
-    ("매입가", 70), ("매도가", 70), ("매입금액", 84), ("매도금액", 84), ("손익(원)", 80),
-    ("수익률", 60), ("보유일", 50), ("비용(원)", 64), ("청산 사유", 90),
+    (tr("진입일", "Entry"), 84), (tr("청산일", "Exit"), 84), (tr("종목명", "Name"), 120),
+    (tr("티커", "Ticker"), 60), (tr("시장", "Market"), 56), (tr("수량", "Qty"), 50),
+    (tr("매입가", "Buy Px"), 70), (tr("매도가", "Sell Px"), 70), (tr("매입금액", "Buy Amt"), 84),
+    (tr("매도금액", "Sell Amt"), 84), (tr("손익(원)", "P&L (KRW)"), 80), (tr("수익률", "Return"), 60),
+    (tr("보유일", "Days"), 50), (tr("비용(원)", "Cost (KRW)"), 64), (tr("청산 사유", "Exit Reason"), 90),
 ]
 COL_NAME, COL_TICKER, COL_REASON = 2, 3, 14
 _MAX_WIDTH = {COL_NAME: 200, COL_REASON: 140}
 _PAD = 14                                   # cell padding beyond the text width
-ALL_REASONS = "전체 사유"
-EMPTY_TEXT = "이 변형은 기간 중 청산한 매매가 없습니다"
+ALL_REASONS = tr("전체 사유", "All reasons")
+EMPTY_TEXT = tr("이 변형은 기간 중 청산한 매매가 없습니다", "This variant closed no trades in the period")
 
 
 def _text(text: str, align=_LEFT, tooltip: str = "") -> QTableWidgetItem:
@@ -75,7 +78,7 @@ class StrategyTradesView(QWidget):
         bar = QHBoxLayout()
         bar.setContentsMargins(0, 0, 0, 0)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("종목명 또는 티커 검색")
+        self.search.setPlaceholderText(tr("종목명 또는 티커 검색", "Search name or ticker"))
         self.search.setClearButtonEnabled(True)
         self.search.setMaximumWidth(260)
         self.search.textChanged.connect(self._apply_filter)
@@ -211,7 +214,7 @@ class StrategyTradesView(QWidget):
             return
         line = trade_summary([t for t in shown if t is not None])
         if len(shown) != len(self._trades):
-            line = f"필터 {len(shown)}/{len(self._trades)}건 · " + line
+            line = tr(f"필터 {len(shown)}/{len(self._trades)}건 · ", f"Filtered {len(shown)}/{len(self._trades)} · ") + line
         self.summary_lbl.setText(line)
 
     def visible_rows(self) -> list[int]:
@@ -239,20 +242,23 @@ class StrategyTradesDialog(QDialog):
     def __init__(self, title: str, trades: list, names: dict | None = None, markets: dict | None = None,
                  select_ticker: str | None = None, select_exit=None, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(f"매매 내역 — {title}")
+        self.setWindowTitle(tr(f"매매 내역 — {title}", f"Trades — {title}"))
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint)
 
         root = QVBoxLayout(self)
         self.view = StrategyTradesView(self)
         root.addWidget(self.view, 1)
-        note = QLabel("가격·금액은 원화(미국 종목은 그날 USD/KRW로 환산). 손익은 양쪽 비용을 뺀 값이고, "
-                      "비용은 매입분 몫과 매도 비용의 합입니다. 열 머리글을 누르면 정렬, Ctrl+C로 선택 행 복사.")
+        note = QLabel(tr("가격·금액은 원화(미국 종목은 그날 USD/KRW로 환산). 손익은 양쪽 비용을 뺀 값이고, "
+                         "비용은 매입분 몫과 매도 비용의 합입니다. 열 머리글을 누르면 정렬, Ctrl+C로 선택 행 복사.",
+                         "Prices and amounts in KRW (US names at that day's USD/KRW). P&L is net of both "
+                         "sides' costs; cost is the entry share plus the exit cost. Click a header to sort, "
+                         "Ctrl+C copies the selected rows."))
         note.setObjectName("faint")
         note.setWordWrap(True)
         root.addWidget(note)
         btns = QHBoxLayout()
         btns.addStretch()
-        btns.addWidget(make_button("닫기", on_click=self.accept))
+        btns.addWidget(make_button(tr("닫기", "Close"), on_click=self.accept))
         root.addLayout(btns)
 
         # the view's parts under the names callers (and the tests) use

@@ -14,13 +14,15 @@ from dataclasses import dataclass
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QComboBox, QDoubleSpinBox, QGridLayout, QLabel, QSpinBox, QWidget
 
+from i18n import tr
 from strategy.trend_following import COST_MULTIPLIERS, VARIANTS, StrategyParams
 from ui.common import FONT_CAPTION, create_font, fit_to_screen
 from ui.dialogs.variant_picker import VariantPickerDialog
 from ui.strategy_widgets import DEFAULT_TARGET_SHARPE, TARGET_MDD, TARGET_SHARPE_RANGE
 
-WEEKDAYS = ["월요일", "화요일", "수요일", "목요일", "금요일"]
-COST_CHOICES = [("0·1·2배 비교", COST_MULTIPLIERS), ("1배만", (1.0,))]
+WEEKDAYS = [tr("월요일", "Monday"), tr("화요일", "Tuesday"), tr("수요일", "Wednesday"),
+            tr("목요일", "Thursday"), tr("금요일", "Friday")]
+COST_CHOICES = [(tr("0·1·2배 비교", "0x / 1x / 2x"), COST_MULTIPLIERS), (tr("1배만", "1x only"), (1.0,))]
 _SPIN_W = 110
 
 
@@ -60,9 +62,9 @@ class TrendConditionsDialog(VariantPickerDialog):
 
     def __init__(self, conditions: TrendConditions, parent=None):
         super().__init__(conditions.variant_ids, params=conditions.params(), parent=parent)
-        self.setWindowTitle("조건 — 추세추종")
+        self.setWindowTitle(tr("조건 — 추세추종", "Conditions — Trend Following"))
         fit_to_screen(self, 900, 700)
-        self.ok_btn.setText("적용")
+        self.ok_btn.setText(tr("적용", "Apply"))
 
         form = QWidget()
         grid = QGridLayout(form)
@@ -81,18 +83,22 @@ class TrendConditionsDialog(VariantPickerDialog):
             sb.setToolTip(tip)
             return sb
 
-        self.universe_spin = spin(20, 300, 10, conditions.universe_size, " 개",
-                                  "선택한 시장 전체에서 시가총액(원화 환산) 상위 N개 종목")
-        self.liquidity_spin = spin(0, 5000, 10, conditions.min_liquidity_eok, " 억 원", "20일 평균 거래대금 하한")
-        self.positions_spin = spin(3, 12, 1, conditions.max_positions, " 종목")
+        self.universe_spin = spin(20, 300, 10, conditions.universe_size, tr(" 개", " names"),
+                                  tr("선택한 시장 전체에서 시가총액(원화 환산) 상위 N개 종목",
+                                     "Top N names by market cap (in KRW) across the selected markets"))
+        self.liquidity_spin = spin(0, 5000, 10, conditions.min_liquidity_eok, tr(" 억 원", " ×100M KRW"),
+                           tr("20일 평균 거래대금 하한", "Floor on the 20-day average trading value"))
+        self.positions_spin = spin(3, 12, 1, conditions.max_positions, tr(" 종목", " names"))
         self.weekday_combo = QComboBox()
         self.weekday_combo.addItems(WEEKDAYS)
         self.weekday_combo.setCurrentIndex(conditions.check_weekday)
-        self.weekday_combo.setToolTip("주간 신호 점검 요일")
+        self.weekday_combo.setToolTip(tr("주간 신호 점검 요일", "Weekly signal check day"))
         self.cost_combo = QComboBox()
         self.cost_combo.addItems([label for label, _ in COST_CHOICES])
         self.cost_combo.setCurrentIndex(conditions.cost_choice)
-        self.cost_combo.setToolTip("trend_following.md 4-1 비용 민감도: 0·1·2배를 함께 돌리거나 1배만 돌립니다")
+        self.cost_combo.setToolTip(tr("trend_following.md 4-1 비용 민감도: 0·1·2배를 함께 돌리거나 1배만 돌립니다",
+                                       "trend_following.md 4-1 cost sensitivity: run 0x, 1x and 2x together, "
+                                       "or 1x only"))
         self.target_spin = QDoubleSpinBox()
         self.target_spin.setRange(*TARGET_SHARPE_RANGE)
         self.target_spin.setDecimals(1)
@@ -100,13 +106,18 @@ class TrendConditionsDialog(VariantPickerDialog):
         self.target_spin.setValue(conditions.target_sharpe)
         self.target_spin.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.target_spin.setMinimumWidth(_SPIN_W)
-        self.target_spin.setToolTip("결과를 판정할 Sharpe 목표(기본 1.0). 실행 시점의 값이 그 결과에 적용됩니다. "
-                                    f"MDD 목표는 {TARGET_MDD * 100:g}% 고정.")
+        self.target_spin.setToolTip(tr("결과를 판정할 Sharpe 목표(기본 1.0). 실행 시점의 값이 그 결과에 적용됩니다. "
+                                       f"MDD 목표는 {TARGET_MDD * 100:g}% 고정.",
+                                       "The Sharpe target the result is judged by (default 1.0); the value at "
+                                       f"Run applies to that result. The MDD target is fixed at {TARGET_MDD * 100:g}%."))
 
         # Two rows of three: 종목·보유 조건 / 운용·평가, the name above each input.
-        fields = [("시가총액 상위", self.universe_spin), ("20일 평균 거래대금 하한", self.liquidity_spin),
-                  ("최대 보유 종목 수", self.positions_spin), ("주간 점검 요일", self.weekday_combo),
-                  ("거래비용", self.cost_combo), ("평가 기준 · 목표 Sharpe", self.target_spin)]
+        fields = [(tr("시가총액 상위", "Market-cap top N"), self.universe_spin),
+                  (tr("20일 평균 거래대금 하한", "Min 20-day avg. trading value"), self.liquidity_spin),
+                  (tr("최대 보유 종목 수", "Max positions"), self.positions_spin),
+                  (tr("주간 점검 요일", "Weekly check day"), self.weekday_combo),
+                  (tr("거래비용", "Trading costs"), self.cost_combo),
+                  (tr("평가 기준 · 목표 Sharpe", "Evaluation · target Sharpe"), self.target_spin)]
         self.field_names = []
         for k, (name, w) in enumerate(fields):
             r, c = divmod(k, 3)
@@ -120,7 +131,9 @@ class TrendConditionsDialog(VariantPickerDialog):
             grid.addWidget(w, 2 * r + 1, c, Qt.AlignmentFlag.AlignLeft)
         for c in range(3):
             grid.setColumnStretch(c, 1)
-        self.market_note = QLabel("여러 시장을 고르면 선택한 시장 전체를 원화 시가총액으로 합산한 순위에서 상위 N개를 고릅니다.")
+        self.market_note = QLabel(tr("여러 시장을 고르면 선택한 시장 전체를 원화 시가총액으로 합산한 순위에서 상위 N개를 고릅니다.",
+                                   "With several markets, the top N come from one ranking of all selected "
+                                   "markets by market cap in KRW."))
         self.market_note.setObjectName("muted")
         self.market_note.setWordWrap(True)
         grid.addWidget(self.market_note, 4, 0, 1, 3)

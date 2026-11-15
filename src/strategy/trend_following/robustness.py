@@ -31,7 +31,7 @@ from strategy.trend_following.metrics import (
     NAV_BASE, beta_alpha, cagr, max_drawdown, nav_returns, session_rf, sharpe, summarize_run,
 )
 from strategy.trend_following.research import (
-    SUMMARY_COLUMNS, ResearchRequest, ResearchResult, _num, _pct, _table, run_research,
+    SUMMARY_COLUMNS, ResearchRequest, ResearchResult, _num, _pct, _table, cash_flow_table, run_research,
 )
 from strategy.trend_following.scoring import compute_scores
 from strategy.trend_following.signals import compute_features
@@ -641,5 +641,12 @@ def render_robustness_markdown(res: RobustnessResult, header: list[str] | None =
                 _table([h for h, _ in SUMMARY_COLUMNS], [[fn(x) for _, fn in SUMMARY_COLUMNS] for x in rows])]
     out += _period_table(res)
     out += _period_alpha_table(res)
+    flows = cash_flow_table(rr.runs_at(1.0), korean=True)
+    if flows:
+        out += ["", "### 연도별 인출·입금 (비용 1×, 만 원; 스펙 9-2·9-27)", "",
+                f"매년 {req.research.params.seed_krw / 1e4:,.0f}만 원으로 시작해 연말 마지막 거래일 종가로 초과분 인출(+, 연말 트림 "
+                "매도 비용 반영)·부족분 입금(−). 마지막 해는 리셋하지 않아 '평가 종료 차액 = 마지막 평가액 − 시드'. "
+                "손익 = 인출 합 − 입금 합 + 평가 종료 차액. 잔여 = 마지막 리셋 직후 평가액 − 시드(정수 주). BM4 제외.",
+                ""] + flows
     out += ["", "## 보완 요청 목록", "", "(Validation이 항목 번호·재현 방법·기대 결과로 기입한다.)", ""]
     return "\n".join(out)

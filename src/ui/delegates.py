@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import QStyledItemDelegate, QStyle
 from PyQt6.QtCore import Qt, QRect, QSize
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPen
 
+from i18n import tr
 from ui.theme import ACCENT, ACCENT_TEXT, ACCENT_BG, TEXT, TEXT_FAINT, LINE, LINE_SOFT, SURFACE
 
 
@@ -120,8 +121,8 @@ class CellDelegate(QStyledItemDelegate):
 # cell reflowing. (label, text, border, fill); fill None = outline only.
 STATUS_BUTTON = {
     "-": ("", TEXT_FAINT, LINE, None),
-    "On": ("보유", ACCENT_TEXT, ACCENT, ACCENT_BG),
-    "Tg": ("관심", SURFACE, ACCENT, ACCENT),
+    "On": (tr("보유", "Held"), ACCENT_TEXT, ACCENT, ACCENT_BG),
+    "Tg": (tr("관심", "Target"), SURFACE, ACCENT, ACCENT),
 }
 STATUS_MARKER = {"On": ACCENT, "Tg": ACCENT}
 

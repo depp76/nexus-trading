@@ -264,9 +264,18 @@ not fixtures. Trading History principal/deposit/withdrawal live in `QSettings`
   and message-box texts (docs/ui.md 8.11). Kept English: the four top-level tab names,
   message-box titles (they are the tab names, 8.5), metric abbreviations (CAGR, MDD, Sharpe,
   tPER, MA20 Div, RSI ...), the narrow numeric column headers, IDs (A0-C3, BM1-BM4) and
-  market names. Table column headers, the MA chart dialog and footer/status-bar messages
+  market names. The MA chart dialogs (`StockMaDialog` incl. its Trend Score section,
+  `IndexMaDialog`) followed on 2026-11-15; table column headers and footer/status-bar messages
   were not converted (yet). Qt's own dialogs get Korean from the bundled `qtbase_ko`
-  translator `main.py` installs.
+  translator `main.py` installs (Korean mode only).
+- **UI language (user direction, 2026-11-15; docs/ui.md 8.20):** Korean (default) or English,
+  picked with the header's flag buttons (`ui/language_switch.py`, saved in `QSettings`
+  `ui/language`; a switch restarts the app). Every visible string that has a Korean form is
+  written `tr("한국어", "English")` (`src/i18n.py`, no Qt-widget/ui/data imports, so
+  `variant_info.py` uses it too); new Korean labels must come with their English partner.
+  `main.py` calls `i18n.load_language()` before importing any `ui` module, so module-level
+  `tr()` constants are fine; tests never load the saved setting and run in Korean. Never
+  translate persisted values (saved view names, status codes, DB fields) — only their display.
 - UI 변경은 `docs/ui.md` 의 전역 규칙을 따른다.
 - One font family app-wide, Malgun Gothic Semilight (user direction, 2026-09-19): every
   widget goes through `create_font()` (sizes from the `FONT_*` scale in `ui/common.py`),

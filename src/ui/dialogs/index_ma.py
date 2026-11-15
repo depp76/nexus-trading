@@ -15,6 +15,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 logger = logging.getLogger(__name__)
 
 from data_fetcher import INDEX_TICKERS
+from i18n import tr
 from ui.common import make_button, button_row, fit_to_screen
 from ui.colors import MA_RAMP
 from ui.theme import TEXT, TEXT_MUTED, HDR_BG, LINE
@@ -31,7 +32,7 @@ class IndexMaDialog(QDialog):
         results: dict {label: (DataFrame | None, error_str)}
         """
         super().__init__(parent)
-        self.setWindowTitle("Major Indices — Moving Averages")
+        self.setWindowTitle(tr("주요 지수 — 이동평균", "Major Indices — Moving Averages"))
         fit_to_screen(self, 1100, 620)
 
         layout = QVBoxLayout(self)
@@ -42,20 +43,20 @@ class IndexMaDialog(QDialog):
         cols = 3 if len(labels) > 4 else 2
         for idx, label in enumerate(labels):
             ax = fig.add_subplot(2, cols, idx + 1)
-            df, err = results.get(label, (None, "No data"))
+            df, err = results.get(label, (None, tr("데이터 없음", "No data")))
 
             if df is not None and not df.is_empty() and "MA10" in df.columns and "MA20" in df.columns and "MA50" in df.columns:
                 dates = df.get_column("Date").to_numpy()
                 # Same vocabulary as StockMaDialog: ink close, one accent ramp
                 # for the MAs (shorter = darker), no per-point markers.
                 line_close, = ax.plot(dates, df.get_column("Close").to_numpy(), color=TEXT,
-                        linewidth=1.5, label="Close")
+                        linewidth=1.5, label=tr("종가", "Close"))
                 line_ma10, = ax.plot(dates, df.get_column("MA10").to_numpy(), color=MA_RAMP["MA10"],
-                        linewidth=1.3, label="10-Day MA")
+                        linewidth=1.3, label=tr("10일 이평", "10-Day MA"))
                 line_ma20, = ax.plot(dates, df.get_column("MA20").to_numpy(), color=MA_RAMP["MA20"],
-                        linewidth=1.3, label="20-Day MA")
+                        linewidth=1.3, label=tr("20일 이평", "20-Day MA"))
                 line_ma50, = ax.plot(dates, df.get_column("MA50").to_numpy(), color=MA_RAMP["MA50"],
-                        linewidth=1.3, label="50-Day MA")
+                        linewidth=1.3, label=tr("50일 이평", "50-Day MA"))
                 ax.xaxis.set_major_formatter(mdates.DateFormatter("%y.%m"))
                 ax.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
                 fig.autofmt_xdate(rotation=25)
@@ -71,7 +72,7 @@ class IndexMaDialog(QDialog):
                     sel.annotation.set_text(f"{lbl}\n{date_str}: {val:,.0f}")
                     sel.annotation.get_bbox_patch().set(fc=HDR_BG, alpha=0.95, edgecolor=LINE)
             else:
-                ax.text(0.5, 0.5, f"Failed to load\n{err or ''}",
+                ax.text(0.5, 0.5, tr(f"불러오지 못했습니다\n{err or ''}", f"Failed to load\n{err or ''}"),
                         ha="center", va="center", transform=ax.transAxes,
                         color=TEXT_MUTED, fontsize=10)
 
@@ -80,4 +81,4 @@ class IndexMaDialog(QDialog):
         canvas = FigureCanvas(fig)
         layout.addWidget(canvas)
 
-        layout.addLayout(button_row(make_button("닫기", on_click=self.accept)))
+        layout.addLayout(button_row(make_button(tr("닫기", "Close"), on_click=self.accept)))

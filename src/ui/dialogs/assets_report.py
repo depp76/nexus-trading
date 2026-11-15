@@ -2,6 +2,7 @@
 "Report": positions, cash and total at the start and middle of every month
 next to the KOSPI close (rows from ui.assets_report.build_report), with a
 Positions % / vs KOSPI line chart (left/right y axes) above the table."""
+from i18n import tr
 from PyQt6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QTableWidget, QHeaderView, QLabel,
     QSplitter, QFileDialog, QMessageBox,
@@ -116,8 +117,8 @@ class AssetsReportDialog(QDialog):
             self.summary.selectRow(len(rows) - 1)
 
         # View dialog: 내보내기 → 닫기, bottom right (docs/ui.md 8.17).
-        v.addLayout(button_row(make_button("CSV 내보내기", on_click=self._export_csv),
-                               make_button("닫기", on_click=self.accept)))
+        v.addLayout(button_row(make_button(tr("CSV 내보내기", "Export CSV"), on_click=self._export_csv),
+                               make_button(tr("닫기", "Close"), on_click=self.accept)))
 
     def _build_chart(self):
         """Positions % (left y axis) and vs KOSPI %p (right y axis) as two
@@ -288,4 +289,4 @@ class AssetsReportDialog(QDialog):
                         "; ".join(f"{h['company']} {h['qty']:.0f} ({h['value']:,.0f})" for h in row["holdings"]),
                     ])
         except OSError as e:
-            QMessageBox.warning(self, "Total Assets", f"저장하지 못했습니다:\n{e}")
+            QMessageBox.warning(self, "Total Assets", tr(f"저장하지 못했습니다:\n{e}", f"Failed to save:\n{e}"))

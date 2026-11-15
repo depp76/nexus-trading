@@ -171,6 +171,10 @@ def app_qss(font_css: str) -> str:
     QPushButton#danger  {{ color: {DANGER}; border-color: {DANGER_LINE}; }}
     QPushButton#danger:hover {{ background: {DANGER_BG}; }}
     QToolButton {{ color: {TEXT}; }}
+    /* Language flags in the header (8.20): the current language is outlined. */
+    QToolButton#langFlag {{ border: 1px solid transparent; border-radius: 4px; padding: 2px; background: transparent; }}
+    QToolButton#langFlag:hover {{ border-color: {LINE_STRONG}; }}
+    QToolButton#langFlag:checked {{ border-color: {ACCENT_TEXT}; background: {ACCENT_BG}; }}
 
     /* Tables (docs/ui.md 8.2 / 8.16): one frame line, a quiet cell grid
        (LINE_GRID, below the text in contrast) and the column-group dividers

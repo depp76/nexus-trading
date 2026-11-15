@@ -16,10 +16,13 @@ import math
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel
 
+from i18n import tr
 from ui.common import KpiCard, create_font, make_badge, set_badge, FONT_SMALL
 
-NOT_RUN_TEXT = "Run Trend Score in Trading Universe to see the score breakdown"
-NOT_SCORED_TEXT = "Not scored in the last Trend Score run (illiquid, too little history, or not a KR stock)"
+NOT_RUN_TEXT = tr("Trading Universe에서 추세 점수를 실행하면 점수 내역이 표시됩니다",
+                  "Run Trend Score in Trading Universe to see the score breakdown")
+NOT_SCORED_TEXT = tr("직전 추세 점수 실행에서 채점되지 않은 종목입니다 (유동성 부족, 이력 부족 또는 국내 종목 아님)",
+                     "Not scored in the last Trend Score run (illiquid, too little history, or not a KR stock)")
 
 
 def _finite(x) -> bool:
@@ -42,7 +45,9 @@ class TrendScoreSection(QWidget):
         box.setContentsMargins(0, 0, 0, 0)
         box.setSpacing(6)
         s = rec.scored.get(ticker) if rec is not None else None
-        title = QLabel("TREND SCORE" + (f" · as of {rec.as_of:%Y-%m-%d}" if rec is not None else ""))
+        title = QLabel(tr("추세 점수", "TREND SCORE")
+                       + ((tr(f" · {rec.as_of:%Y-%m-%d} 기준", f" · as of {rec.as_of:%Y-%m-%d}"))
+                          if rec is not None else ""))
         title.setObjectName("kpiLabel")
         box.addWidget(title)
 
@@ -59,16 +64,17 @@ class TrendScoreSection(QWidget):
             return
 
         rank = rank_of(rec, ticker)
-        self.total_lbl.setText(f"Weekly avg {s.week_avg:+.2f}  (latest {s.latest_total:+.2f})"
+        self.total_lbl.setText(tr(f"주간 평균 {s.week_avg:+.2f}  (최근 {s.latest_total:+.2f})",
+                                  f"Weekly avg {s.week_avg:+.2f}  (latest {s.latest_total:+.2f})")
                                + (f"  · {rank}" if rank else ""))
         box.addWidget(self.total_lbl)
 
         cards = QGridLayout()
         cards.setSpacing(6)
         for i, (key, label, help_text, v) in enumerate((
-                ("ma50", "MA50Div", "추세 방향 +", s.pct_ma50),
-                ("range52", "Range52", "추세 위치 +", s.pct_range52),
-                ("r3", "R3", "최근 3일 −", s.pct_r3))):
+                ("ma50", "MA50Div", tr("추세 방향 +", "Trend direction +"), s.pct_ma50),
+                ("range52", "Range52", tr("추세 위치 +", "Trend position +"), s.pct_range52),
+                ("r3", "R3", tr("최근 3일 −", "Last 3 days −"), s.pct_r3))):
             card = KpiCard(label, help_text)
             card.value.setFont(create_font(FONT_SMALL))
             card.set(f"{v:.2f}" if _finite(v) else "-")
@@ -78,16 +84,16 @@ class TrendScoreSection(QWidget):
 
         min_range = rec.params.gate_range_min
         checks = [
-            ("liquid", "Liquidity", s.liquid),
+            ("liquid", tr("유동성", "Liquidity"), s.liquid),
             ("ma50", "MA50Div > 0", _finite(s.ma50_div) and s.ma50_div > 0),
             ("range52", f"Range52 ≥ {min_range:.2f}", _finite(s.range52) and s.range52 >= min_range),
-            ("heat", "Not overheated", not s.overheated),
+            ("heat", tr("과열 아님", "Not overheated"), not s.overheated),
         ]
         for key, text, ok in checks:
             row = QHBoxLayout()
             row.addWidget(QLabel(text), 1)
             badge = make_badge("ok", "")
-            set_badge(badge, "ok" if ok else "fail", "Pass" if ok else "Fail")
+            set_badge(badge, "ok" if ok else "fail", tr("통과", "Pass") if ok else tr("미달", "Fail"))
             row.addWidget(badge, 0, Qt.AlignmentFlag.AlignRight)
             box.addLayout(row)
             self.gate_badges[key] = badge

@@ -1,6 +1,7 @@
 """ui/dialogs/assets_graph.py — TotalAssetsGraphDialog — cumulative return graph for the Total Assets tab.
 
 Split out of the former single ui/dialogs.py (2026-09-17)."""
+from i18n import tr
 import logging
 
 from PyQt6.QtWidgets import (
@@ -119,11 +120,11 @@ class TotalAssetsGraphDialog(QDialog):
         canvas = FigureCanvas(fig)
         layout.addWidget(canvas)
 
-        self.report_btn = make_button("리포트")
+        self.report_btn = make_button(tr("리포트", "Report"))
         self.report_btn.setToolTip("Positions, cash and KOSPI at the start and middle of every month")
         if on_report is not None:
             self.report_btn.clicked.connect(on_report)
         else:
             self.report_btn.hide()
         # View dialog: 리포트 → 닫기, bottom right (docs/ui.md 8.17).
-        layout.addLayout(button_row(self.report_btn, make_button("닫기", on_click=self.accept)))
+        layout.addLayout(button_row(self.report_btn, make_button(tr("닫기", "Close"), on_click=self.accept)))

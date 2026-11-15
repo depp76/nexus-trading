@@ -1,6 +1,7 @@
 """ui/dialogs/trade_edit.py — Trade entry/edit dialogs for TradingHistoryTab (buy side, sell side, new trade).
 
 Split out of the former single ui/dialogs.py (2026-09-17)."""
+from i18n import tr
 import logging
 from datetime import datetime
 
@@ -51,7 +52,7 @@ class BuyEditDialog(QDialog):
     """Dialog for editing buy details in TradingHistoryTab."""
     def __init__(self, current_data, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("매수 수정")
+        self.setWindowTitle(tr("매수 수정", "Edit Buy"))
         self.setMinimumWidth(_DIALOG_MIN_W)
         self.result_data = None
         self._sell_date_str = current_data.get("sell_date", "") or ""
@@ -67,17 +68,17 @@ class BuyEditDialog(QDialog):
         self.buy_price_edit = QLineEdit(_fmt_num_value(current_data.get("buy_price", 0.0)))
         self.buy_qty_edit = QLineEdit(_fmt_num_value(current_data.get("qty", 0.0)))
         self.buy_amount_edit = QLineEdit(_fmt_num_value(current_data.get("buy_amount", 0.0)))
-        self.buy_amount_edit.setPlaceholderText("비우면 자동 계산")
+        self.buy_amount_edit.setPlaceholderText(tr("비우면 자동 계산", "Auto-calculated if empty"))
 
-        layout.addRow("매수일:", self.buy_date_edit)
-        layout.addRow("매수가:", self.buy_price_edit)
-        layout.addRow("수량:", self.buy_qty_edit)
-        layout.addRow("매수 금액:", self.buy_amount_edit)
+        layout.addRow(tr("매수일:", "Buy Date:"), self.buy_date_edit)
+        layout.addRow(tr("매수가:", "Buy Price:"), self.buy_price_edit)
+        layout.addRow(tr("수량:", "Quantity:"), self.buy_qty_edit)
+        layout.addRow(tr("매수 금액:", "Buy Amount:"), self.buy_amount_edit)
 
         # 취소 → 저장, right-aligned; no default button, so Enter in a
         # field never saves (docs/ui.md 8.17).
-        save_btn = make_button("저장", "primary", self.on_save)
-        cancel_btn = make_button("취소", on_click=self.reject)
+        save_btn = make_button(tr("저장", "Save"), "primary", self.on_save)
+        cancel_btn = make_button(tr("취소", "Cancel"), on_click=self.reject)
         btn_box = button_row(cancel_btn, save_btn)
 
         # ---1,000-separator auto-format ---
@@ -108,7 +109,7 @@ class BuyEditDialog(QDialog):
         price_ok = self._val_price()
         qty_ok = self._val_qty()
         if not (date_ok and price_ok and qty_ok):
-            QMessageBox.warning(self, _TITLE, "빨간 테두리로 표시된 칸을 확인하세요.")
+            QMessageBox.warning(self, _TITLE, tr("빨간 테두리로 표시된 칸을 확인하세요.", "Please check the highlighted fields (shown with a red border)."))
             return
 
         def to_f(val):
@@ -143,7 +144,7 @@ class SellEditDialog(QDialog):
     """Dialog for editing sell details in TradingHistoryTab."""
     def __init__(self, current_data, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("매도 수정")
+        self.setWindowTitle(tr("매도 수정", "Edit Sell"))
         self.setMinimumWidth(_DIALOG_MIN_W)
         self.result_data = None
         self._buy_date_str = current_data.get("buy_date", "")
@@ -152,22 +153,22 @@ class SellEditDialog(QDialog):
         layout = _form_layout(self)
 
         self.sell_date_edit = QLineEdit(current_data.get("sell_date", ""))
-        self.sell_date_edit.setPlaceholderText("YYYY-MM-DD (보유 중이면 비움)")
+        self.sell_date_edit.setPlaceholderText(tr("YYYY-MM-DD (보유 중이면 비움)", "YYYY-MM-DD (leave empty if still open)"))
 
         self.sell_price_edit = QLineEdit(_fmt_num_value(current_data.get("sell_price", 0.0)))
         self.sell_qty_edit = QLineEdit(_fmt_num_value(current_data.get("sell_qty", 0.0)))
         self.sell_amount_edit = QLineEdit(_fmt_num_value(current_data.get("sell_amount", 0.0)))
-        self.sell_amount_edit.setPlaceholderText("비우면 자동 계산")
+        self.sell_amount_edit.setPlaceholderText(tr("비우면 자동 계산", "Auto-calculated if empty"))
 
-        layout.addRow("매도일:", self.sell_date_edit)
-        layout.addRow("매도가:", self.sell_price_edit)
-        layout.addRow("매도 수량:", self.sell_qty_edit)
-        layout.addRow("매도 금액:", self.sell_amount_edit)
+        layout.addRow(tr("매도일:", "Sell Date:"), self.sell_date_edit)
+        layout.addRow(tr("매도가:", "Sell Price:"), self.sell_price_edit)
+        layout.addRow(tr("매도 수량:", "Sell Quantity:"), self.sell_qty_edit)
+        layout.addRow(tr("매도 금액:", "Sell Amount:"), self.sell_amount_edit)
 
         # 취소 → 저장, right-aligned; no default button, so Enter in a
         # field never saves (docs/ui.md 8.17).
-        save_btn = make_button("저장", "primary", self.on_save)
-        cancel_btn = make_button("취소", on_click=self.reject)
+        save_btn = make_button(tr("저장", "Save"), "primary", self.on_save)
+        cancel_btn = make_button(tr("취소", "Cancel"), on_click=self.reject)
         btn_box = button_row(cancel_btn, save_btn)
 
         # ---1,000-separator auto-format ---
@@ -215,7 +216,7 @@ class SellEditDialog(QDialog):
         price_ok = self._val_sell_price()
         qty_ok = self._val_sell_qty()
         if not (date_ok and price_ok and qty_ok):
-            QMessageBox.warning(self, _TITLE, "빨간 테두리로 표시된 칸을 확인하세요.")
+            QMessageBox.warning(self, _TITLE, tr("빨간 테두리로 표시된 칸을 확인하세요.", "Please check the highlighted fields (shown with a red border)."))
             return
 
         sell_date_str = _normalize_date_str(self.sell_date_edit.text())
@@ -249,7 +250,7 @@ class TradeEntryDialog(QDialog):
     """Dialog for entering a new trade into TradingHistoryTab."""
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("거래 추가")
+        self.setWindowTitle(tr("거래 추가", "Add New Trade"))
         self.setMinimumWidth(_DIALOG_MIN_W)
         self.result_data = None
         self._validate_thread = None
@@ -261,21 +262,21 @@ class TradeEntryDialog(QDialog):
         self.market_combo.addItems(["KOSPI", "KOSDAQ", "NASDAQ", "NASDAQ 100", "NYSE", "AMEX"])
 
         self.ticker_edit = QLineEdit()
-        self.ticker_edit.setPlaceholderText("종목코드 (예: 005930, QQQM)")
+        self.ticker_edit.setPlaceholderText(tr("종목코드 (예: 005930, QQQM)", "Ticker (e.g. QQQM or 005930)"))
 
         self.buy_date_edit = QLineEdit(datetime.now().strftime("%Y-%m-%d"))
         self.buy_date_edit.setPlaceholderText("YYYY-MM-DD")
         self.buy_price_edit = QLineEdit()
         self.qty_edit = QLineEdit()
         self.buy_amount_edit = QLineEdit()
-        self.buy_amount_edit.setPlaceholderText("비우면 자동 계산")
+        self.buy_amount_edit.setPlaceholderText(tr("비우면 자동 계산", "Auto-calculated if empty"))
 
-        layout.addRow("시장:", self.market_combo)
-        layout.addRow("종목코드:", self.ticker_edit)
-        layout.addRow("매수일:", self.buy_date_edit)
-        layout.addRow("매수가:", self.buy_price_edit)
-        layout.addRow("매수 수량:", self.qty_edit)
-        layout.addRow("매수 금액:", self.buy_amount_edit)
+        layout.addRow(tr("시장:", "Market:"), self.market_combo)
+        layout.addRow(tr("종목코드:", "Ticker:"), self.ticker_edit)
+        layout.addRow(tr("매수일:", "Buy Date:"), self.buy_date_edit)
+        layout.addRow(tr("매수가:", "Buy Price:"), self.buy_price_edit)
+        layout.addRow(tr("매수 수량:", "Buy Quantity:"), self.qty_edit)
+        layout.addRow(tr("매수 금액:", "Buy Amount:"), self.buy_amount_edit)
 
         # ---1,000-separator auto-format ---
         self.buy_price_edit.textEdited.connect(
@@ -298,8 +299,8 @@ class TradeEntryDialog(QDialog):
         self._val_date(); self._val_price(); self._val_qty()
 
         # 취소 → 저장, right-aligned; no default button (docs/ui.md 8.17).
-        self.save_btn = make_button("저장", "primary", self.on_save)
-        self.cancel_btn = make_button("취소", on_click=self.reject)
+        self.save_btn = make_button(tr("저장", "Save"), "primary", self.on_save)
+        self.cancel_btn = make_button(tr("취소", "Cancel"), on_click=self.reject)
         btn_box = button_row(self.cancel_btn, self.save_btn)
 
         layout.addRow(btn_box)
@@ -308,14 +309,14 @@ class TradeEntryDialog(QDialog):
         market = self.market_combo.currentText()
         ticker = self.ticker_edit.text().strip().upper()
         if not ticker:
-            QMessageBox.warning(self, _TITLE, "종목코드를 입력하세요.")
+            QMessageBox.warning(self, _TITLE, tr("종목코드를 입력하세요.", "Ticker is required."))
             return
 
         date_ok = self._val_date()
         price_ok = self._val_price()
         qty_ok = self._val_qty()
         if not (date_ok and price_ok and qty_ok):
-            QMessageBox.warning(self, _TITLE, "빨간 테두리로 표시된 칸을 확인하세요.")
+            QMessageBox.warning(self, _TITLE, tr("빨간 테두리로 표시된 칸을 확인하세요.", "Please check the highlighted fields (shown with a red border)."))
             return
 
         def to_f(val):
@@ -367,7 +368,7 @@ class TradeEntryDialog(QDialog):
         if not is_valid:
             QMessageBox.warning(
                 self, _TITLE,
-                f"종목 정보를 찾을 수 없는 종목코드입니다:\n{pending['ticker']}\n\n상세: {err or ''}",
+                tr(f"종목 정보를 찾을 수 없는 종목코드입니다:\n{pending['ticker']}\n\n상세: {err or ''}", f"Ticker is not valid (Could not find stock information):\n{pending['ticker']}\n\nDetails: {err or ''}"),
             )
             return
 

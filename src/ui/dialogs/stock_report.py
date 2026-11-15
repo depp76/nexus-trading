@@ -1,5 +1,6 @@
 """ui/dialogs/stock_report.py — Gemini per-stock AI report popup (roadmap 2-1,
 review.md 2-1)."""
+from i18n import tr
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QTextEdit
 from PyQt6.QtGui import QFont
 
@@ -38,6 +39,6 @@ def show_stock_report_result(parent, ticker: str, name: str, result_text: str):
     disclaimer_lbl.setStyleSheet(f"color:{TEXT_MUTED};")
     v.addWidget(disclaimer_lbl)
 
-    v.addLayout(button_row(make_button("닫기", on_click=result_dlg.accept)))
+    v.addLayout(button_row(make_button(tr("닫기", "Close"), on_click=result_dlg.accept)))
 
     result_dlg.exec()

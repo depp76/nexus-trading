@@ -214,6 +214,59 @@ def _table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join(lines)
 
 
+def _man(x, signed: bool = True) -> str:
+    """KRW in 만 원 (10,000 KRW), rounded; "0" without a sign."""
+    if x is None or not np.isfinite(x):
+        return "-"
+    v = round(x / 1e4)
+    if v == 0:
+        return "0"
+    return f"{v:+,.0f}" if signed else f"{v:,.0f}"
+
+
+CASH_FLOW_EXCLUDED = ("BM4",)
+"""BM4 is a risk-free constant with no account ledger (spec 9-27)."""
+
+
+def cash_flow_table(runs: list[RunSummary], korean: bool = False) -> list[str]:
+    """The yearly withdrawal/deposit table (spec 9-27), 만 원: one column per
+    reset year with the net flow (+ banked, - topped up), the last year's
+    "final value - seed", the totals, the whole-window P&L and the leftover
+    after the last reset. Empty when no run has a ledger."""
+    rows_in = [r for r in runs if r.id not in CASH_FLOW_EXCLUDED and r.metrics.get("cash_flows_by_year")]
+    if not rows_in:
+        return []
+    ledgers = {r.id: r.metrics["cash_flows_by_year"] for r in rows_in}
+    years = sorted({y for led in ledgers.values() for y in led["years"]})
+    final_year = max((led["final_year"] for led in ledgers.values() if led["final_year"] is not None), default=None)
+    reset_years = [y for y in years if y != final_year]
+    last_reset = reset_years[-1] if reset_years else None
+    n_years = len(years)
+    if korean:
+        heads = (["ID"] + [str(y) for y in reset_years]
+                 + ([f"{final_year} 평가 종료 차액"] if final_year is not None else [])
+                 + ["인출 합", "입금 합", f"{n_years}년 손익"]
+                 + ([f"{last_reset} 말 잔여"] if last_reset is not None else []))
+    else:
+        heads = (["ID"] + [str(y) for y in reset_years]
+                 + ([f"{final_year} end vs seed"] if final_year is not None else [])
+                 + ["Banked", "Topped up", f"{n_years}y P&L"]
+                 + ([f"{last_reset} leftover"] if last_reset is not None else []))
+    rows = []
+    for r in rows_in:
+        led = ledgers[r.id]
+        ys = led["years"]
+        row = [r.id] + [_man(ys[y]["net_flow"]) if y in ys else "-" for y in reset_years]
+        if final_year is not None:
+            row.append(_man(led["final_diff"]))
+        row += [_man(led["banked"], signed=False), _man(led["topped_up"], signed=False), _man(led["total_pnl"])]
+        if last_reset is not None:
+            res_v = ys.get(last_reset, {}).get("residual")
+            row.append(_man(res_v, signed=False))
+        rows.append(row)
+    return [_table(heads, rows)]
+
+
 def render_markdown(result: ResearchResult, header: list[str] | None = None) -> str:
     """`header` lines (provenance block from run.py) go right under the title."""
     req = result.request
@@ -326,6 +379,20 @@ def render_markdown(result: ResearchResult, header: list[str] | None = None) -> 
         out.append("")
         out.append(_table(["ID"] + [str(y) for y in years],
                           [[r.id] + [_pct(r.metrics["yearly"].get(y)) for y in years] for r in yearly_rows]))
+
+    flows = cash_flow_table(result.runs_at(1.0))
+    if flows:
+        seed_man = p.seed_krw / 1e4
+        out.append("")
+        out.append("## Yearly cash flows (1x, KRW 만 원)")
+        out.append("")
+        out.append(f"Spec 9-2 / 9-27: each year starts from {seed_man:,.0f}만 원; at the year's last close the excess "
+                   "is withdrawn (+, after the year-end trim's costs) or the shortfall deposited (-). The last year "
+                   "is not reset (the data ends), so its column is the final value minus the seed. P&L = banked - "
+                   "topped up + that difference. Leftover = value right after the last reset minus the seed "
+                   "(integer shares). BM4 has no account and is left out.")
+        out.append("")
+        out += flows
 
     if result.event_study:
         out.append("")
