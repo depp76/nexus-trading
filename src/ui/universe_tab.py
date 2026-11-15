@@ -41,7 +41,9 @@ from threads.fetch_threads import (
     GeminiStockReportThread,
 )
 from threads.strategy_threads import TrendScoreThread, CANCELLED_MESSAGE
-from ui.widgets import StockTable, HeatLegend, RangeFilterPopup
+from ui.universe_table import StockTable
+from ui.heat_legend import HeatLegend
+from ui.filter_popups import RangeFilterPopup
 from ui.universe_views import (
     BUILTIN_VIEWS, MARKETS, count_matches, describe_ranges, describe_view, empty_state as empty_view,
     market_list, normalize as normalize_view, same_state as same_view, view_display_name,

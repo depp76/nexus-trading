@@ -13,6 +13,7 @@ import logging
 
 from paths import JP10Y_CACHE_FILE, VKOSPI_CACHE_FILE
 from data.cache import (
+    PAYLOAD_ERRORS,
     start_date,
     _JP10Y_CACHE,
     _JP10Y_LOCK,
@@ -71,7 +72,8 @@ def fetch_krx_derivative_index_day(bas_dd: str, index_name: str = VKOSPI_INDEX_N
             err = res.json()
             msg = err.get("respMsg", res.text)
             code = err.get("respCode", res.status_code)
-        except Exception:
+        except (ValueError, AttributeError):
+            # AttributeError: an error body that decodes to a non-dict.
             logger.debug("Failed to parse KRX API error response as JSON, using raw text", exc_info=True)
             msg, code = res.text, res.status_code
         raise ValueError(
@@ -96,7 +98,7 @@ def _load_vkospi_cache() -> dict:
         try:
             with open(_KRX_VKOSPI_CACHE_PATH, encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
+        except (OSError, ValueError):
             logger.debug("Failed to load VKOSPI cache file, starting fresh", exc_info=True)
     return {}
 
@@ -107,7 +109,7 @@ def _save_vkospi_cache(cache: dict):
         with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(cache, f, ensure_ascii=False)
         os.replace(temp_path, _KRX_VKOSPI_CACHE_PATH)
-    except Exception:
+    except OSError:
         logger.warning("VKOSPI cache save error", exc_info=True)
 
 
@@ -151,7 +153,7 @@ def fetch_vkospi_history(start: str, end: str = None, max_workers: int = 3, requ
                     bd = futures[fut]
                     try:
                         item = fut.result()
-                    except Exception:
+                    except PAYLOAD_ERRORS:
                         logger.warning("KRX VKOSPI fetch error for date=%s", bd, exc_info=True)
                         continue
                     any_success = True
@@ -218,7 +220,7 @@ def _load_jp10y_disk_cache():
             rows = json.load(f)
     except FileNotFoundError:
         return None
-    except Exception:
+    except (OSError, ValueError):
         logger.warning("JP10Y disk cache unreadable, ignoring", exc_info=True)
         return None
     if not rows:
@@ -237,7 +239,7 @@ def _save_jp10y_disk_cache(df: pd.DataFrame) -> None:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(rows, f)
         os.replace(tmp, JP10Y_CACHE_FILE)
-    except Exception:
+    except OSError:
         logger.warning("JP10Y disk cache save failed", exc_info=True)
 
 
@@ -272,7 +274,8 @@ def _get_jp10y_df():
             # Network-level failures (timeouts, refused connections, HTTP errors) are
             # transient; one line is enough and the next refresh retries.
             logger.warning("JP10Y fetch failed, keeping cached series: %s", e)
-        except Exception:
-            # Anything else means the CSV layout changed, which needs the traceback.
+        except (KeyError, ValueError):
+            # A changed CSV layout, which needs the traceback: pandas CSV errors (ParserError,
+            # EmptyDataError, UnicodeDecodeError) are ValueErrors, a missing column a KeyError.
             logger.error("JP10Y parse failed", exc_info=True)
         return cached

@@ -89,7 +89,7 @@ def get_historical_data(ticker: str, start: str) -> pl.DataFrame:
                         try:
                             evicted_key, _ = _dc._HIST_CACHE.popitem(last=False)
                             _dc._HIST_CACHE_FETCHED_AT.pop(evicted_key, None)
-                        except Exception:
+                        except KeyError:
                             logger.debug("LRU cache eviction failed", exc_info=True)
                     _dc._HIST_CACHE[cache_key] = df
                     _dc._HIST_CACHE.move_to_end(cache_key)
@@ -145,6 +145,7 @@ def _fetch_historical_uncached(ticker: str, start: str) -> pl.DataFrame:
                     _yf_df.columns = _yf_df.columns.get_level_values(0)
                 df_pd = _yf_df
         except Exception:
+            # kept broad: yfinance raises arbitrary third-party exception types.
             logger.debug("yfinance history fetch failed for %s", ticker, exc_info=True)
 
         if df_pd is None or (hasattr(df_pd, 'empty') and df_pd.empty):
@@ -158,6 +159,7 @@ def _fetch_historical_uncached(ticker: str, start: str) -> pl.DataFrame:
                         _yq_df = _yq_df.rename(columns={'date': 'Date', 'close': 'Close', 'high': 'High', 'low': 'Low', 'open': 'Open', 'volume': 'Volume'})
                     df_pd = _yq_df
             except Exception:
+                # kept broad: yahooquery raises arbitrary third-party exception types.
                 logger.debug("yahooquery history fetch failed for %s", ticker, exc_info=True)
 
         if df_pd is None or (hasattr(df_pd, 'empty') and df_pd.empty):
@@ -165,5 +167,6 @@ def _fetch_historical_uncached(ticker: str, start: str) -> pl.DataFrame:
 
         return _to_polars(df_pd)
     except Exception:
+        # boundary: contract is an empty frame on any failure; the FDR fallback above raises arbitrary types.
         logger.warning("All history sources failed for ticker=%s, returning empty DataFrame", ticker, exc_info=True)
         return pl.DataFrame()

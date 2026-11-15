@@ -5,6 +5,8 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
+import requests
+
 import data.collectors.naver as naver
 
 _FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "naver_trend_005930.json")
@@ -70,7 +72,7 @@ class TestFetchInvestorTrend(unittest.TestCase):
         self.assertEqual(get.call_count, 1)
 
     def test_http_error_returns_what_was_collected(self):
-        with patch.object(naver._NAVER_SESSION, "get", side_effect=RuntimeError("down")):
+        with patch.object(naver._NAVER_SESSION, "get", side_effect=requests.ConnectionError("down")):
             self.assertEqual(naver._fetch_investor_trend_naver("005930", days=10), [])
 
 

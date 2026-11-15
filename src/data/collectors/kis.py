@@ -11,9 +11,10 @@ import logging
 from datetime import datetime, timedelta, timezone, time as dt_time
 
 import pandas as pd
+import requests
 
 from paths import KIS_TOKEN_CACHE_FILE
-from data.cache import _KIS_SESSION
+from data.cache import PAYLOAD_ERRORS, _KIS_SESSION
 from data.collectors.naver import _fetch_investor_trend_naver, _fetch_index_investor_trend
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,11 @@ _KIS_TOKEN_REFRESH_MARGIN_SEC = 6 * 3600
 _KIS_APPROVAL_ASSUMED_LIFETIME_SEC = 24 * 3600
 
 _KST = timezone(timedelta(hours=9))
+
+# What one KIS REST call can raise on an expected failure: PAYLOAD_ERRORS for the HTTP
+# round trip and the reply, OSError for missing key/account files (FileNotFoundError),
+# ValueError for a refused token, and RuntimeError for an rt_cd error reply.
+KIS_ERRORS = (*PAYLOAD_ERRORS, OSError, RuntimeError)
 
 
 def is_krx_market_open() -> bool:
@@ -122,7 +128,7 @@ def _kis_oauth_post(path: str, json_payload: dict, max_attempts: int = 3):
             )
             res.raise_for_status()
             return res
-        except Exception as e:
+        except requests.RequestException as e:
             last_exc = e
             if attempt == max_attempts - 1:
                 raise
@@ -139,7 +145,7 @@ def _load_kis_token_cache() -> dict:
         try:
             with open(_KIS_TOKEN_CACHE_PATH, encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
+        except (OSError, ValueError):
             logger.debug("Failed to load KIS token cache file, starting fresh", exc_info=True)
     return {}
 
@@ -150,7 +156,7 @@ def _save_kis_token_cache(cache: dict):
         with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(cache, f, ensure_ascii=False)
         os.replace(temp_path, _KIS_TOKEN_CACHE_PATH)
-    except Exception:
+    except OSError:
         logger.warning("KIS token cache save error", exc_info=True)
 
 
@@ -309,7 +315,7 @@ def fetch_kis_daily_ohlcv(code: str, days: int = 30):
                 "Close": int(item.get("stck_clpr", "0") or "0"),
                 "Volume": int(item.get("acml_vol", "0") or "0"),
             })
-        except Exception:
+        except (KeyError, ValueError, TypeError):
             continue
     if not rows:
         return None
@@ -360,7 +366,7 @@ def fetch_account_deposit() -> float:
     r.raise_for_status()
     d = r.json()
     if d.get("rt_cd") != "0":
-        raise Exception(f"[inquire-balance] KIS API error: {d.get('msg1', d)}")
+        raise RuntimeError(f"[inquire-balance] KIS API error: {d.get('msg1', d)}")
     output2 = d.get("output2", [])
     if not output2:
         return 0.0
@@ -413,9 +419,9 @@ def fetch_investor_trend(ticker: str, days: int = 60) -> list:
         r.raise_for_status()
         d = r.json()
         if d.get("rt_cd") != "0":
-            raise Exception(d.get("msg1", "unknown error"))
+            raise RuntimeError(d.get("msg1", "unknown error"))
         items = d.get("output", [])
-    except Exception:
+    except KIS_ERRORS:
         logger.warning("[fetch_investor_trend] KIS inquire-investor failed, falling back to Naver", exc_info=True)
         return _fetch_investor_trend_naver(ticker, days)
 
@@ -495,7 +501,7 @@ def fetch_kis_realtime_prices(tickers: list, timeout: float = _KIS_WS_TIMEOUT) -
     try:
         approval_key = _get_kis_approval_key()
         ws = websocket.create_connection(_KIS_WS_URL, timeout=timeout)
-    except Exception:
+    except (*KIS_ERRORS, websocket.WebSocketException):
         logger.warning("[fetch_kis_realtime_prices] WebSocket connect failed, using REST fallback", exc_info=True)
         return _kis_rest_price_fallback(tickers, {})
 
@@ -513,7 +519,7 @@ def fetch_kis_realtime_prices(tickers: list, timeout: float = _KIS_WS_TIMEOUT) -
             ws.settimeout(max(0.1, deadline - time.time()))
             try:
                 frame = ws.recv()
-            except Exception:
+            except (websocket.WebSocketException, OSError):
                 break
 
             if isinstance(frame, str) and frame.startswith("{"):
@@ -522,7 +528,8 @@ def fetch_kis_realtime_prices(tickers: list, timeout: float = _KIS_WS_TIMEOUT) -
                     msg = json.loads(frame)
                     if msg.get("header", {}).get("tr_id") == "PINGPONG":
                         ws.send(frame)
-                except Exception:
+                except (ValueError, AttributeError, websocket.WebSocketException, OSError):
+                    # AttributeError: a control frame that decodes to a non-dict.
                     logger.debug("[fetch_kis_realtime_prices] ignoring unparseable control frame", exc_info=True)
                 continue
 
@@ -551,11 +558,11 @@ def fetch_kis_realtime_prices(tickers: list, timeout: float = _KIS_WS_TIMEOUT) -
                     "body": {"input": {"tr_id": "H0STCNT0", "tr_key": code}},
                 }
                 ws.send(json.dumps(unsub))
-        except Exception:
+        except (websocket.WebSocketException, OSError):
             logger.debug("[fetch_kis_realtime_prices] unsubscribe failed (connection likely gone)", exc_info=True)
         try:
             ws.close()
-        except Exception:
+        except (websocket.WebSocketException, OSError):
             logger.debug("[fetch_kis_realtime_prices] ws.close() failed", exc_info=True)
 
     missing = [t for t in tickers if t not in prices]
@@ -577,7 +584,7 @@ def _kis_rest_price_fallback(tickers: list, existing: dict) -> dict:
             # `if info.get("price")` would silently drop it as if the fetch had failed.
             if info is not None:
                 return code, float(info.get("price", 0))
-        except Exception:
+        except KIS_ERRORS:
             logger.debug("[fetch_kis_realtime_prices] REST fallback failed for %s", code, exc_info=True)
         return code, None
 
@@ -597,5 +604,6 @@ def _kis_rest_price_fallback(tickers: list, existing: dict) -> dict:
                 if p is not None:
                     out[c] = p
             except Exception:
-                logger.debug("[fetch_kis_realtime_prices] REST fallback worker for %s raised", futures[future], exc_info=True)
+                # boundary: one worker must not lose the other prices; _fetch_one catches fetch errors itself, so only bugs land here.
+                logger.warning("[fetch_kis_realtime_prices] REST fallback worker for %s raised", futures[future], exc_info=True)
     return out

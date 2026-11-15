@@ -11,6 +11,7 @@ from yahooquery import Ticker as YQTicker
 import logging
 
 from data.cache import (
+    PAYLOAD_ERRORS,
     _YF_BULK_CACHE,
     _YF_SESSION,
     _NAVER_SESSION,
@@ -64,7 +65,7 @@ def yf_quote_batch(symbols: list, timeout: int = 15, chunk_size: int = 50, max_r
                     )
                 resp.raise_for_status()
                 break
-            except Exception as e:
+            except requests.RequestException as e:
                 if attempt == max_retries - 1:
                     raise e
                 time.sleep(1)
@@ -81,7 +82,7 @@ def yf_quote_batch(symbols: list, timeout: int = 15, chunk_size: int = 50, max_r
     if len(chunks) == 1:
         try:
             results.update(_fetch_chunk(chunks[0]))
-        except Exception:
+        except PAYLOAD_ERRORS:
             logger.warning("YF v7 quote batch error", exc_info=True)
     else:
         with ThreadPoolExecutor(max_workers=min(len(chunks), 4)) as exe:
@@ -89,7 +90,7 @@ def yf_quote_batch(symbols: list, timeout: int = 15, chunk_size: int = 50, max_r
             for fut in as_completed(futures):
                 try:
                     results.update(fut.result())
-                except Exception:
+                except PAYLOAD_ERRORS:
                     logger.warning("YF v7 quote batch error", exc_info=True)
 
     return results
@@ -154,7 +155,7 @@ def fetch_wti_futures_curve():
                     results.append({"Contract": month_label, "Symbol": sym, "Close": float(close_price)})
                     if len(results) == 8:
                         break
-            except Exception:
+            except (KeyError, IndexError, TypeError, ValueError):
                 logger.debug("WTI contract parse error for sym=%s", sym, exc_info=True)
     return results
 
@@ -187,7 +188,7 @@ def fetch_us_stock_data_bulk(symbols_with_names, market_name, fx_rate, progress_
         with ThreadPoolExecutor(max_workers=min(num_pages, 8)) as exe:
             for page_result in exe.map(_fetch_naver_mcap_page, range(1, num_pages + 1)):
                 naver_mcaps.update(page_result)
-    except Exception:
+    except PAYLOAD_ERRORS:
         logger.warning("Naver market cap prefetch failed, market caps may be incomplete", exc_info=True)
 
     done_count = 0
@@ -236,8 +237,10 @@ def fetch_us_stock_data_bulk(symbols_with_names, market_name, fx_rate, progress_
                                     _YF_BULK_CACHE[key] = pl_df
                                     _yf_bulk_keys_added.add(key)
                     except Exception:
+                        # boundary: one symbol's slice must not drop the chunk; _to_polars on a yfinance frame can raise polars/pyarrow types.
                         logger.debug("YF bulk history slice failed for sym=%s, skipping", sym, exc_info=True)
         except Exception:
+            # kept broad: yf.download raises arbitrary third-party exception types.
             logger.warning("YF bulk history fetch error (chunk)", exc_info=True)
 
         # ── Primary: Yahoo Finance v7 quote API ──────────────────────────
@@ -255,7 +258,7 @@ def fetch_us_stock_data_bulk(symbols_with_names, market_name, fx_rate, progress_
                     trailing_per_dict[sym] = round(float(tpe), 1)
                 if fpe is not None and isinstance(fpe, (int, float)) and fpe == fpe:
                     forward_per_dict[sym] = round(float(fpe), 1)
-        except Exception:
+        except PAYLOAD_ERRORS:
             logger.warning("YF v7 quote fetch error (chunk)", exc_info=True)
 
         # ── Fallback: yahooquery for any symbols still missing data ───────
@@ -273,10 +276,12 @@ def fetch_us_stock_data_bulk(symbols_with_names, market_name, fx_rate, progress_
                     try:
                         details = f_summary.result(timeout=_YQ_META_TIMEOUT)
                     except Exception:
+                        # kept broad: yahooquery raises arbitrary types (and result() raises TimeoutError); {} means "no fallback data".
                         details = {}
                     try:
                         qt = f_qt.result(timeout=_YQ_META_TIMEOUT)
                     except Exception:
+                        # kept broad: as above.
                         qt = {}
 
                 if isinstance(details, dict):
@@ -298,6 +303,7 @@ def fetch_us_stock_data_bulk(symbols_with_names, market_name, fx_rate, progress_
                             if n and sym not in name_dict:
                                 name_dict[sym] = n
             except Exception:
+                # kept broad: yahooquery raises arbitrary third-party exception types.
                 logger.warning("yahooquery fallback error (chunk)", exc_info=True)
 
         def process_symbol(symbol, name):
@@ -323,6 +329,7 @@ def fetch_us_stock_data_bulk(symbols_with_names, market_name, fx_rate, progress_
                         fi = yf.Ticker(yf_symbol, session=_YF_SESSION).fast_info
                         usd_marcap = float(getattr(fi, 'market_cap', 0) or 0)
                     except Exception:
+                        # kept broad: yfinance raises arbitrary third-party exception types.
                         logger.debug("yfinance fast_info failed for %s", yf_symbol, exc_info=True)
 
                 display_name = name_dict.get(yf_symbol) or name or symbol
@@ -340,6 +347,7 @@ def fetch_us_stock_data_bulk(symbols_with_names, market_name, fx_rate, progress_
                     "forward_per": forward_per_dict.get(yf_symbol),
                 }
             except Exception:
+                # boundary: one bad symbol must not sink the chunk; logged with traceback.
                 logger.error("US stock data fetch failed for symbol=%s", symbol, exc_info=True)
                 return None
             finally:
@@ -388,6 +396,7 @@ def fetch_us_market_data(market="NASDAQ 100", top_n=200, progress_callback=None)
                         df_list = tbl.rename(columns={'Company': 'Name'})
                         break
             except Exception:
+                # kept broad: pd.read_html/lxml raise assorted types (ValueError, ImportError, parser errors).
                 logger.debug("Wikipedia NASDAQ-100 table fetch error, falling back to NASDAQ listing", exc_info=True)
 
             if df_list.empty:
@@ -410,6 +419,7 @@ def fetch_us_market_data(market="NASDAQ 100", top_n=200, progress_callback=None)
         fx_rate = get_usd_krw_rate()
         return fetch_us_stock_data_bulk(symbols_with_names, market, fx_rate, progress_callback)
     except Exception:
+        # boundary: contract is [] on any failure; the bulk fetch below spans several third-party libraries.
         logger.error("fetch_us_market_data failed for market=%s", market, exc_info=True)
         return []
 
@@ -425,6 +435,7 @@ def get_us_listing_ranked(market: str, pool_size: int) -> list:
     try:
         df = get_stock_listing(market)
     except Exception:
+        # boundary: contract is [] on failure; get_stock_listing wraps FDR, which raises arbitrary types.
         logger.warning("US listing failed for %s", market, exc_info=True)
         return []
     if df is None or df.empty or "Symbol" not in df.columns:

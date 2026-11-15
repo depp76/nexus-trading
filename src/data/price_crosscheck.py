@@ -13,6 +13,7 @@ dropped from both sides before any comparison, so the holdout year is never look
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from dataclasses import dataclass, field
 from datetime import date
@@ -21,6 +22,8 @@ from pathlib import Path
 import polars as pl
 
 from data.raw_prices import RAW_DEV_END
+
+logger = logging.getLogger(__name__)
 
 PRICE_FIELDS = ("Open", "High", "Low", "Close")
 PRICE_TOLERANCE_PCT = 0.5      # rounding of adjusted prices stays well under this
@@ -154,7 +157,8 @@ def main(argv: list[str] | None = None) -> int:
             kis = get_adjusted_daily_prices(tk, args.start, stop)
             ref = get_historical_data(tk, args.start.isoformat())
             results.append(compare_frames(tk, kis, ref, args.start, stop))
-        except Exception as e:      # one failed ticker must not sink the table; it is listed as failed
+        except Exception as e:      # boundary: one failed ticker must not sink the table; it is listed as failed
+            logger.warning("cross-check failed for %s", tk, exc_info=True)
             results.append(CrossCheck(tk, error=str(e)))
         print(f"{tk} done", file=sys.stderr, flush=True)
     md = render_markdown(results, args.start, stop)

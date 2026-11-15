@@ -22,7 +22,7 @@ from i18n import tr
 from ui.colors import fg_for
 from ui.common import make_button, setup_table, install_table_keys, make_footer_label
 from ui.strategy_widgets import reason_label, fmt_price, trade_summary
-from ui.widgets import NumericItem
+from ui.table_items import NumericItem
 
 _LEFT = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
 _RIGHT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter

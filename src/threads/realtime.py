@@ -54,6 +54,7 @@ class RealtimePriceThread(QThread):
             elif self.us_tickers and not us_prices:
                 error = tr("미국 시세를 받지 못함 (Yahoo)", "no US quotes received (Yahoo)")
         except Exception as e:
+            # boundary: the thread must reach the error report below instead of dying silently.
             # Before this, an exception here ended the thread silently.
             logger.warning("RealtimePriceThread failed: %s", e, exc_info=True)
             error = str(e) or type(e).__name__

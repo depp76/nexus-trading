@@ -9,7 +9,7 @@ from PyQt6.QtCore import Qt
 
 from ui.common import create_font, FONT_BODY, TABLE_ROW_H, make_button, button_row, fit_to_screen
 from ui.colors import PROFIT, LOSS, QC_PROFIT, QC_LOSS, QC_FLAT
-from ui.widgets import NumericItem
+from ui.table_items import NumericItem
 
 
 def build_holdings_summary(parent, closed_data: list, open_data: list):

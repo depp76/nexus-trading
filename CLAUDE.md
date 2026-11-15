@@ -123,7 +123,10 @@ Dev tooling is in `requirements-dev.txt`
   `dialogs/strategy_trades.py` `StrategyTradesView`), `trend_score_section.py` (`TrendScoreSection`: the
   MA chart dialog's block with the last Trend Score run's breakdown and gate for a KOSPI/KOSDAQ name;
   `UniverseTab._last_recommendation` is passed in through `StockMaDialog(trend_rec=...)`),
-  `widgets.py` (`StockTable`, `NumericItem`, `FilterPopup`, `GroupedHeaderView`), `delegates.py`
+  `widgets.py` (since 2026-11-15 only a re-export of: `table_items.py` `ColSpec`/`NumericItem`,
+  `universe_columns.py` the Universe `COLUMNS`/`COL_*`, `universe_table.py` `StockTable`,
+  `filter_popups.py` `FilterPopup`/`RangeFilterPopup`, `table_headers.py` `GroupedHeaderView`,
+  `heat_legend.py` `HeatLegend`; new code imports from those modules), `delegates.py`
   (every custom-painted table cell: `CellDelegate` base + the Universe/History delegates),
   `ma_chart.py` (`StockMaLauncherMixin`, the MA-chart dialog launcher; `UniverseTab` is its
   only user now),
@@ -284,6 +287,13 @@ not fixtures. Trading History principal/deposit/withdrawal live in `QSettings`
   numeric cells included — there is no separate monospace/tabular face — and matplotlib
   charts get the same family from `apply_matplotlib_font()` at startup. Inline stylesheets
   splice `FONT_FAMILY_CSS` instead of repeating the family list, and size in `pt`, not `px`.
+- Exceptions (code review 2026-11-15 #6): an inner `try` around one fetch/parse catches what
+  that body can raise from outside — `data.cache.PAYLOAD_ERRORS` (requests errors, ValueError,
+  KeyError, IndexError, TypeError/AttributeError from a reply of the wrong shape),
+  `collectors.kis.KIS_ERRORS`, `OSError` for files — not `Exception`, so a bug in our own code is
+  not reported as "no data". `except Exception` stays only at boundaries (a QThread `run()`, a
+  per-item loop, a function whose contract is "empty on any failure", a third-party call that
+  raises arbitrary types), marked `# boundary:` / `# kept broad:` and logged with a traceback.
 - Bulk table repaints are wrapped in `setUpdatesEnabled(False)` / `finally:
   setUpdatesEnabled(True)`.
 - Every tab mixes in `ui.common.ThreadOwnerMixin` and registers each worker it starts with

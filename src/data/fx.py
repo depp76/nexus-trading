@@ -61,6 +61,7 @@ def get_usd_krw_rate():
             rate = fallback
             logger.warning("USD/KRW rate fetch failed, using cached/fallback rate=%.1f: %s", rate, e)
         except Exception:
+            # boundary: callers rely on always getting a rate; this also covers a changed reply layout (Key/Index/Type/ValueError) and the pandas->polars conversion.
             # Anything else means the response layout changed, which needs the traceback.
             rate = fallback
             logger.error("USD/KRW rate parse failed, using cached/fallback rate=%.1f", rate, exc_info=True)
@@ -89,6 +90,6 @@ def get_usd_krw_rate_for_date(date_str: str) -> float:
             sub = df.filter(pl.col("Date") <= target)
             if not sub.is_empty():
                 return float(sub.get_column("Close")[-1])
-        except Exception:
+        except (ValueError, pl.exceptions.PolarsError):
             logger.debug("get_usd_krw_rate_for_date failed for date=%s", date_str, exc_info=True)
     return get_usd_krw_rate()

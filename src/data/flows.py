@@ -54,7 +54,8 @@ def _load_cache(ticker: str) -> dict:
             raw = json.load(f)
         rows = {r["Date"]: r for r in raw.get("rows", []) if r.get("Date")}
         return {"covers_from": raw.get("covers_from"), "rows": rows}
-    except Exception:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        # TypeError/AttributeError: a cache file whose JSON is not the expected dict-of-rows shape.
         logger.debug("investor flow cache unreadable for %s, refetching", ticker, exc_info=True)
         return {"covers_from": None, "rows": {}}
 
@@ -72,7 +73,7 @@ def _save_cache(ticker: str, cache: dict) -> None:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False)
         os.replace(tmp, path)
-    except Exception:
+    except OSError:
         logger.warning("investor flow cache save failed for %s", ticker, exc_info=True)
 
 
@@ -157,6 +158,7 @@ def get_investor_flows(ticker: str, start: str, today: date | None = None) -> pl
             with _FETCH_SEMAPHORE:
                 fetched = _fetch_investor_trend_naver(ticker, days=days)
         except Exception:
+            # boundary: one ticker's failed fetch falls back to its cached rows; the fetcher catches HTTP errors itself.
             logger.warning("investor flow fetch failed for %s", ticker, exc_info=True)
             fetched = []
         new_rows = _normalise_rows(fetched)

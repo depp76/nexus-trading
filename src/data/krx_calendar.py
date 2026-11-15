@@ -14,7 +14,7 @@ import threading
 import time
 from datetime import date, datetime, timedelta
 
-from data.collectors.kis import _KST, fetch_kis_holiday_page
+from data.collectors.kis import KIS_ERRORS, _KST, fetch_kis_holiday_page
 from paths import KRX_CALENDAR_CACHE_FILE
 
 logger = logging.getLogger(__name__)
@@ -97,7 +97,7 @@ def get_krx_sessions(start: date, end: date) -> list[date]:
         if needed:
             try:
                 fresh = _fetch_range(needed[0], needed[-1])
-            except Exception as e:
+            except KIS_ERRORS as e:
                 fresh = {}
                 missing = [d for d in all_days if d not in days]
                 if missing:

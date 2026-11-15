@@ -17,7 +17,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from ui.common import create_font, FONT_BODY, FONT_HEADING, make_button, button_row, fit_to_screen
 from ui.colors import QC_PROFIT, QC_LOSS, QC_FLAT
 from ui.theme import ACCENT, ACCENT_TEXT, TEXT, TEXT_MUTED, TEXT_FAINT, LINE, HDR_BG
-from ui.widgets import NumericItem
+from ui.table_items import NumericItem
 
 _SUMMARY_HEADERS = [tr("날짜", "Date"), "KOSPI", tr("KOSPI 누적 %", "KOSPI Cum %"), tr("보유 평가액", "Positions"),
                     tr("현금", "Cash"), tr("총자산", "Total"), tr("보유 비중 %", "Positions %"),

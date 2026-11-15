@@ -10,6 +10,7 @@ import FinanceDataReader as fdr
 import logging
 
 from data.cache import (
+    PAYLOAD_ERRORS,
     start_date,
     _YF_SESSION,
     safe_float,
@@ -99,7 +100,7 @@ def _build_kr_stock_res(code, name, market, marcap):
             df_p = get_historical_data(code, start)
             if not df_p.is_empty():
                 current_price = float(df_p.get_column('Close')[-1])
-        except Exception:
+        except (pl.exceptions.PolarsError, IndexError, ValueError):
             logger.debug("Historical price fallback failed for code=%s", code, exc_info=True)
 
     df_history = None
@@ -122,7 +123,7 @@ def fetch_kr_market_data(market="KOSPI", top_n=200, progress_callback=None):
     try:
         try:
             results_list = _fetch_kr_listing_naver(market, top_n)
-        except Exception:
+        except PAYLOAD_ERRORS:
             logger.warning("Naver market-listing scrape failed for market=%s", market, exc_info=True)
             results_list = []
 
@@ -158,7 +159,7 @@ def fetch_kr_market_data(market="KOSPI", top_n=200, progress_callback=None):
                         df_p = get_historical_data(ticker, start_dt)
                         if not df_p.is_empty():
                             current_price = float(df_p.get_column('Close')[-1])
-                    except Exception:
+                    except (pl.exceptions.PolarsError, IndexError, ValueError):
                         logger.debug("Historical price fallback failed for ticker=%s", ticker, exc_info=True)
 
                 changes = fetch_historical_changes(ticker, current_price)
@@ -200,6 +201,7 @@ def fetch_kr_market_data(market="KOSPI", top_n=200, progress_callback=None):
 
         return results
     except Exception:
+        # boundary: contract is [] on any failure; one market's build must not take the refresh down.
         logger.error("fetch_kr_market_data failed for market=%s", market, exc_info=True)
         return []
 
@@ -246,6 +248,7 @@ def fetch_single_stock(market, ticker):
                     marcap = safe_float(target.get('Marcap', 0))
                     return _build_kr_stock_res(code, name, market, marcap), None
             except Exception:
+                # boundary: best-effort first lookup over pandas listings and the network; any failure falls through to the lookups below.
                 logger.warning("KRX search error for ticker='%s'", ticker, exc_info=True)
 
             if is_kr_code(ticker):
@@ -277,6 +280,7 @@ def fetch_single_stock(market, ticker):
                     close_s = df_p.get_column("Close").drop_nulls()
                     usd_price = float(close_s[-1]) if len(close_s) > 0 else 0.0
             except Exception:
+                # kept broad: FinanceDataReader raises arbitrary third-party exception types.
                 logger.debug("fdr.DataReader failed for ticker=%s", ticker, exc_info=True)
 
             if usd_price == 0:
@@ -293,6 +297,7 @@ def fetch_single_stock(market, ticker):
                 usd_marcap = inf.get('marketCap') or inf.get('totalAssets') or 0
                 name = inf.get('longName') or inf.get('shortName') or ticker
             except Exception:
+                # kept broad: yfinance raises arbitrary third-party exception types.
                 logger.debug("yfinance info failed for %s", yf_symbol, exc_info=True)
 
             if usd_marcap == 0:
@@ -306,6 +311,7 @@ def fetch_single_stock(market, ticker):
                     if isinstance(qt, dict):
                         name = qt.get('longName') or qt.get('shortName') or ticker
                 except Exception:
+                    # kept broad: yahooquery raises arbitrary third-party exception types.
                     logger.debug("yahooquery summary_detail failed for %s", yf_symbol, exc_info=True)
 
             changes = fetch_historical_changes(yf_symbol, usd_price, df_p)
@@ -318,7 +324,7 @@ def fetch_single_stock(market, ticker):
                     trailing_per = round(float(tpe), 1)
                 if fpe is not None and isinstance(fpe, (int, float)) and fpe == fpe:
                     forward_per = round(float(fpe), 1)
-            except Exception:
+            except (TypeError, ValueError):
                 logger.debug("PER extraction failed for %s", ticker, exc_info=True)
 
             return {
@@ -335,6 +341,8 @@ def fetch_single_stock(market, ticker):
             }, None
 
     except Exception as e:
+        # boundary: contract is (None, message) on any failure; the caller shows the message.
+        logger.warning("fetch_single_stock failed for market=%s ticker=%s", market, ticker, exc_info=True)
         return None, str(e)
 
 
@@ -364,7 +372,7 @@ def get_index_close_for_date(ticker: str, date_str: str) -> float:
             sub = df.filter(pl.col("Date") <= target)
             if not sub.is_empty():
                 return float(sub.get_column("Close")[-1])
-        except Exception:
+        except (pl.exceptions.PolarsError, IndexError):
             logger.debug("get_index_close_for_date failed for ticker=%s date=%s", ticker, date_str, exc_info=True)
     return 0.0
 
@@ -391,6 +399,8 @@ def fetch_index_mas(fdr_ticker, days=365):
         ])
         return df, None
     except Exception as e:
+        # boundary: contract is (None, message) on any failure; FinanceDataReader raises arbitrary types.
+        logger.warning("fetch_index_mas failed for ticker=%s", fdr_ticker, exc_info=True)
         return None, str(e)
 
 
@@ -479,6 +489,8 @@ def fetch_stock_ma_multi(ticker, market, windows=(10, 20, 60), days=1825, target
             return None, f"No data for '{ticker}'."
         return _compute_indicators(df, windows), None
     except Exception as e:
+        # boundary: contract is (None, message) on any failure; FinanceDataReader raises arbitrary types.
+        logger.warning("fetch_stock_ma_multi failed for ticker=%s", ticker, exc_info=True)
         return None, str(e)
 
 
@@ -513,7 +525,7 @@ def fetch_indice_as_stock(label_ticker):
                 rt_val = rt_dict.get(fdr_ticker) or rt_dict.get(label)
                 if rt_val is not None and rt_val > 0:
                     current_price = float(rt_val)
-            except Exception:
+            except (TypeError, ValueError):
                 logger.debug("Realtime index quote for %s failed; keeping last close", label, exc_info=True)
 
         if is_bond:
@@ -542,6 +554,7 @@ def fetch_indice_as_stock(label_ticker):
             "index_order": order,
         }
     except Exception:
+        # boundary: one index must not drop the others; contract is None on any failure.
         logger.error("Index fetch failed for label=%s", label, exc_info=True)
         return None
 
