@@ -17,7 +17,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QRect, QTimer, QSize
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPolygon, QKeySequence
 
 from i18n import tr
-from ui.common import create_font, FONT_SMALL, _EmptyHint, FONT_CAPTION, make_button, _set_field_error
+from ui.common import create_font, FONT_BODY, _EmptyHint, FONT_CAPTION, make_button, _set_field_error
 from ui.delegates import IdentityDelegate, RangeBarDelegate, TrendDelegate
 from ui.universe_views import RANGE_FIELDS, matches as view_matches
 from ui.colors import fg_for, heatmap_bg, PROFIT, LOSS, FLAT, OK, WARN
@@ -244,14 +244,14 @@ class FilterPopup(QFrame):
 
         # Search inside popup
         self._search = QLineEdit()
-        self._search.setFont(create_font(FONT_SMALL, style_name="Semilight"))
+        self._search.setFont(create_font(FONT_BODY, style_name="Semilight"))
         self._search.setPlaceholderText(tr("검색...", "Search..."))
         self._search.textChanged.connect(self._on_search)
         layout.addWidget(self._search)
 
         # Select All
         self._all_cb = QCheckBox(tr("(전체 선택)", "(Select All)"))
-        self._all_cb.setFont(create_font(FONT_SMALL, style_name="Semilight"))
+        self._all_cb.setFont(create_font(FONT_BODY, style_name="Semilight"))
         self._all_cb.setTristate(True)
         layout.addWidget(self._all_cb)
 
@@ -272,7 +272,7 @@ class FilterPopup(QFrame):
         self._checkboxes = {}
         for val in sorted(unique_vals, key=lambda v: (v != "Index", v)):
             cb = QCheckBox(str(val))
-            cb.setFont(create_font(FONT_SMALL, style_name="Semilight"))
+            cb.setFont(create_font(FONT_BODY, style_name="Semilight"))
             cb.setChecked(current_filter is None or val in current_filter)
             inner_layout.addWidget(cb)
             self._checkboxes[val] = cb
@@ -356,7 +356,7 @@ class RangeFilterPopup(QFrame):
         v.setContentsMargins(12, 10, 12, 10)
         v.setSpacing(6)
         title = QLabel(tr("범위 필터", "Range filters"))
-        title.setFont(create_font(FONT_SMALL, QFont.Weight.Bold))
+        title.setFont(create_font(FONT_BODY, QFont.Weight.Bold))
         v.addWidget(title)
         hint = QLabel(tr("빈 칸은 제한 없음. 필터를 건 열에 값이 없는 종목은 숨깁니다.",
                       "Blank = no limit. Rows with no value in a filtered column are hidden."))
@@ -559,10 +559,10 @@ class StockTable(QTableWidget):
         self.setColumnCount(len(COLUMNS))
         self.setHorizontalHeaderLabels([c.label for c in COLUMNS])
         # Table font: Malgun Gothic Semilight 9pt (set appropriate size to prevent text cutoff)
-        self.setFont(create_font(FONT_SMALL, style_name="Semilight"))
+        self.setFont(create_font(FONT_BODY, style_name="Semilight"))
         # Same family as text cells (one app font); built once per table
         # instance rather than per cell.
-        self._numeric_font = create_font(FONT_SMALL, style_name="Semilight")
+        self._numeric_font = create_font(FONT_BODY, style_name="Semilight")
         # Frame, grid and header lines come from ui/theme.py's table rules
         # (docs/ui.md 8.2). Only the right side differs: paintEvent draws it,
         # because the last column's own grid line already sits on the
@@ -580,7 +580,7 @@ class StockTable(QTableWidget):
         self._filter_header = FilterableHeader(Qt.Orientation.Horizontal, self)
         self._filter_header.divider_cols = GROUP_START_COLS
         self._filter_header.right_edge = True
-        self._filter_header.setFont(create_font(FONT_SMALL, QFont.Weight.Bold))
+        self._filter_header.setFont(create_font(FONT_BODY, QFont.Weight.Bold))
         self._filter_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self._filter_header.filter_requested.connect(self._show_filter_popup)
         self.setHorizontalHeader(self._filter_header)
@@ -1416,7 +1416,7 @@ class GroupedHeaderView(QHeaderView):
             # Label only (vertical borders are drawn per-column in paintSection)
             painter.setPen(QPen(QColor(TEXT_SUB)))
             f = painter.font()
-            f.setPointSize(FONT_SMALL)
+            f.setPointSize(FONT_BODY)
             f.setBold(True)
             painter.setFont(f)
             painter.drawText(group_rect, Qt.AlignmentFlag.AlignCenter, label)

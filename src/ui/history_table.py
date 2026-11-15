@@ -6,12 +6,12 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 
 from ui.colors import PROFIT, LOSS, FLAT, QC_PROFIT, QC_LOSS
-from ui.common import create_font, FONT_SMALL
+from ui.common import create_font, FONT_BODY
 from ui.theme import LINE_GROUP, ACCENT_TEXT, SURFACE, ZEBRA, GRP_BG, TEXT, TEXT_MUTED, TEXT_FAINT, TEXT_EMPTY
 from ui.widgets import ColSpec, NumericItem
 
 # Numeric cells use the one app font too (right-aligned; see ui.common), built once.
-_NUMERIC_FONT = create_font(FONT_SMALL, style_name="Semilight")
+_NUMERIC_FONT = create_font(FONT_BODY, style_name="Semilight")
 
 # "-" -> a thin, muted em dash (docs/ui.md 3.3): closed rows' empty Position
 # section and open rows' empty Sell section used to render as a bold "-",

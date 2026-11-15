@@ -14,7 +14,7 @@ import mplcursors
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
-from ui.common import create_font, FONT_SMALL, FONT_HEADING, make_button, button_row, fit_to_screen
+from ui.common import create_font, FONT_BODY, FONT_HEADING, make_button, button_row, fit_to_screen
 from ui.colors import QC_PROFIT, QC_LOSS, QC_FLAT
 from ui.theme import ACCENT, ACCENT_TEXT, TEXT, TEXT_MUTED, TEXT_FAINT, LINE, HDR_BG
 from ui.widgets import NumericItem
@@ -65,7 +65,7 @@ def _make_table(headers):
     tbl.setAlternatingRowColors(True)
     tbl.verticalHeader().setVisible(False)
     tbl.verticalHeader().setDefaultSectionSize(24)
-    tbl.setFont(create_font(FONT_SMALL, style_name="Semilight"))
+    tbl.setFont(create_font(FONT_BODY, style_name="Semilight"))
     tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
     return tbl
 
@@ -103,7 +103,7 @@ class AssetsReportDialog(QDialog):
         self.holdings = _make_table(_HOLDING_HEADERS)
         self.holdings.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self._holdings_lbl = QLabel("")
-        self._holdings_lbl.setFont(create_font(FONT_SMALL))
+        self._holdings_lbl.setFont(create_font(FONT_BODY))
         lower = QWidget()
         lower_v = QVBoxLayout(lower)
         lower_v.setContentsMargins(0, 0, 0, 0)
