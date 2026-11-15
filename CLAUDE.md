@@ -305,5 +305,8 @@ not fixtures. Trading History principal/deposit/withdrawal live in `QSettings`
   `data_fetcher`, and `data/` never imports `strategy`. Every strategy UI runs its work in
   a `QThread` under `src/threads/` and is signal generation / research only. There are no
   strategy docs at the repo root.
-- `roadmap.md` is the running log of what was done and why (sections per phase, a priority
-  matrix, and a dated change history). Add a row there for non-trivial changes.
+- `roadmap.md` is the running log of what was done and why (current-state summary, open long-term
+  items, a priority matrix, and a dated change history). Add a row there for non-trivial changes.
+  Finished sections (2, 3, 6, 7 — the "roadmap 2-4" / "6-1a" / "7-2c" that code comments cite) and the
+  2026-08~10 rows live in `docs/history/roadmap_2026-08_10.md`; superseded `docs/ui.md` sections (5,
+  6.1-6.2, 7) in `docs/history/ui_archive_2026-09_10.md`, with a one-line pointer left at each number.
