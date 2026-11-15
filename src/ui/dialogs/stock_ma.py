@@ -33,8 +33,9 @@ Layout
 ::
 
     +-- splitter ------------------------------------------------------+
-    | name  ticker · market  price  chg%   [1M 3M 6M 1Y 3Y All] as-of  |
-    | Series [Close MA5 MA10 MA20 MA50 Divergence EW]     [Volume] [RSI] |
+    | name  ticker · market  price  chg%                          as-of |
+    | Series [Close MA5 .. EW]  [1M 3M 6M 1Y 3Y All]  [Volume] [RSI]     |
+    |   (2026-11-15: one wrapping row; a group moves down when narrow)    |
     |   FigureCanvas: price (+MA ramp)      | right panel (optional)   |
     |                 volume                |   investor / futures tbl |
     |                 divergence            |   "Company Info ↗"        |
@@ -65,7 +66,7 @@ from PyQt6.QtGui import QColor, QFont, QFontMetrics
 
 from i18n import tr
 from ui.trend_score_section import TrendScoreSection
-from ui.common import create_font, setup_table, BTN_H, FONT_HEADING, FONT_BODY, FONT_SMALL, FONT_CAPTION, make_button, button_row, fit_to_screen
+from ui.common import FlowLayout, create_font, setup_table, BTN_H, FONT_HEADING, FONT_BODY, FONT_SMALL, FONT_CAPTION, make_button, button_row, fit_to_screen
 from ui.colors import PROFIT, LOSS, MA_RAMP, MA_DIV_NEUTRAL_PCT
 from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_FAINT, LINE, SURFACE, INK_ON_LIGHT
 
@@ -203,7 +204,7 @@ class StockMaDialog(QDialog):
             splitter.setCollapsible(1, False)
 
         chart_v.addLayout(self._build_header_row())
-        chart_v.addLayout(self._build_view_row())
+        chart_v.addWidget(self._build_view_row())
 
         self._fig = Figure(figsize=(9.5, 7.5))
         self._canvas = FigureCanvas(self._fig)
@@ -226,7 +227,7 @@ class StockMaDialog(QDialog):
 
     # ------------------------------------------------------------- top rows
     def _build_header_row(self) -> QHBoxLayout:
-        """Name · ticker/market · last price · change% | period segment | as-of."""
+        """Name · ticker/market · last price · change% | as-of."""
         row = QHBoxLayout()
         row.setSpacing(10)
 
@@ -250,15 +251,6 @@ class StockMaDialog(QDialog):
         row.addWidget(self._chg_lbl)
         row.addStretch()
 
-        self._period_group = QButtonGroup(self)
-        self._period_group.setExclusive(True)
-        self._period_buttons = {}
-        for label, months in _PERIODS:
-            btn = _segment_button(_PERIOD_LABELS[label], self._period_group, checked=(label == _DEFAULT_PERIOD), width=52)
-            btn.clicked.connect(lambda _c, m=months, lbl=label: self._on_period_clicked(lbl, m))
-            row.addWidget(btn)
-            self._period_buttons[label] = btn
-
         as_of = ""
         if self._has_data:
             last_day = pd.to_datetime(self._df.get_column('Date')[-1]).strftime('%Y-%m-%d')
@@ -266,14 +258,26 @@ class StockMaDialog(QDialog):
         as_of_lbl = QLabel(as_of)
         as_of_lbl.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
         as_of_lbl.setStyleSheet(f"color:{TEXT_FAINT};")
-        row.addSpacing(6)
         row.addWidget(as_of_lbl)
+        row.addSpacing(8)                # clear of the splitter / right panel
         return row
 
-    def _build_view_row(self) -> QHBoxLayout:
-        """SHOW series toggles (independent, multi-select) | panel toggles."""
-        row = QHBoxLayout()
-        row.setSpacing(6)
+    @staticmethod
+    def _button_group_widget() -> tuple[QWidget, QHBoxLayout]:
+        w = QWidget()
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        return w, lay
+
+    def _build_view_row(self) -> QWidget:
+        """Series toggles | period segment | panel toggles, as three groups in
+        a FlowLayout (user direction 2026-11-15): one line when the chart is
+        wide enough, otherwise a group moves to the next line instead of
+        raising the dialog's minimum width. A group never splits."""
+        row_w = QWidget()
+        row = FlowLayout(row_w, h_spacing=18, v_spacing=6)
+        series_w, series = self._button_group_widget()
         self._series_buttons = {}
         keys = [] if self._is_simple_chart else ["Close", *MA_RAMP.keys(), "Div"]
         if self._has_data and "EqualWeight" in self._df.columns and not self._is_simple_chart:
@@ -282,23 +286,42 @@ class StockMaDialog(QDialog):
             cap = QLabel(tr("표시", "Series"))
             cap.setFont(create_font(FONT_CAPTION, QFont.Weight.Bold))
             cap.setStyleSheet(f"color:{TEXT_FAINT};")
-            row.addWidget(cap)
+            series.addWidget(cap)
         for key in keys:
             btn = _segment_button(_SERIES[key], checked=(key in _DEFAULT_SERIES))
             btn.clicked.connect(lambda checked, k=key: self._set_series(k, checked))
-            row.addWidget(btn)
+            series.addWidget(btn)
             self._series_buttons[key] = btn
-        row.addStretch()
+        if keys:
+            row.addWidget(series_w)
+
+        period_w, period = self._button_group_widget()
+        self._period_group = QButtonGroup(self)
+        self._period_group.setExclusive(True)
+        self._period_buttons = {}
+        for label, months in _PERIODS:
+            btn = _segment_button(_PERIOD_LABELS[label], self._period_group, checked=(label == _DEFAULT_PERIOD))
+            btn.clicked.connect(lambda _c, m=months, lbl=label: self._on_period_clicked(lbl, m))
+            period.addWidget(btn)
+            self._period_buttons[label] = btn
+        # One width for the segment, from the widest label (a fixed 52 px cut
+        # the first digit of "3개월"/"6개월").
+        seg_w = max(b.sizeHint().width() for b in self._period_buttons.values())
+        for b in self._period_buttons.values():
+            b.setFixedWidth(seg_w)
+        row.addWidget(period_w)
 
         # The divergence panel has no button here: the Divergence series
         # toggle drives it.
+        panels_w, panels = self._button_group_widget()
         self._panel_buttons = {}
         for key, label in (("vol", tr("거래량", "Volume")), ("rsi", "RSI")):
             btn = _segment_button(label)
             btn.clicked.connect(lambda checked, k=key: self._set_panel(k, checked))
-            row.addWidget(btn)
+            panels.addWidget(btn)
             self._panel_buttons[key] = btn
-        return row
+        row.addWidget(panels_w)
+        return row_w
 
     def _build_right_panel(self, is_stock: bool) -> QWidget:
         """Investor-trend table (KR stocks), futures curve (WTI) and the
