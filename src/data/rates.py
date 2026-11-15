@@ -20,6 +20,7 @@ import polars as pl
 import requests
 
 from paths import CD91_CACHE_FILE, CD91_CSV_FILE
+from data.cache import PAYLOAD_ERRORS
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,8 @@ def _load_cache() -> dict[str, float]:
     try:
         with open(CD91_CACHE_FILE, encoding="utf-8") as f:
             return {k: float(v) for k, v in json.load(f).items()}
-    except Exception:
+    except (OSError, ValueError, TypeError, AttributeError):
+        # TypeError/AttributeError: a cache file whose JSON is not a {date: rate} dict.
         logger.debug("CD91 cache unreadable, ignoring", exc_info=True)
         return {}
 
@@ -58,7 +60,7 @@ def _save_cache(rows: dict[str, float]) -> None:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(rows, f)
         os.replace(tmp, CD91_CACHE_FILE)
-    except Exception:
+    except OSError:
         logger.warning("CD91 cache save failed", exc_info=True)
 
 
@@ -118,7 +120,7 @@ def get_cd91_series(start: str, end: str | None = None) -> pl.DataFrame:
                 if fetched:
                     cached.update(fetched)
                     _save_cache(cached)
-            except Exception:
+            except PAYLOAD_ERRORS:
                 logger.warning("ECOS CD91 fetch failed", exc_info=True)
     rows = {k: v for k, v in cached.items() if start <= k <= end}
     if not rows:

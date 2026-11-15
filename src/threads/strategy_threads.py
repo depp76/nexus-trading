@@ -58,6 +58,7 @@ class TrendFollowingResearchThread(QThread):
             logger.info("Trend Following research run cancelled by the user")
             self.finished.emit(None, CANCELLED_MESSAGE)
         except Exception as e:
+            # boundary: the thread must always emit finished; the research run spans data loading and the engine.
             logger.warning("Trend Following research run failed", exc_info=True)
             self.finished.emit(None, str(e))
 
@@ -92,5 +93,6 @@ class TrendScoreThread(QThread):
             logger.info("Trend score run cancelled by the user")
             self.finished.emit(None, CANCELLED_MESSAGE)
         except Exception as e:
+            # boundary: the thread must always emit finished; the error text is shown in the status line.
             logger.warning("Trend score run failed", exc_info=True)
             self.finished.emit(None, str(e))

@@ -7,6 +7,7 @@ from datetime import date, datetime
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+import requests
 
 import data.listing as listing
 
@@ -146,7 +147,7 @@ class TestProvisionalEntries(unittest.TestCase):
 def _response(status=200, text=""):
     r = MagicMock(status_code=status, text=text)
     if status >= 400:
-        r.raise_for_status.side_effect = RuntimeError(f"HTTP {status}")
+        r.raise_for_status.side_effect = requests.HTTPError(f"HTTP {status}")
     return r
 
 

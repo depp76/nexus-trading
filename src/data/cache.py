@@ -2,13 +2,24 @@
 from datetime import datetime, timedelta
 from collections import OrderedDict
 import math
+import ssl
 import threading
 import logging
+import polars as pl
 import urllib3
 import requests
 from requests.adapters import HTTPAdapter
 
 logger = logging.getLogger(__name__)
+
+# What fetching and parsing one external payload can raise when the source is down or
+# answers with something unexpected: transport/HTTP errors, an undecodable body
+# (json.JSONDecodeError is a ValueError), and a payload whose shape differs from the
+# parser's (a missing key, a short list, a list or None where a dict was expected, a
+# number where a string was), which surfaces as KeyError/IndexError/TypeError/
+# AttributeError. Inner excepts around such a fetch catch this instead of Exception so
+# a NameError/ImportError/RuntimeError from our own code is not mistaken for "no data".
+PAYLOAD_ERRORS = (requests.RequestException, ValueError, KeyError, IndexError, TypeError, AttributeError)
 
 def start_date() -> str:
     """Lookback start (YYYY-MM-DD) for the daily-history fetches: 410 calendar
@@ -103,7 +114,7 @@ class YFTlsAdapter(HTTPAdapter):
         ctx = urllib3.util.ssl_.create_urllib3_context()
         try:
             ctx.set_ciphers('DEFAULT@SECLEVEL=1')
-        except Exception:
+        except ssl.SSLError:
             logger.debug("TLS cipher SECLEVEL=1 not supported, using default context")
         kwargs['ssl_context'] = ctx
         return super().init_poolmanager(*args, **kwargs)
@@ -150,7 +161,7 @@ def _get_yf_crumb(force_refresh: bool = False):
         try:
             _YF_SESSION.get("https://fc.yahoo.com", timeout=5)
             _YF_CRUMB = _YF_SESSION.get("https://query2.finance.yahoo.com/v1/test/getcrumb", timeout=5).text
-        except Exception:
+        except requests.RequestException:
             logger.warning("Failed to fetch Yahoo Finance crumb, quote batches may fail", exc_info=True)
             _YF_CRUMB = ""
         return _YF_CRUMB
@@ -198,7 +209,7 @@ def _hist_df_is_stale(df, fetched_at=None) -> bool:
         return False
     try:
         last_date = df.get_column("Date")[-1]
-    except Exception:
+    except (pl.exceptions.ColumnNotFoundError, IndexError):
         logger.debug("_hist_df_is_stale: failed to read last date from df", exc_info=True)
         return False
     return last_date < now.date()
@@ -215,7 +226,7 @@ def _pdf_is_stale(pdf) -> bool:
         last_date = pdf.index[-1]
         if hasattr(last_date, "date"):
             last_date = last_date.date()
-    except Exception:
+    except IndexError:
         logger.debug("_pdf_is_stale: failed to read last date from pdf index", exc_info=True)
         return False
     return last_date < datetime.now().date()

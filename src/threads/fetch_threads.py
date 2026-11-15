@@ -85,6 +85,7 @@ class StockMaThread(QThread):
                         ew_df = ew_df.select([pl.col("Date"), pl.col("Close").alias("EqualWeight")])
                         df = df.join(ew_df, on="Date", how="left")
             except Exception as e:
+                # kept broad: FinanceDataReader raises arbitrary third-party exception types.
                 logger.warning("Error fetching KODEX 200 EW: %s", e, exc_info=True)
         # ----------------------------------------
 
@@ -165,6 +166,7 @@ class TickerValidateThread(QThread):
                             company = fetched
                             is_valid = True
                 except Exception:
+                    # kept broad: yahooquery raises arbitrary third-party exception types.
                     logger.debug("yahooquery company-name lookup failed for ticker=%s", ticker, exc_info=True)
 
             if (not is_valid or company == ticker or company.upper() == ticker.upper()) and market in ("KOSPI", "KOSDAQ"):
@@ -174,8 +176,11 @@ class TickerValidateThread(QThread):
                         company = n_nv
                         is_valid = True
                 except Exception:
-                    logger.debug("Naver company-name lookup failed for ticker=%s", ticker, exc_info=True)
+                    # boundary: last fallback of the name chain; _fetch_naver_info handles its own fetch errors, so only bugs land here.
+                    logger.warning("Naver company-name lookup failed for ticker=%s", ticker, exc_info=True)
         except Exception as e:
+            # boundary: the thread must always emit finished so the dialog is released.
+            logger.warning("TickerValidateThread failed for ticker=%s", ticker, exc_info=True)
             err = str(e)
 
         self.finished.emit(is_valid, company, err or "")
@@ -205,21 +210,27 @@ class AssetMetricsPreloadThread(QThread):
         try:
             rate = float(get_usd_krw_rate())
         except Exception:
+            # boundary: get_usd_krw_rate already falls back on fetch errors; a bug must not kill the preload.
             rate = 0.0
-            logger.debug("AssetMetricsPreloadThread: USD/KRW fetch failed", exc_info=True)
+            logger.warning("AssetMetricsPreloadThread: USD/KRW fetch failed", exc_info=True)
         try:
             get_historical_data("KS11", start_date())
         except Exception:
-            logger.debug("AssetMetricsPreloadThread: KOSPI warm-up failed", exc_info=True)
+            # boundary: get_historical_data returns an empty frame on fetch errors; a bug must not kill the preload.
+            logger.warning("AssetMetricsPreloadThread: KOSPI warm-up failed", exc_info=True)
         snapshot = {}
         for d in self._dates:
             try:
                 usd = float(get_usd_krw_rate_for_date(d))
             except Exception:
+                # boundary: a failed lookup is shown as "-" (0.0); see the class docstring.
+                logger.warning("AssetMetricsPreloadThread: USD/KRW lookup failed for %s", d, exc_info=True)
                 usd = 0.0
             try:
                 kospi = float(get_index_close_for_date("KS11", d))
             except Exception:
+                # boundary: as above.
+                logger.warning("AssetMetricsPreloadThread: KOSPI lookup failed for %s", d, exc_info=True)
                 kospi = 0.0
             snapshot[d] = (usd, kospi)
         self.finished.emit(snapshot, rate)
@@ -252,6 +263,7 @@ class AssetReportThread(QThread):
             trades = trade_db.load_all_trades()
             kospi = self._series(get_historical_data("KS11", self._start))
         except Exception as e:
+            # boundary: the thread must always emit finished; covers trade_db (sqlite3) and the KOSPI fetch.
             logger.warning("AssetReportThread: trades/KOSPI load failed", exc_info=True)
             self.finished.emit([], {}, [], {}, str(e))
             return
@@ -263,7 +275,8 @@ class AssetReportThread(QThread):
             try:
                 series = self._series(get_historical_data(tk, self._start))
             except Exception:
-                logger.debug("AssetReportThread: history failed for %s", tk, exc_info=True)
+                # boundary: a ticker whose history fails is left out (valued at cost), see the class docstring.
+                logger.warning("AssetReportThread: history failed for %s", tk, exc_info=True)
                 continue
             if series:
                 closes[tk] = series
@@ -273,6 +286,8 @@ class AssetReportThread(QThread):
                 try:
                     usd_krw[d] = float(get_usd_krw_rate_for_date(d))
                 except Exception:
+                    # boundary: a failed rate is 0.0, as for the other lookups of this thread.
+                    logger.warning("AssetReportThread: USD/KRW lookup failed for %s", d, exc_info=True)
                     usd_krw[d] = 0.0
         self.finished.emit(trades, closes, kospi, usd_krw, "")
 
@@ -319,6 +334,7 @@ class AllDataFetchThread(QThread):
                     if not indices_data:
                         failed_parts.append("Indices")
                 except Exception as e:
+                    # boundary: a failed index step must not stop the market fetches below.
                     logger.warning("Error fetching indices: %s", e, exc_info=True)
                     failed_parts.append("Indices")
 
@@ -345,6 +361,7 @@ class AllDataFetchThread(QThread):
                         market_results[market] = data
                         self.market_loaded.emit(market, data)
                     except Exception as e:
+                        # boundary: one market's failure must not lose the others.
                         market = futures[future]
                         logger.warning("Error fetching %s: %s", market, e, exc_info=True)
                         market_results[market] = []
@@ -367,6 +384,7 @@ class AllDataFetchThread(QThread):
                     failed_parts.append(market)
             del market_results  # release the intermediate dict to free memory
         except Exception as e:
+            # boundary: the thread must reach finally and emit finished.
             logger.warning("Error inside AllDataFetchThread.run: %s", e, exc_info=True)
             failed_parts = (["Indices"] if self.include_indices else []) + list(self.markets)
         finally:
@@ -454,11 +472,13 @@ class UniverseLightweightFetchThread(QThread):
                             item["usd_price"] = new_price
                         updated_count += 1
                     except Exception:
+                        # boundary: one ticker's change-rate failure must not stop the price update of the rest.
                         logger.warning(
                             "UniverseLightweightFetchThread: change-rate fetch failed for ticker=%s",
                             ticker, exc_info=True,
                         )
         except Exception as e:
+            # boundary: the thread must reach finally and report the error.
             logger.warning("Error in UniverseLightweightFetchThread: %s", e, exc_info=True)
             error = str(e) or type(e).__name__
         finally:
@@ -549,6 +569,7 @@ class PositionPriceFetchThread(QThread):
                         market = "KOSDAQ"
                     name_to_info[name] = {"code": code, "market": market}
         except Exception as e:
+            # boundary: each step of this thread runs even when an earlier one failed.
             logger.warning("[PositionPriceFetch] KRX/ETF listing error: %s", e, exc_info=True)
 
         # ---Fetch real-time prices via Naver (KRX) ---
@@ -560,6 +581,7 @@ class PositionPriceFetchThread(QThread):
             try:
                 price_map = fetch_naver_realtime_prices(unique_codes)
             except Exception as e:
+                # boundary: each step of this thread runs even when an earlier one failed.
                 logger.warning("[PositionPriceFetch] Naver price error: %s", e, exc_info=True)
 
         # ---Fetch real-time prices via YahooQuery (US/Other) ---
@@ -596,6 +618,7 @@ class PositionPriceFetchThread(QThread):
                             us_price_map_usd[name] = raw_usd_price
                             us_price_map[name] = raw_usd_price * fx_rate
             except Exception as e:
+                # boundary: each step of this thread runs even when an earlier one failed.
                 logger.warning("[PositionPriceFetch] US price error: %s", e, exc_info=True)
 
         # ---Calculate P/L per position ---
@@ -666,6 +689,7 @@ class PositionPriceFetchThread(QThread):
                     wk2  = changes.get("10d", 0.0)
                     mth1 = changes.get("20d", 0.0)
                 except Exception as exc:
+                    # boundary: one position's trend failure must not drop the other rows.
                     logger.warning("Error fetching trend for %s: %s", name, exc, exc_info=True)
 
             return {
@@ -704,6 +728,7 @@ class AccountDepositThread(QThread):
         try:
             self.finished.emit(float(fetch_account_deposit()), "")
         except Exception as e:
+            # boundary: the thread must always emit finished; the error text is shown to the user.
             logger.warning("Account deposit fetch failed", exc_info=True)
             self.finished.emit(0.0, str(e))
 
@@ -750,6 +775,7 @@ class AutoBackupThread(QThread):
                         ", ".join(os.path.basename(f) for f in existing))
             self.backup_done.emit(tr(f"자동 백업 완료: {rel_dest}", f"Auto-backup complete: {rel_dest}"))
         except Exception:
+            # boundary: a failed backup must never affect startup; logged with traceback.
             logger.warning("Auto-backup failed", exc_info=True)
 
     @staticmethod
@@ -766,7 +792,7 @@ class AutoBackupThread(QThread):
         for old_dir in auto_dirs[:max(excess, 0)]:
             try:
                 shutil.rmtree(os.path.join(archive_dir, old_dir))
-            except Exception:
+            except OSError:
                 logger.warning("Failed to remove old auto-backup dir=%s", old_dir, exc_info=True)
 
 
@@ -789,5 +815,6 @@ class GeminiStockReportThread(QThread):
             result_text = gemini_helper.stock_report_summary(self.item)
             self.finished.emit(ticker, name, result_text, "")
         except Exception as e:
+            # boundary: the thread must always emit finished; the Gemini SDK raises arbitrary types.
             logger.warning("Gemini stock report failed for ticker=%s", ticker, exc_info=True)
             self.finished.emit(ticker, name, "", str(e))

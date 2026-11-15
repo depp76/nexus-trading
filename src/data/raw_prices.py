@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta
 import polars as pl
 
 from data.cache import _KIS_SESSION
-from data.collectors.kis import _KIS_BASE_URL, _kis_headers
+from data.collectors.kis import KIS_ERRORS, _KIS_BASE_URL, _kis_headers
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ def _get_page(ticker: str, start: date, cursor: date, attempts: int = 4, adjuste
             if body.get("rt_cd") == "0":
                 return body
             err = RuntimeError(f"KIS daily prices for {ticker} failed: {body.get('msg1')}")
-        except Exception as e:
+        except KIS_ERRORS as e:
             err = e
         if k == attempts - 1:
             raise err

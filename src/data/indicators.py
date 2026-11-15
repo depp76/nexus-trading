@@ -170,6 +170,7 @@ def fetch_historical_changes(ticker, current_price, df_pd=None, mode='pct'):
                 changes["ma20_roc_1w"] = (ma20 / ma20_5d_ago - 1) * 100
 
     except Exception:
+        # boundary: contract is the zero-filled changes dict on any failure (history fetch + numeric work for one ticker).
         logger.error("fetch_historical_changes failed for ticker=%s", ticker, exc_info=True)
 
     return changes

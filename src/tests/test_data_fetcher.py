@@ -7,6 +7,8 @@ import unittest
 from datetime import date, datetime, timedelta
 from unittest.mock import patch, MagicMock
 
+import requests
+
 import data_fetcher
 import data.cache as dcache
 import data.history as history
@@ -300,10 +302,11 @@ class TestYfQuoteBatch(unittest.TestCase):
         result = data_fetcher.yf_quote_batch(["TSLA"])
         self.assertIn("TSLA", result)
 
+    @patch("data.collectors.yahoo.time.sleep")
     @patch("data.collectors.yahoo._get_yf_crumb", return_value="crumb")
     @patch.object(data_fetcher._YF_SESSION, "get")
-    def test_network_error_returns_empty(self, mock_get, mock_crumb):
-        mock_get.side_effect = Exception("Connection error")
+    def test_network_error_returns_empty(self, mock_get, mock_crumb, _sleep):
+        mock_get.side_effect = requests.ConnectionError("Connection error")
         result = data_fetcher.yf_quote_batch(["AAPL"])
         self.assertEqual(result, {})
 

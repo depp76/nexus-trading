@@ -110,6 +110,7 @@ def get_stock_listing(market: str) -> pd.DataFrame:
     try:
         return fdr.StockListing(market)
     except Exception:
+        # kept broad: FinanceDataReader raises arbitrary third-party exception types.
         logger.error("fdr.StockListing('%s') failed", market, exc_info=True)
         return pd.DataFrame(columns=['Symbol', 'Code', 'Name', 'Market'])
 
@@ -134,7 +135,8 @@ def _fetch_recent_marcaps(today=None) -> tuple:
                 continue
             r.raise_for_status()
             df = pd.read_csv(io.StringIO(r.text), usecols=['Code', 'Marcap'], dtype={'Code': str})
-        except Exception:
+        except (requests.RequestException, ValueError):
+            # pandas CSV errors (ParserError, EmptyDataError, a missing usecols column) are ValueErrors.
             logger.warning("Could not read the market-cap file of %s", day, exc_info=True)
             return None, {}
         df = df.dropna(subset=['Marcap'])
@@ -181,5 +183,6 @@ def _fetch_kr_listing_fdr_fallback(market, top_n):
         rows.sort(key=lambda x: -x['Marcap'])
         return rows[:top_n]
     except Exception:
+        # boundary: contract is [] on any failure; the FDR listing and the CSV lookup raise assorted types.
         logger.warning("FDR listing fallback failed for market=%s", market, exc_info=True)
         return []

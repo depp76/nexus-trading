@@ -11,7 +11,7 @@ import polars as pl
 import requests
 import logging
 
-from data.cache import _KR3Y_CACHE, _KR3Y_LOCK, _NAVER_SESSION, _pdf_is_stale
+from data.cache import PAYLOAD_ERRORS, _KR3Y_CACHE, _KR3Y_LOCK, _NAVER_SESSION, _pdf_is_stale
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ def _fast_kr_history(ticker: str, start: str) -> pl.DataFrame:
                 res = _NAVER_SESSION.get(url, timeout=8)
                 res.raise_for_status()
                 break
-            except Exception as e:
+            except requests.RequestException as e:
                 if attempt == 2:
                     raise e
                 time.sleep(1)
@@ -45,7 +45,7 @@ def _fast_kr_history(ticker: str, start: str) -> pl.DataFrame:
         
         try:
             data = json.loads(text.strip())
-        except Exception:
+        except json.JSONDecodeError:
             logger.debug("json.loads failed for Naver history response, retrying with ast.literal_eval")
             data = ast.literal_eval(text.strip())
 
@@ -63,12 +63,13 @@ def _fast_kr_history(ticker: str, start: str) -> pl.DataFrame:
                         "Close": float(row[4]),
                         "Volume": float(row[5])
                     })
-                except Exception:
+                except (ValueError, TypeError, IndexError):
                     logger.debug("Skipping malformed Naver OHLCV row %r", row, exc_info=True)
             if rows:
                 df = pl.DataFrame(rows)
                 return df.unique(subset=["Date"], keep="last").sort("Date")
-    except Exception as e:
+    except (*PAYLOAD_ERRORS, SyntaxError) as e:
+        # PAYLOAD_ERRORS for the fetch/rows, SyntaxError from ast.literal_eval on a garbled body.
         logger.debug("_fast_kr_history failed for ticker=%s: %s", ticker, e)
     return pl.DataFrame()
 
@@ -95,7 +96,7 @@ def fetch_naver_realtime_prices(tickers: list) -> dict:
                         chunk_result[code] = float(price_str)
                     except ValueError:
                         pass
-        except Exception:
+        except PAYLOAD_ERRORS:
             logger.debug("Naver realtime prices fetch error", exc_info=True)
         return chunk_result
 
@@ -141,7 +142,7 @@ def fetch_naver_realtime_index_prices(symbols=("KOSPI", "KOSDAQ")) -> dict:
                         elif item_code == "KOSDAQ":
                             results["^KQ11"] = val
                             results["KQ11"] = val
-        except Exception:
+        except PAYLOAD_ERRORS:
             logger.debug("Failed to fetch Naver realtime index price for %s", code, exc_info=True)
     return results
 
@@ -176,7 +177,7 @@ def _fetch_naver_per_single(code: str) -> tuple:
                 elif key == '추정PER':
                     fper = fval
             return code, tper, fper
-    except Exception:
+    except PAYLOAD_ERRORS:
         logger.debug("_fetch_naver_per_single failed for code=%s", code, exc_info=True)
     return code, None, None
 
@@ -200,7 +201,8 @@ def fetch_naver_per_batch(codes: list, max_workers: int = 30) -> tuple:
                 if fper is not None:
                     fper_map[code] = fper
             except Exception:
-                logger.debug("Naver PER fetch failed for %s", futures[fut], exc_info=True)
+                # boundary: one future must not lose the whole batch; the worker catches fetch errors itself, so only bugs land here.
+                logger.warning("Naver PER fetch failed for %s", futures[fut], exc_info=True)
     return tper_map, fper_map
 
 
@@ -234,7 +236,7 @@ def _fetch_naver_info(code: str) -> tuple:
                     break
             if name or marcap > 0:
                 return name, marcap
-    except Exception:
+    except PAYLOAD_ERRORS:
         logger.debug("Naver integration info fetch failed for code=%s", code, exc_info=True)
 
     # Second attempt: mobile basic API
@@ -246,7 +248,7 @@ def _fetch_naver_info(code: str) -> tuple:
             name = data.get("stockName", "").strip()
             if name:
                 return name, 0
-    except Exception:
+    except PAYLOAD_ERRORS:
         logger.debug("Naver basic info fetch failed for code=%s", code, exc_info=True)
 
     # Third attempt: HTML scraping fallback
@@ -263,7 +265,7 @@ def _fetch_naver_info(code: str) -> tuple:
             txt = m.group(2).replace(',', '').replace('\n', '').replace('\t', '').strip()
             marcap = _parse_marcap_krw(txt)
         return name, marcap
-    except Exception:
+    except (requests.RequestException, ValueError):
         logger.debug("Naver info fetch failed for code=%s", code, exc_info=True)
     return "", 0
 
@@ -300,7 +302,7 @@ def _fetch_kr_listing_naver(market, top_n):
                     marcap = int(cleaned) * 100_000_000 if cleaned else 0
                 rows.append({"Code": code, "Name": name, "Marcap": marcap})
             return rows
-        except Exception:
+        except PAYLOAD_ERRORS:
             logger.warning("Naver listing API fetch failed for market=%s page=%d", market, pg, exc_info=True)
             return []
 
@@ -351,6 +353,7 @@ def _get_kr3y_df():
             logger.warning("KR3Y fetch failed, keeping cached series: %s", e)
             return cached
         except Exception:
+            # kept broad: pd.read_html / to_datetime raise assorted types on a changed page layout.
             # Anything else means the page layout changed, which needs the traceback.
             logger.error("KR3Y parse failed", exc_info=True)
             return cached
@@ -363,7 +366,7 @@ def _fetch_index_investor_trend(market: str, days: int = 60) -> list:
         res = _NAVER_SESSION.get(url_price, timeout=5)
         res.raise_for_status()
         price_data = res.json()
-    except Exception:
+    except PAYLOAD_ERRORS:
         logger.error("Error fetching %s investor trend dates", market, exc_info=True)
         return []
 
@@ -398,7 +401,7 @@ def _fetch_index_investor_trend(market: str, days: int = 60) -> list:
                 "Institution": inst,
                 "Retail": retail,
             }
-        except Exception:
+        except PAYLOAD_ERRORS:
             logger.debug("Investor trend day fetch failed for market=%s date=%s", market, date_str, exc_info=True)
             return None
 
@@ -465,7 +468,7 @@ def _fetch_investor_trend_naver(ticker: str, days: int = 60) -> list:
             res = _NAVER_SESSION.get(url, params=params, timeout=8)
             res.raise_for_status()
             items = res.json()
-        except Exception:
+        except PAYLOAD_ERRORS:
             logger.warning("[_fetch_investor_trend_naver] Error for ticker=%s bizdate=%s", ticker, bizdate, exc_info=True)
             break
         if not items:
@@ -595,5 +598,6 @@ def fetch_quarterly_financials(ticker: str, market: str):
 
             return rows
     except Exception:
+        # boundary: contract is [] on any failure, and the US branch goes through yahooquery, which raises arbitrary types.
         logger.error("Quarterly financials fetch failed for ticker=%s", ticker, exc_info=True)
         return []
