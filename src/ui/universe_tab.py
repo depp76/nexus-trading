@@ -148,7 +148,19 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         # the right, the primary action last. Widgets take the app font and
         # the theme's input/button heights; no per-widget font.
         bar = QHBoxLayout()
+        self._build_filter_bar(bar)
+        add_row = self._build_add_row()
+        self._build_action_buttons(bar)
 
+        universe_layout.addLayout(bar)
+        universe_layout.addLayout(add_row)
+
+        self._build_table(universe_layout)
+        self._build_footer(universe_layout)
+
+    def _build_filter_bar(self, bar: QHBoxLayout) -> None:
+        """Left part of the toolbar: search, market toggles, status filter,
+        range filters and saved views, then the stretch."""
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText(tr("종목명 또는 코드 검색", "Search name or ticker"))
         self.search_input.setMinimumWidth(180)
@@ -156,24 +168,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.search_input.textChanged.connect(self.filter_table)
         bar.addWidget(self.search_input)
 
-        # Markets (docs/ui.md 2.1): KOSPI/KOSDAQ/NASDAQ/S&P500 toggles, any
-        # combination, at least one. A market that is on is fetched by a
-        # refresh and shown; switching one on after a refresh fetches just
-        # that market (user direction 2026-11-14; replaced the single-choice
-        # ALL/KOSPI/KOSDAQ filter). Index rows always show. The filter
-        # toggles share one size and one gap (user direction 2026-09-19).
-        bar.addSpacing(8)
-        self._market_buttons = {}
-        for m, label in MARKETS.items():
-            btn = self._filter_button(label.replace("&", "&&"), checked=(m in DEFAULT_UNIVERSE_MARKETS))
-            btn.setFixedWidth(max(self._FILTER_BTN_W, btn.sizeHint().width()))   # "NASDAQ 100" is wider
-            btn.setToolTip(tr(f"{label}: 켜면 새로고침이 이 시장(상위 {UNIVERSE_MARKET_SIZES[m]}종목)을 받아 와 "
-                              "표에 보여 줍니다. 최소 한 시장은 켜져 있어야 합니다.",
-                              f"{label}: when on, Refresh fetches this market (top {UNIVERSE_MARKET_SIZES[m]} names) "
-                              "and shows it in the table. At least one market must stay on."))
-            btn.clicked.connect(lambda checked, mk=m: self._on_market_toggled(mk, checked))
-            bar.addWidget(btn)
-            self._market_buttons[m] = btn
+        self._build_market_buttons(bar)
 
         # Status filter: one button cycling All (no filter) -> Held -> Target
         # (user direction 2026-09-29; "All" label since 2026-11-14); fixed width
@@ -197,6 +192,27 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
         bar.addStretch()
 
+    def _build_market_buttons(self, bar: QHBoxLayout) -> None:
+        # Markets (docs/ui.md 2.1): KOSPI/KOSDAQ/NASDAQ/S&P500 toggles, any
+        # combination, at least one. A market that is on is fetched by a
+        # refresh and shown; switching one on after a refresh fetches just
+        # that market (user direction 2026-11-14; replaced the single-choice
+        # ALL/KOSPI/KOSDAQ filter). Index rows always show. The filter
+        # toggles share one size and one gap (user direction 2026-09-19).
+        bar.addSpacing(8)
+        self._market_buttons = {}
+        for m, label in MARKETS.items():
+            btn = self._filter_button(label.replace("&", "&&"), checked=(m in DEFAULT_UNIVERSE_MARKETS))
+            btn.setFixedWidth(max(self._FILTER_BTN_W, btn.sizeHint().width()))   # "NASDAQ 100" is wider
+            btn.setToolTip(tr(f"{label}: 켜면 새로고침이 이 시장(상위 {UNIVERSE_MARKET_SIZES[m]}종목)을 받아 와 "
+                              "표에 보여 줍니다. 최소 한 시장은 켜져 있어야 합니다.",
+                              f"{label}: when on, Refresh fetches this market (top {UNIVERSE_MARKET_SIZES[m]} names) "
+                              "and shows it in the table. At least one market must stay on."))
+            btn.clicked.connect(lambda checked, mk=m: self._on_market_toggled(mk, checked))
+            bar.addWidget(btn)
+            self._market_buttons[m] = btn
+
+    def _build_add_row(self) -> QHBoxLayout:
         # Add a ticker: its own row under the filters (docs/ui.md 8.17), so the
         # first row is filters | analysis + primary. The market combo has no
         # caption since 2026-11-15 (its tooltip says it is not the filter);
@@ -223,7 +239,10 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.add_ticker_btn = make_button(tr("종목 추가", "Add Ticker"), on_click=self.add_ticker)
         add_row.addWidget(self.add_ticker_btn)
         add_row.addStretch()
+        return add_row
 
+    def _build_action_buttons(self, bar: QHBoxLayout) -> None:
+        """Right end of the toolbar: Trend Score, then the primary Refresh."""
         # Weekly "trend + pullback" Top/Bottom recommendation
         # (trend_following.md 2-5; scoring.py via TrendScoreThread). Checked
         # while a run's Top/Bottom rows are pinned to the top of the table;
@@ -241,9 +260,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.refresh_btn = make_button(tr("새로고침", "Refresh"), "primary", self.refresh_data)
         bar.addWidget(self.refresh_btn)
 
-        universe_layout.addLayout(bar)
-        universe_layout.addLayout(add_row)
-
+    def _build_table(self, universe_layout: QVBoxLayout) -> None:
         self.table = StockTable()
         self.table.col_filter_changed.connect(self.filter_table)
         self.table.ai_report_requested.connect(self._on_ai_report_requested)
@@ -254,6 +271,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
         universe_layout.addWidget(self.table, 1)
 
+    def _build_footer(self, universe_layout: QVBoxLayout) -> None:
         # Footer: this tab's lasting status line (load/progress/Trend Score
         # results). It used to be MainWindow's shared footer row, visible on
         # every tab though only this tab wrote to it (docs/ui.md 8.4).

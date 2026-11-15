@@ -273,14 +273,43 @@ def build_dataset(calendar: list[date], index_close: np.ndarray, stock_frames: d
     close, forward-filled). `bm_frames` / `bm_markets` hold one ETF per
     market for the BM1/BM3 mix; `index_close` may be None and is then the
     first market's index."""
+    calendar, index_close = _apply_cutoff(calendar, index_close, cutoff)
+    stocks = PriceBook.from_frames(stock_frames, calendar, markets, names)
+    index_close, index_by_market, open_days = _align_market_indexes(stocks, calendar, index_close,
+                                                                    market_index_frames)
+    bm, bm_ticker = _benchmark_book(calendar, bm_frame, bm_ticker, bm_frames, bm_markets, open_days)
+    fx_source = _convert_us_to_krw(calendar, (stocks, bm), fx_frame)
+    flow_fi, flow_retail = _flow_arrays(stocks, calendar, flow_frames)
+    rate, rf_source = _risk_free_rates(calendar, rf_frame, rf_fallback, rf_source)
+    rf_period = _rf_period_from_annual(calendar, rate)
+    start_idx = _eval_start_idx(calendar, start)
+    bm_tr = bool(bm_is_total_return and bm is not None)
+    meta = _dataset_meta(stocks, calendar, start_idx, bm_ticker if bm is not None else "", bm_tr,
+                         rf_source, flow_fi is not None, fx_source, info)
+    return Dataset(
+        stocks=stocks, index_close=index_close, bm=bm, bm_is_total_return=bm_tr,
+        rf_annual=rate, rf_period=rf_period, rf_source=rf_source,
+        flow_fi=flow_fi, flow_retail=flow_retail, start_idx=start_idx, info=meta, index_by_market=index_by_market,
+    )
+
+
+def _apply_cutoff(calendar, index_close, cutoff: date | None) -> tuple[list[date], np.ndarray | None]:
+    """The calendar as dates, without the rows after `cutoff` (spec 5 development-window guard)."""
     calendar = [_to_date(d) for d in calendar]
     if cutoff is not None:
         keep = [i for i, d in enumerate(calendar) if d <= cutoff]
         calendar = [calendar[i] for i in keep]
         if index_close is not None:
             index_close = np.asarray(index_close, dtype=float)[keep]
-    stocks = PriceBook.from_frames(stock_frames, calendar, markets, names)
+    return calendar, index_close
 
+
+def _align_market_indexes(stocks: PriceBook, calendar: list[date], index_close,
+                          market_index_frames: dict[str, pl.DataFrame] | None
+                          ) -> tuple[np.ndarray, dict[str, np.ndarray] | None, dict[str, np.ndarray]]:
+    """(index_close, index_by_market, open_days), spec 9-25: each market's index on the
+    calendar (forward/back-filled) and the days it traded; the closed days of `stocks`
+    are filled in place. One market (no frames) keeps `index_close` as given."""
     index_by_market = None
     open_days: dict[str, np.ndarray] = {}
     if market_index_frames:
@@ -292,8 +321,14 @@ def build_dataset(calendar: list[date], index_close: np.ndarray, stock_frames: d
         if index_close is None:
             index_close = next(iter(index_by_market.values()))
         _fill_closed_days(stocks, open_days)
-    index_close = np.asarray(index_close, dtype=float)
+    return np.asarray(index_close, dtype=float), index_by_market, open_days
 
+
+def _benchmark_book(calendar: list[date], bm_frame: pl.DataFrame | None, bm_ticker: str,
+                    bm_frames: dict[str, pl.DataFrame] | None, bm_markets: dict[str, str] | None,
+                    open_days: dict[str, np.ndarray]) -> tuple[PriceBook | None, str]:
+    """(BM ETF PriceBook or None, its ticker label): the per-market ETF mix (spec 9-25,
+    tickers joined by "+") when `bm_frames` is given, else the single BM1 ETF (spec 6-3)."""
     bm = None
     if bm_frames:
         frames = {tk: f for tk, f in bm_frames.items() if f is not None and not f.is_empty()}
@@ -305,63 +340,84 @@ def build_dataset(calendar: list[date], index_close: np.ndarray, stock_frames: d
             bm_ticker = "+".join(frames)
     elif bm_frame is not None and not bm_frame.is_empty():
         bm = PriceBook.from_frames({bm_ticker: bm_frame}, calendar, {bm_ticker: "ETF"}, {bm_ticker: bm_ticker})
+    return bm, bm_ticker
 
-    us_books = [bk for bk in (stocks, bm) if bk is not None and any(m in US_MARKETS for m in bk.markets.values())]
-    fx_source = ""
-    if us_books:
-        fx = align_frame(fx_frame, calendar, ["Close"])["Close"]
-        fx = pd.Series(fx).ffill().bfill().to_numpy(dtype=float)
-        if not np.isfinite(fx).any():
-            raise RuntimeError("USD/KRW history unavailable: US prices cannot be converted to KRW")
-        for bk in us_books:
-            _to_krw(bk, fx)
-        fx_source = "USD/KRW daily close (data.fx), forward-filled"
 
-    flow_fi = flow_retail = None
-    if flow_frames:
-        T, N = stocks.T, stocks.N
-        flow_fi = np.full((T, N), np.nan)
-        flow_retail = np.full((T, N), np.nan)
-        for tk, fdf in flow_frames.items():
-            if tk not in stocks._col or fdf is None or fdf.is_empty():
-                continue
-            j = stocks.col(tk)
-            cols = align_frame(fdf, calendar, ["Foreigner", "Institution", "Retail", "Close"])
-            px = cols["Close"]
-            # Amount proxy: net quantity x the same page's close (spec 2-3 normalises
-            # by trading value, so both sides are in KRW).
-            flow_fi[:, j] = (cols["Foreigner"] + cols["Institution"]) * px
-            # Since NEX-23 (Naver mobile trend API) "Retail" is the API's own
-            # individual net purchase, not -(Foreigner + Institution): other
-            # corporations/the state make the three not sum to zero. Snapshots
-            # built before that (<= dev_2021_2024_nex21) had flow_retail == -flow_fi.
-            flow_retail[:, j] = cols["Retail"] * px
+def _convert_us_to_krw(calendar: list[date], books, fx_frame: pl.DataFrame | None) -> str:
+    """Convert the US names of `books` to KRW in place (spec 9-25); returns the fx
+    source label ("" when no book holds a US name)."""
+    us_books = [bk for bk in books if bk is not None and any(m in US_MARKETS for m in bk.markets.values())]
+    if not us_books:
+        return ""
+    fx = align_frame(fx_frame, calendar, ["Close"])["Close"]
+    fx = pd.Series(fx).ffill().bfill().to_numpy(dtype=float)
+    if not np.isfinite(fx).any():
+        raise RuntimeError("USD/KRW history unavailable: US prices cannot be converted to KRW")
+    for bk in us_books:
+        _to_krw(bk, fx)
+    return "USD/KRW daily close (data.fx), forward-filled"
 
+
+def _flow_arrays(stocks: PriceBook, calendar: list[date], flow_frames: dict[str, pl.DataFrame] | None
+                 ) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """(flow_fi, flow_retail): T x N KRW flow amounts for the spec 2-3 F filter, or (None, None)."""
+    if not flow_frames:
+        return None, None
+    T, N = stocks.T, stocks.N
+    flow_fi = np.full((T, N), np.nan)
+    flow_retail = np.full((T, N), np.nan)
+    for tk, fdf in flow_frames.items():
+        if tk not in stocks._col or fdf is None or fdf.is_empty():
+            continue
+        j = stocks.col(tk)
+        cols = align_frame(fdf, calendar, ["Foreigner", "Institution", "Retail", "Close"])
+        px = cols["Close"]
+        # Amount proxy: net quantity x the same page's close (spec 2-3 normalises
+        # by trading value, so both sides are in KRW).
+        flow_fi[:, j] = (cols["Foreigner"] + cols["Institution"]) * px
+        # Since NEX-23 (Naver mobile trend API) "Retail" is the API's own
+        # individual net purchase, not -(Foreigner + Institution): other
+        # corporations/the state make the three not sum to zero. Snapshots
+        # built before that (<= dev_2021_2024_nex21) had flow_retail == -flow_fi.
+        flow_retail[:, j] = cols["Retail"] * px
+    return flow_fi, flow_retail
+
+
+def _risk_free_rates(calendar: list[date], rf_frame: pl.DataFrame | None, rf_fallback: float,
+                     rf_source: str) -> tuple[np.ndarray, str]:
+    """(annual risk-free rate per row, source label) for BM4 (spec 6-3): the rate series
+    filled with `rf_fallback` where missing, or that constant when there is no series."""
     if rf_frame is not None and not rf_frame.is_empty() and "Rate" in rf_frame.columns:
         rate = align_frame(rf_frame, calendar, ["Rate"])["Rate"]
         rate = pd.Series(rate).ffill().bfill().to_numpy(dtype=float) / 100.0
         rate = np.where(np.isfinite(rate), rate, rf_fallback)
-        rf_source = rf_source or "series"
-    else:
-        rate = np.full(len(calendar), float(rf_fallback))
-        rf_source = rf_source or f"constant {rf_fallback:.2%}"
-    rf_period = _rf_period_from_annual(calendar, rate)
+        return rate, rf_source or "series"
+    return np.full(len(calendar), float(rf_fallback)), rf_source or f"constant {rf_fallback:.2%}"
 
+
+def _eval_start_idx(calendar: list[date], start) -> int:
+    """First calendar index on or after `start`; ValueError when there is none."""
     start = _to_date(start)
     start_idx = next((i for i, d in enumerate(calendar) if d >= start), len(calendar))
     if start_idx >= len(calendar):
         raise ValueError(f"No trading days on or after {start} in the loaded calendar")
+    return start_idx
 
+
+def _dataset_meta(stocks: PriceBook, calendar: list[date], start_idx: int, bm_ticker: str, bm_tr: bool,
+                  rf_source: str, has_flows: bool, fx_source: str, info: dict | None) -> dict:
+    """`Dataset.info`: provenance, the survivorship note (spec 5) and the universe
+    impact (checklist B1), overridden by the caller's `info`."""
     selected = tuple((info or {}).get("markets") or ("KOSPI",))
     meta = {
         "n_tickers": stocks.N,
         "calendar_start": calendar[0].isoformat() if calendar else "",
         "eval_start": calendar[start_idx].isoformat(),
         "eval_end": calendar[-1].isoformat() if calendar else "",
-        "bm_ticker": bm_ticker if bm is not None else "",
-        "bm_is_total_return": bool(bm_is_total_return and bm is not None),
+        "bm_ticker": bm_ticker,
+        "bm_is_total_return": bm_tr,
         "rf_source": rf_source,
-        "has_flows": flow_fi is not None,
+        "has_flows": has_flows,
         "universe": f"current {'+'.join(selected)} stocks by market cap"
                     f"{' (KRW-converted, ranked together)' if len(selected) > 1 else ''}, ETF/ETN excluded "
                     "(survivorship bias: no point-in-time list)",
@@ -370,11 +426,7 @@ def build_dataset(calendar: list[date], index_close: np.ndarray, stock_frames: d
         **universe_impact(stocks, start_idx),
     }
     meta.update(info or {})
-    return Dataset(
-        stocks=stocks, index_close=index_close, bm=bm, bm_is_total_return=bool(bm_is_total_return and bm is not None),
-        rf_annual=rate, rf_period=rf_period, rf_source=rf_source,
-        flow_fi=flow_fi, flow_retail=flow_retail, start_idx=start_idx, info=meta, index_by_market=index_by_market,
-    )
+    return meta
 
 
 def _kr_days(open_days: dict[str, np.ndarray]) -> np.ndarray | None:
@@ -470,34 +522,74 @@ def load_dataset(start, end=None, universe_size: int = 200, include_flows: bool 
         return _load_multi_market(start, end, warm_start, markets, universe_size, include_flows, p, progress,
                                   max_workers, min_rows, should_stop, allow_holdout)
 
+    calendar, index_close = _load_kospi_calendar(warm_start, end, progress, should_stop)
+    if tickers:
+        codes, names, excluded = _pinned_universe(tickers, ticker_names, excluded_etf, fixed_source, progress)
+    else:
+        codes, names, excluded = _kospi_universe(universe_size, progress)
+    frames = _load_histories(codes, ws, end, max_workers, min_rows, progress, should_stop)
+    markets = {c: "KOSPI" for c in frames}
+    flow_frames = (_load_flows(list(frames), ws, end, max_workers, progress, should_stop)
+                   if include_flows else None)
+    bm_ticker, bm_tr, bm_df = _load_kospi_benchmark(ws, end, progress, should_stop)
+    rf_df, rf_source = _load_cd91(ws, end, progress)
+
+    return build_dataset(
+        calendar, index_close, frames, start, markets, names,
+        bm_frame=bm_df, bm_ticker=bm_ticker, bm_is_total_return=bm_tr,
+        flow_frames=flow_frames, rf_frame=rf_df, rf_fallback=p.risk_free_fallback, rf_source=rf_source,
+        info={"universe_size_requested": universe_size, "flows_requested": include_flows,
+              "cutoff": end.isoformat(), "holdout_allowed": bool(allow_holdout),
+              "excluded_etf": excluded, "universe_fixed_from": fixed_source,
+              "universe_built_on": date.today().isoformat()},
+        cutoff=end,
+    )
+
+
+def _load_kospi_calendar(warm_start: date, end: date, progress, should_stop) -> tuple[list[date], np.ndarray]:
+    """(calendar, KOSPI close on it): the KOSPI trading days from `warm_start` to `end` (spec 5)."""
     _check_stop(should_stop)
     _say(progress, tr("KOSPI 지수 이력 불러오는 중...", "Loading KOSPI index history..."))
-    idx_df = _cut_frame(get_historical_data("KS11", ws), end)
+    idx_df = _cut_frame(get_historical_data("KS11", warm_start.isoformat()), end)
     if idx_df is None or idx_df.is_empty():
         raise RuntimeError("KOSPI index history unavailable (data.history returned nothing)")
     idx_dates = [_to_date(d) for d in idx_df.get_column("Date").to_list()]
     calendar = [d for d in idx_dates if warm_start <= d <= end]
     if not calendar:
         raise RuntimeError(f"No KOSPI trading days between {warm_start} and {end}")
-    index_close = align_frame(idx_df, calendar, ["Close"])["Close"]
+    return calendar, align_frame(idx_df, calendar, ["Close"])["Close"]
 
-    if tickers:
-        codes = [str(c).zfill(6) for c in tickers]
-        names = {c: str((ticker_names or {}).get(c, "")) for c in codes}
-        excluded = list(excluded_etf or [])
-        _say(progress, tr(f"고정 목록 {len(codes)}종목 사용 ({fixed_source or '호출자'})", f"Using the fixed list of {len(codes)} names from {fixed_source or 'the caller'}"))
-    else:
-        _say(progress, tr(f"KOSPI 상위 {universe_size} 목록 불러오는 중 (ETF/ETN 제외)...", f"Loading KOSPI top {universe_size} listing (ETF/ETN excluded)..."))
-        listing = _load_listing(universe_size * LISTING_POOL_FACTOR)
-        if not listing:
-            raise RuntimeError("KOSPI listing unavailable (Naver and FDR both failed)")
-        kept, excluded_rows = select_stock_universe(listing, universe_size)
-        excluded = [{"Code": str(r["Code"]).zfill(6), "Name": str(r.get("Name", ""))} for r in excluded_rows]
-        codes = [str(r["Code"]).zfill(6) for r in kept]
-        names = {str(r["Code"]).zfill(6): str(r.get("Name", "")) for r in kept}
-        if len(kept) < universe_size:
-            logger.warning("only %d stocks left after the ETF/ETN filter (requested %d)", len(kept), universe_size)
 
+def _pinned_universe(tickers, ticker_names, excluded_etf, fixed_source: str,
+                     progress) -> tuple[list[str], dict[str, str], list[dict]]:
+    """(codes, names, excluded ETF rows) of a caller-pinned ticker list, taken as given."""
+    codes = [str(c).zfill(6) for c in tickers]
+    names = {c: str((ticker_names or {}).get(c, "")) for c in codes}
+    excluded = list(excluded_etf or [])
+    _say(progress, tr(f"고정 목록 {len(codes)}종목 사용 ({fixed_source or '호출자'})", f"Using the fixed list of {len(codes)} names from {fixed_source or 'the caller'}"))
+    return codes, names, excluded
+
+
+def _kospi_universe(universe_size: int, progress) -> tuple[list[str], dict[str, str], list[dict]]:
+    """(codes, names, excluded ETF rows): the current KOSPI top `universe_size` stocks by
+    market cap, ETFs / ETNs dropped (spec 2-0)."""
+    _say(progress, tr(f"KOSPI 상위 {universe_size} 목록 불러오는 중 (ETF/ETN 제외)...", f"Loading KOSPI top {universe_size} listing (ETF/ETN excluded)..."))
+    listing = _load_listing(universe_size * LISTING_POOL_FACTOR)
+    if not listing:
+        raise RuntimeError("KOSPI listing unavailable (Naver and FDR both failed)")
+    kept, excluded_rows = select_stock_universe(listing, universe_size)
+    excluded = [{"Code": str(r["Code"]).zfill(6), "Name": str(r.get("Name", ""))} for r in excluded_rows]
+    codes = [str(r["Code"]).zfill(6) for r in kept]
+    names = {str(r["Code"]).zfill(6): str(r.get("Name", "")) for r in kept}
+    if len(kept) < universe_size:
+        logger.warning("only %d stocks left after the ETF/ETN filter (requested %d)", len(kept), universe_size)
+    return codes, names, excluded
+
+
+def _load_histories(codes: list[str], ws: str, end: date, max_workers: int, min_rows: int,
+                    progress, should_stop) -> dict[str, pl.DataFrame]:
+    """Daily OHLCV of `codes` cut at `end`, in `codes` order; names with fewer than
+    `min_rows` bars or a failed fetch are dropped. RuntimeError when none is left."""
     _check_stop(should_stop)
     _say(progress, tr(f"{len(codes)}종목 일봉 불러오는 중...", f"Loading daily history for {len(codes)} names..."))
     frames: dict[str, pl.DataFrame] = {}
@@ -519,29 +611,35 @@ def load_dataset(start, end=None, universe_size: int = 200, include_flows: bool 
                 _say(progress, tr(f"일봉 {done}/{len(codes)} (사용 가능 {len(frames)})", f"Daily history {done}/{len(codes)} ({len(frames)} usable)"))
     if not frames:
         raise RuntimeError("No usable stock histories were loaded")
-    frames = {c: frames[c] for c in codes if c in frames}   # keep market-cap order
-    markets = {c: "KOSPI" for c in frames}
+    return {c: frames[c] for c in codes if c in frames}   # keep market-cap order
 
-    flow_frames = None
-    if include_flows:
-        flow_frames = {}
-        done = 0
-        with ThreadPoolExecutor(max_workers=max(1, min(max_workers, 4))) as exe:
-            futures = {exe.submit(get_investor_flows, c, ws): c for c in frames}
-            for fut in as_completed(futures):
-                _check_stop(should_stop, futures)
-                c = futures[fut]
-                done += 1
-                try:
-                    fdf = _cut_frame(fut.result(), end)
-                except Exception:
-                    logger.warning("investor flow fetch failed for %s", c, exc_info=True)
-                    fdf = None
-                if fdf is not None and not fdf.is_empty():
-                    flow_frames[c] = fdf
-                if done % 10 == 0 or done == len(frames):
-                    _say(progress, tr(f"투자자 수급 {done}/{len(frames)} (자료 있음 {len(flow_frames)})", f"Investor flows {done}/{len(frames)} ({len(flow_frames)} with data)"))
 
+def _load_flows(codes: list[str], ws: str, end: date, max_workers: int, progress,
+                should_stop) -> dict[str, pl.DataFrame]:
+    """Investor-flow frames (spec 2-3) of `codes` cut at `end`; failed or empty ones are left out."""
+    flow_frames: dict[str, pl.DataFrame] = {}
+    done = 0
+    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, 4))) as exe:
+        futures = {exe.submit(get_investor_flows, c, ws): c for c in codes}
+        for fut in as_completed(futures):
+            _check_stop(should_stop, futures)
+            c = futures[fut]
+            done += 1
+            try:
+                fdf = _cut_frame(fut.result(), end)
+            except Exception:
+                logger.warning("investor flow fetch failed for %s", c, exc_info=True)
+                fdf = None
+            if fdf is not None and not fdf.is_empty():
+                flow_frames[c] = fdf
+            if done % 10 == 0 or done == len(codes):
+                _say(progress, tr(f"투자자 수급 {done}/{len(codes)} (자료 있음 {len(flow_frames)})", f"Investor flows {done}/{len(codes)} ({len(flow_frames)} with data)"))
+    return flow_frames
+
+
+def _load_kospi_benchmark(ws: str, end: date, progress, should_stop) -> tuple[str, bool, pl.DataFrame | None]:
+    """(ticker, is total return, frame) of the BM1 ETF (spec 6-3): KODEX 200TR, else the
+    price-return KODEX 200."""
     _check_stop(should_stop)
     _say(progress, tr("벤치마크 ETF 불러오는 중...", "Loading benchmark ETF..."))
     bm_ticker, bm_tr = BM_TR_TICKER, True
@@ -549,7 +647,11 @@ def load_dataset(start, end=None, universe_size: int = 200, include_flows: bool 
     if bm_df is None or bm_df.is_empty():
         bm_ticker, bm_tr = BM_PRICE_FALLBACK_TICKER, False
         bm_df = _cut_frame(get_historical_data(bm_ticker, ws), end)
+    return bm_ticker, bm_tr, bm_df
 
+
+def _load_cd91(ws: str, end: date, progress) -> tuple[pl.DataFrame | None, str]:
+    """(CD91 rate frame or None, source label) for BM4 / cash interest (spec 6-3)."""
     _say(progress, tr("CD 91일 금리 불러오는 중...", "Loading CD 91-day rate..."))
     rf_source = ""
     try:
@@ -559,17 +661,7 @@ def load_dataset(start, end=None, universe_size: int = 200, include_flows: bool 
     except Exception:
         logger.warning("CD91 rate load failed, using the constant fallback", exc_info=True)
         rf_df = None
-
-    return build_dataset(
-        calendar, index_close, frames, start, markets, names,
-        bm_frame=bm_df, bm_ticker=bm_ticker, bm_is_total_return=bm_tr,
-        flow_frames=flow_frames, rf_frame=rf_df, rf_fallback=p.risk_free_fallback, rf_source=rf_source,
-        info={"universe_size_requested": universe_size, "flows_requested": include_flows,
-              "cutoff": end.isoformat(), "holdout_allowed": bool(allow_holdout),
-              "excluded_etf": excluded, "universe_fixed_from": fixed_source,
-              "universe_built_on": date.today().isoformat()},
-        cutoff=end,
-    )
+    return rf_df, rf_source
 
 
 # ---------------------------------------------------------------------------
@@ -596,6 +688,37 @@ def _ranked_listing(market: str, pool: int, usd_krw: float) -> tuple[list[dict],
 def _load_multi_market(start, end, warm_start, markets, universe_size, include_flows, p, progress, max_workers,
                        min_rows, should_stop, allow_holdout) -> Dataset:
     ws = warm_start.isoformat()
+    index_frames, calendar = _load_market_indexes(markets, warm_start, end, progress, should_stop)
+    fx_frame, usd_krw = _load_fx(markets, end, progress)
+    codes, names, market_of, excluded = _multi_market_universe(markets, universe_size, usd_krw, progress,
+                                                               should_stop)
+    frames = _load_histories(codes, ws, end, max_workers, min_rows, progress, should_stop)
+    kr_codes = [c for c in frames if market_of[c] not in US_MARKETS]
+    flow_frames = (_load_flows(kr_codes, ws, end, max_workers, progress, should_stop)
+                   if include_flows and kr_codes else None)
+    bm_frames, bm_tr, bm_missing = _load_market_benchmarks(markets, ws, end, progress, should_stop)
+    bm_markets = {tk: BM_ETF_COST_MARKET.get(tk, "ETF") for tk in bm_frames}
+    rf_df, rf_source = _load_cd91(ws, end, progress)
+
+    return build_dataset(
+        calendar, None, frames, start, market_of, names,
+        bm_frames=bm_frames, bm_markets=bm_markets, bm_is_total_return=bm_tr,
+        flow_frames=flow_frames, rf_frame=rf_df, rf_fallback=p.risk_free_fallback, rf_source=rf_source,
+        market_index_frames=index_frames, fx_frame=fx_frame,
+        info={"universe_size_requested": universe_size, "flows_requested": include_flows,
+              "cutoff": end.isoformat(), "holdout_allowed": bool(allow_holdout),
+              "excluded_etf": excluded, "universe_fixed_from": "",
+              "universe_built_on": date.today().isoformat(), "markets": list(markets),
+              "bm_requested": [MARKET_BM_ETF[m] for m in markets], "bm_missing": bm_missing,
+              "names_by_market": {m: sum(1 for c in frames if market_of[c] == m) for m in markets}},
+        cutoff=end,
+    )
+
+
+def _load_market_indexes(markets, warm_start: date, end: date, progress,
+                         should_stop) -> tuple[dict[str, pl.DataFrame], list[date]]:
+    """(market -> index frame, union calendar from `warm_start` to `end`), spec 9-25."""
+    ws = warm_start.isoformat()
     index_frames: dict[str, pl.DataFrame] = {}
     days: set = set()
     for m in markets:
@@ -609,16 +732,24 @@ def _load_multi_market(start, end, warm_start, markets, universe_size, include_f
     calendar = sorted(d for d in days if warm_start <= d <= end)
     if not calendar:
         raise RuntimeError(f"No trading days between {warm_start} and {end}")
+    return index_frames, calendar
 
-    fx_frame = None
-    usd_krw = 0.0
-    if any(m in US_MARKETS for m in markets):
-        _say(progress, tr("USD/KRW 환율 이력 불러오는 중...", "Loading USD/KRW history..."))
-        fx_frame = _cut_frame(get_usd_krw_history(), end)
-        if fx_frame is None or fx_frame.is_empty():
-            raise RuntimeError("USD/KRW history unavailable: US prices cannot be converted to KRW")
-        usd_krw = float(fx_frame.get_column("Close").drop_nulls()[-1])
 
+def _load_fx(markets, end: date, progress) -> tuple[pl.DataFrame | None, float]:
+    """(USD/KRW history, latest rate) when a US market is selected, else (None, 0.0)."""
+    if not any(m in US_MARKETS for m in markets):
+        return None, 0.0
+    _say(progress, tr("USD/KRW 환율 이력 불러오는 중...", "Loading USD/KRW history..."))
+    fx_frame = _cut_frame(get_usd_krw_history(), end)
+    if fx_frame is None or fx_frame.is_empty():
+        raise RuntimeError("USD/KRW history unavailable: US prices cannot be converted to KRW")
+    return fx_frame, float(fx_frame.get_column("Close").drop_nulls()[-1])
+
+
+def _multi_market_universe(markets, universe_size: int, usd_krw: float, progress, should_stop
+                           ) -> tuple[list[str], dict[str, str], dict[str, str], list[dict]]:
+    """(codes, names, code -> market, excluded ETF rows): the top `universe_size` stocks of
+    every selected market ranked together by KRW market cap (spec 9-25)."""
     pool = universe_size * LISTING_POOL_FACTOR
     rows: list[dict] = []
     excluded: list[dict] = []
@@ -635,51 +766,13 @@ def _load_multi_market(start, end, warm_start, markets, universe_size, include_f
     codes = [r["Code"] for r in rows]
     names = {r["Code"]: str(r.get("Name", "")) for r in rows}
     market_of = {r["Code"]: r["Market"] for r in rows}
+    return codes, names, market_of, excluded
 
-    _check_stop(should_stop)
-    _say(progress, tr(f"{len(codes)}종목 일봉 불러오는 중...", f"Loading daily history for {len(codes)} names..."))
-    frames: dict[str, pl.DataFrame] = {}
-    done = 0
-    with ThreadPoolExecutor(max_workers=max_workers) as exe:
-        futures = {exe.submit(get_historical_data, c, ws): c for c in codes}
-        for fut in as_completed(futures):
-            _check_stop(should_stop, futures)
-            c = futures[fut]
-            done += 1
-            try:
-                df = _cut_frame(fut.result(), end)
-            except Exception:
-                logger.warning("history fetch failed for %s", c, exc_info=True)
-                df = None
-            if df is not None and not df.is_empty() and df.height >= min_rows:
-                frames[c] = df
-            if done % 25 == 0 or done == len(codes):
-                _say(progress, tr(f"일봉 {done}/{len(codes)} (사용 가능 {len(frames)})", f"Daily history {done}/{len(codes)} ({len(frames)} usable)"))
-    if not frames:
-        raise RuntimeError("No usable stock histories were loaded")
-    frames = {c: frames[c] for c in codes if c in frames}
 
-    flow_frames = None
-    kr_codes = [c for c in frames if market_of[c] not in US_MARKETS]
-    if include_flows and kr_codes:
-        flow_frames = {}
-        done = 0
-        with ThreadPoolExecutor(max_workers=max(1, min(max_workers, 4))) as exe:
-            futures = {exe.submit(get_investor_flows, c, ws): c for c in kr_codes}
-            for fut in as_completed(futures):
-                _check_stop(should_stop, futures)
-                c = futures[fut]
-                done += 1
-                try:
-                    fdf = _cut_frame(fut.result(), end)
-                except Exception:
-                    logger.warning("investor flow fetch failed for %s", c, exc_info=True)
-                    fdf = None
-                if fdf is not None and not fdf.is_empty():
-                    flow_frames[c] = fdf
-                if done % 10 == 0 or done == len(kr_codes):
-                    _say(progress, tr(f"투자자 수급 {done}/{len(kr_codes)} (자료 있음 {len(flow_frames)})", f"Investor flows {done}/{len(kr_codes)} ({len(flow_frames)} with data)"))
-
+def _load_market_benchmarks(markets, ws: str, end: date, progress, should_stop
+                            ) -> tuple[dict[str, pl.DataFrame], bool, list[str]]:
+    """(ETF ticker -> frame, is total return, missing "market: ticker" labels): one BM ETF
+    per selected market for the BM1/BM3 mix (spec 9-25); empty when any is missing."""
     _check_stop(should_stop)
     _say(progress, tr("벤치마크 ETF 불러오는 중...", "Loading benchmark ETFs..."))
     bm_frames: dict[str, pl.DataFrame] = {}
@@ -702,28 +795,4 @@ def _load_multi_market(start, end, warm_start, markets, universe_size, include_f
         # BM-relative metrics come out N/A and the report names what was missing.
         logger.warning("benchmark ETF history missing for %s; BM1/BM3 are skipped", ", ".join(bm_missing))
         bm_frames = {}
-    bm_markets = {tk: BM_ETF_COST_MARKET.get(tk, "ETF") for tk in bm_frames}
-
-    _say(progress, tr("CD 91일 금리 불러오는 중...", "Loading CD 91-day rate..."))
-    rf_source = ""
-    try:
-        rf_df = _cut_frame(get_cd91_series(ws, end.isoformat()), end)
-        if rf_df is not None and not rf_df.is_empty():
-            rf_source = "CD91 (data.rates)"
-    except Exception:
-        logger.warning("CD91 rate load failed, using the constant fallback", exc_info=True)
-        rf_df = None
-
-    return build_dataset(
-        calendar, None, frames, start, market_of, names,
-        bm_frames=bm_frames, bm_markets=bm_markets, bm_is_total_return=bm_tr,
-        flow_frames=flow_frames, rf_frame=rf_df, rf_fallback=p.risk_free_fallback, rf_source=rf_source,
-        market_index_frames=index_frames, fx_frame=fx_frame,
-        info={"universe_size_requested": universe_size, "flows_requested": include_flows,
-              "cutoff": end.isoformat(), "holdout_allowed": bool(allow_holdout),
-              "excluded_etf": excluded, "universe_fixed_from": "",
-              "universe_built_on": date.today().isoformat(), "markets": list(markets),
-              "bm_requested": [MARKET_BM_ETF[m] for m in markets], "bm_missing": bm_missing,
-              "names_by_market": {m: sum(1 for c in frames if market_of[c] == m) for m in markets}},
-        cutoff=end,
-    )
+    return bm_frames, bm_tr, bm_missing

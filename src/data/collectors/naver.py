@@ -481,6 +481,129 @@ def _fetch_investor_trend_naver(ticker: str, days: int = 60) -> list:
     return rows[:days]
 
 
+def _naver_quarter_periods(info: dict):
+    """(column keys, YYYY-MM-DD period labels) from Naver's trTitleList."""
+    keys = []
+    periods = []
+    for p in info.get('trTitleList', []):
+        keys.append(p['key'])
+        title = p.get('title', '').replace('.', '-')
+        if title.endswith('-'):
+            title = title[:-1]
+        if len(title) == 7:  # YYYY-MM
+            title += '-31'   # roughly end of month
+        periods.append(title)
+    return keys, periods
+
+
+def _naver_quarter_columns(info: dict):
+    """The revenue, operating income and net income column dicts from Naver's rowList."""
+    rev_dict, op_dict, net_dict = {}, {}, {}
+    for row in info.get('rowList', []):
+        if row.get('title') == '매출액':
+            rev_dict = row.get('columns', {})
+        elif row.get('title') == '영업이익':
+            op_dict = row.get('columns', {})
+        elif row.get('title') == '당기순이익':
+            net_dict = row.get('columns', {})
+    return rev_dict, op_dict, net_dict
+
+
+def _naver_quarter_value(d_col: dict, k) -> float:
+    """One Naver figure (100M KRW units) in KRW; 0.0 when missing or '-'."""
+    if k not in d_col:
+        return 0.0
+    v_str = d_col[k].get('value')
+    if not v_str or v_str.strip() == '-':
+        return 0.0
+    return float(v_str.replace(',', '')) * 100000000
+
+
+def _quarter_row(date_str, rev, op, net) -> dict:
+    """One fetch_quarterly_financials row, margins in % of revenue (0.0 without revenue)."""
+    op_margin = (op / rev * 100) if rev else 0.0
+    net_margin = (net / rev * 100) if rev else 0.0
+    return {
+        'Date': date_str,
+        'TotalRevenue': rev,
+        'OperatingIncome': op,
+        'NetIncome': net,
+        'OpMargin': op_margin,
+        'NetMargin': net_margin
+    }
+
+
+def _quarterly_financials_kr(ticker: str):
+    """fetch_quarterly_financials for a KR stock: Naver mobile finance/quarter API."""
+    t_str = ticker.zfill(6)
+    url = f'https://m.stock.naver.com/api/stock/{t_str}/finance/quarter'
+    r = _NAVER_SESSION.get(url, timeout=5)
+    if r.status_code != 200:
+        return []
+    data = r.json()
+    if 'financeInfo' not in data or not data['financeInfo']:
+        return []
+
+    info = data['financeInfo']
+    keys, periods = _naver_quarter_periods(info)
+    rev_dict, op_dict, net_dict = _naver_quarter_columns(info)
+
+    rows = []
+    for i, k in enumerate(keys):
+        rev = _naver_quarter_value(rev_dict, k)
+        op = _naver_quarter_value(op_dict, k)
+        net = _naver_quarter_value(net_dict, k)
+        rows.append(_quarter_row(periods[i], rev, op, net))
+
+    rows.sort(key=lambda x: x['Date'], reverse=True)
+    return rows[:12]
+
+
+def _yq_income_value(row, key) -> float:
+    """One yahooquery income-statement cell as float; 0.0 when missing or NaN."""
+    v = row.get(key, 0)
+    if pd.isna(v):
+        return 0.0
+    return float(v)
+
+
+def _quarterly_financials_us(ticker: str):
+    """fetch_quarterly_financials for a US stock: yahooquery quarterly income statement."""
+    from yahooquery import Ticker
+    t_str = ticker.replace(".", "-")
+    yq_ticker = Ticker(t_str)
+    df = yq_ticker.income_statement("q")
+
+    if isinstance(df, dict) or df is None or getattr(df, 'empty', True):
+        return []
+
+    if 'periodType' in df.columns:
+        df = df[df['periodType'] == '3M']
+
+    if 'asOfDate' in df.columns:
+        df = df.sort_values(by='asOfDate', ascending=False).head(12)
+
+    rows = []
+    for _idx, row in df.iterrows():
+        d_val = row.get('asOfDate', '')
+        if hasattr(d_val, 'strftime'):
+            d_val = d_val.strftime("%Y-%m-%d")
+        else:
+            d_val = str(d_val)[:10]
+
+        rev = _yq_income_value(row, 'TotalRevenue')
+        if rev == 0.0:
+            rev = _yq_income_value(row, 'OperatingRevenue')
+        op = _yq_income_value(row, 'OperatingIncome')
+        net = _yq_income_value(row, 'NetIncome')
+        if net == 0.0:
+            net = _yq_income_value(row, 'NetIncomeCommonStockholders')
+
+        rows.append(_quarter_row(str(d_val), rev, op, net))
+
+    return rows
+
+
 def fetch_quarterly_financials(ticker: str, market: str):
     """Fetches the last 12 quarters (3 years) of income statement.
     Korean stocks: Uses Naver Finance Mobile API.
@@ -488,115 +611,8 @@ def fetch_quarterly_financials(ticker: str, market: str):
     """
     try:
         if market in ("KOSPI", "KOSDAQ"):
-            t_str = ticker.zfill(6)
-            url = f'https://m.stock.naver.com/api/stock/{t_str}/finance/quarter'
-            r = _NAVER_SESSION.get(url, timeout=5)
-            if r.status_code != 200:
-                return []
-            data = r.json()
-            if 'financeInfo' not in data or not data['financeInfo']:
-                return []
-
-            info = data['financeInfo']
-            keys = []
-            periods = []
-            for p in info.get('trTitleList', []):
-                keys.append(p['key'])
-                title = p.get('title', '').replace('.', '-')
-                if title.endswith('-'):
-                    title = title[:-1]
-                if len(title) == 7:  # YYYY-MM
-                    title += '-31'   # roughly end of month
-                periods.append(title)
-
-            rev_dict, op_dict, net_dict = {}, {}, {}
-            for row in info.get('rowList', []):
-                if row.get('title') == '매출액':
-                    rev_dict = row.get('columns', {})
-                elif row.get('title') == '영업이익':
-                    op_dict = row.get('columns', {})
-                elif row.get('title') == '당기순이익':
-                    net_dict = row.get('columns', {})
-
-            rows = []
-            for i, k in enumerate(keys):
-                def parse_val(d_col, k=k):
-                    if k not in d_col:
-                        return 0.0
-                    v_str = d_col[k].get('value')
-                    if not v_str or v_str.strip() == '-':
-                        return 0.0
-                    return float(v_str.replace(',', '')) * 100000000
-
-                rev = parse_val(rev_dict)
-                op = parse_val(op_dict)
-                net = parse_val(net_dict)
-
-                op_margin = (op / rev * 100) if rev else 0.0
-                net_margin = (net / rev * 100) if rev else 0.0
-
-                rows.append({
-                    'Date': periods[i],
-                    'TotalRevenue': rev,
-                    'OperatingIncome': op,
-                    'NetIncome': net,
-                    'OpMargin': op_margin,
-                    'NetMargin': net_margin
-                })
-
-            rows.sort(key=lambda x: x['Date'], reverse=True)
-            return rows[:12]
-
-        else:
-            from yahooquery import Ticker
-            t_str = ticker.replace(".", "-")
-            yq_ticker = Ticker(t_str)
-            df = yq_ticker.income_statement("q")
-
-            if isinstance(df, dict) or df is None or getattr(df, 'empty', True):
-                return []
-
-            if 'periodType' in df.columns:
-                df = df[df['periodType'] == '3M']
-
-            if 'asOfDate' in df.columns:
-                df = df.sort_values(by='asOfDate', ascending=False).head(12)
-
-            rows = []
-            for _idx, row in df.iterrows():
-                d_val = row.get('asOfDate', '')
-                if hasattr(d_val, 'strftime'):
-                    d_val = d_val.strftime("%Y-%m-%d")
-                else:
-                    d_val = str(d_val)[:10]
-
-                def get_val(key, row=row):
-                    v = row.get(key, 0)
-                    if pd.isna(v):
-                        return 0.0
-                    return float(v)
-
-                rev = get_val('TotalRevenue')
-                if rev == 0.0:
-                    rev = get_val('OperatingRevenue')
-                op = get_val('OperatingIncome')
-                net = get_val('NetIncome')
-                if net == 0.0:
-                    net = get_val('NetIncomeCommonStockholders')
-
-                op_margin = (op / rev * 100) if rev else 0.0
-                net_margin = (net / rev * 100) if rev else 0.0
-
-                rows.append({
-                    'Date': str(d_val),
-                    'TotalRevenue': rev,
-                    'OperatingIncome': op,
-                    'NetIncome': net,
-                    'OpMargin': op_margin,
-                    'NetMargin': net_margin
-                })
-
-            return rows
+            return _quarterly_financials_kr(ticker)
+        return _quarterly_financials_us(ticker)
     except Exception:
         # boundary: contract is [] on any failure, and the US branch goes through yahooquery, which raises arbitrary types.
         logger.error("Quarterly financials fetch failed for ticker=%s", ticker, exc_info=True)

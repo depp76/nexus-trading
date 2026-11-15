@@ -120,6 +120,9 @@ def _summary(v: Variant) -> str:
     }.get(v.id, v.label)
 
 
+Section = tuple[str, tuple[str, ...]]
+
+
 def describe_variant(vid: str, params: StrategyParams | None = None) -> VariantDescription:
     """The description of matrix row `vid` with the numbers of `params`
     (the StrategyParams defaults when None)."""
@@ -127,42 +130,58 @@ def describe_variant(vid: str, params: StrategyParams | None = None) -> VariantD
     p = params or StrategyParams()
     if v.mode == "score":
         p = v.apply(p)
-    sections: list[tuple[str, tuple[str, ...]]] = []
+    sections: list[Section] = [_universe_section(v, p)]
+    if v.mode == "breakout":
+        sections += _breakout_sections(v, p)
+    elif v.mode == "high52":
+        sections += _high52_sections(p)
+    else:
+        sections += _score_sections(p)
+    sections.append(_data_section(v))
+    return VariantDescription(v.id, _title(v), _summary(v), tuple(sections), v.needs_flows)
 
+
+def _universe_section(v: Variant, p: StrategyParams) -> Section:
+    """Liquidity floor, plus L1 (2-1) for the rows with the regime gate."""
     universe = [_liquidity(p)]
     if v.regime:
         universe.append(_regime(p))
-    sections.append((tr("시장과 유니버스", "Market and universe"), tuple(universe)))
+    return (tr("시장과 유니버스", "Market and universe"), tuple(universe))
 
-    if v.mode == "breakout":
-        entry = [_trend(p),
-                 tr(f"L3 진입(매일): 종가가 직전 {p.breakout_window}거래일 최고가를 넘음"
-                    f"(Donchian {p.breakout_window}), 다음 날 시가 체결.",
-                    f"L3 trigger (daily): close above the highest high of the prior {p.breakout_window} "
-                    f"sessions (Donchian {p.breakout_window}); filled at the next session's open.")]
-        if v.volume:
-            entry.append(tr(f"V: 돌파일 거래량 ≥ {p.volume_window}일 평균 거래량 × {p.volume_ratio_min:g}.",
-                            f"V: breakout-day volume ≥ {p.volume_ratio_min:g} × its {p.volume_window}-day average."))
-        if v.flow:
-            entry.append(tr(f"F: 최근 {p.flow_long_window}일과 {p.flow_short_window}일 (외국인 + 기관) "
-                            f"누적 순매수가 모두 0보다 큼.",
-                            f"F: foreign + institution net buying over the last {p.flow_long_window} and "
-                            f"{p.flow_short_window} sessions both > 0."))
-        entry.append(tr(f"L4 순위(후보가 빈 자리보다 많을 때): 20일 수급강도 순위 + {p.rs_window}일 KOSPI 대비 "
-                        f"상대강도 순위 (수급 데이터가 없으면 상대강도만).",
-                        f"L4 ranking when candidates exceed open slots: rank of 20-day flow strength + rank of "
-                        f"{p.rs_window}-day return relative to KOSPI (relative strength only without flow data)."))
-        entry.append(_sizing(p))
-        sections.append((tr("진입", "Entry"), tuple(entry)))
-        exits = [_donchian_exit(p), _stop(p)]
-        if v.flow_exit:
-            exits.append(tr(f"FX: 최근 {p.flow_exit_window}일 (외국인 + 기관) 누적 순매도 "
-                            f"그리고 종가 < {p.trend_ma_short}일선.",
-                            f"FX: foreign + institution net selling over {p.flow_exit_window} sessions "
-                            f"and close < MA{p.trend_ma_short}."))
-        sections.append((_exit_heading(), tuple(exits)))
-    elif v.mode == "high52":
-        sections.append((tr("보유 규칙 (주간 점검일)", "Holding rule (weekly check day)"), (
+
+def _breakout_sections(v: Variant, p: StrategyParams) -> list[Section]:
+    """Entry (L2, L3, optional V/F, L4, sizing; 2-2 to 2-4) and exits (3, optional FX) of A0-A5."""
+    entry = [_trend(p),
+             tr(f"L3 진입(매일): 종가가 직전 {p.breakout_window}거래일 최고가를 넘음"
+                f"(Donchian {p.breakout_window}), 다음 날 시가 체결.",
+                f"L3 trigger (daily): close above the highest high of the prior {p.breakout_window} "
+                f"sessions (Donchian {p.breakout_window}); filled at the next session's open.")]
+    if v.volume:
+        entry.append(tr(f"V: 돌파일 거래량 ≥ {p.volume_window}일 평균 거래량 × {p.volume_ratio_min:g}.",
+                        f"V: breakout-day volume ≥ {p.volume_ratio_min:g} × its {p.volume_window}-day average."))
+    if v.flow:
+        entry.append(tr(f"F: 최근 {p.flow_long_window}일과 {p.flow_short_window}일 (외국인 + 기관) "
+                        f"누적 순매수가 모두 0보다 큼.",
+                        f"F: foreign + institution net buying over the last {p.flow_long_window} and "
+                        f"{p.flow_short_window} sessions both > 0."))
+    entry.append(tr(f"L4 순위(후보가 빈 자리보다 많을 때): 20일 수급강도 순위 + {p.rs_window}일 KOSPI 대비 "
+                    f"상대강도 순위 (수급 데이터가 없으면 상대강도만).",
+                    f"L4 ranking when candidates exceed open slots: rank of 20-day flow strength + rank of "
+                    f"{p.rs_window}-day return relative to KOSPI (relative strength only without flow data)."))
+    entry.append(_sizing(p))
+    exits = [_donchian_exit(p), _stop(p)]
+    if v.flow_exit:
+        exits.append(tr(f"FX: 최근 {p.flow_exit_window}일 (외국인 + 기관) 누적 순매도 "
+                        f"그리고 종가 < {p.trend_ma_short}일선.",
+                        f"FX: foreign + institution net selling over {p.flow_exit_window} sessions "
+                        f"and close < MA{p.trend_ma_short}."))
+    return [(tr("진입", "Entry"), tuple(entry)), (_exit_heading(), tuple(exits))]
+
+
+def _high52_sections(p: StrategyParams) -> list[Section]:
+    """Variant B: the weekly 52-week-high proximity holding rule and its exits (6-2, 3)."""
+    return [
+        (tr("보유 규칙 (주간 점검일)", "Holding rule (weekly check day)"), (
             _trend(p),
             tr(f"L2와 유동성 하한을 통과한 종목을 종가 / {p.high_52w_window}일 최고가 순으로 정렬해 "
                f"상위 {p.max_positions}종목을 동일 비중(종목당 ≤ {_pct(p.max_weight)})으로 보유.",
@@ -170,50 +189,70 @@ def describe_variant(vid: str, params: StrategyParams | None = None) -> VariantD
                f"and hold the top {p.max_positions} at equal weight (≤ {_pct(p.max_weight)} each)."),
             tr("순위 밖으로 밀려난 종목은 다음 날 시가에 매도.",
                "Names that drop out of the top ranks are sold at the next open."),
-        )))
-        sections.append((_exit_heading(), (_donchian_exit(p), _stop(p))))
-    else:
-        range_ind = (tr(f"종가 / {p.score_range_window}일 최고가", f"close / {p.score_range_window}-day high")
-                     if p.score_range_mode == "high52_prox"
-                     else tr(f"Range52 = {p.score_range_window}일 최저~최고 범위 안에서 종가의 위치",
-                             f"Range52 = position of the close in its {p.score_range_window}-day low-high range"))
-        norm = (tr("R3와 MA20Div를 ATR20 / 종가로 나눔(변동성 정규화).",
-                   "R3 and MA20Div are divided by ATR20 / close (volatility normalised).")
-                if p.score_vol_normalize
-                else tr("R3와 MA20Div를 원래 수익률 그대로 사용(변동성 정규화 없음).",
-                        "R3 and MA20Div are used as raw returns (no volatility normalisation)."))
-        sections.append((tr("게이트 (모두 통과해야 함)", "Gate (all must pass)"), (
-            tr(f"종가가 {p.score_ma_long}일선 위(MA50Div > 0).",
-               f"Close above MA{p.score_ma_long} (MA50Div > 0)."),
-            tr(f"추세 위치 ≥ {p.gate_range_min:g}, 기준: {range_ind}.",
-               f"Trend position ≥ {p.gate_range_min:g}, using {range_ind}."),
-            tr(f"과열 아님: MA20Div가 유동성 충족 종목 중 상위 {(1 - p.gate_overheat_pct) * 100:g}% 밖.",
-               f"Not overheated: MA20Div outside the top {(1 - p.gate_overheat_pct) * 100:g}% of liquid names."),
-        )))
-        sections.append((tr("점수", "Score"), (
-            tr(f"추세점수 = pct(MA50Div) + pct(추세 위치), 타이밍점수 = −pct(R{p.score_r_short}): "
-               f"최근에 눌린 종목일수록 점수가 높음. 가중치 1 : 1 : 1.",
-               f"Trend score = pct(MA50Div) + pct(trend position); timing score = −pct(R{p.score_r_short}), "
-               f"so a recent dip scores higher. Weights 1 : 1 : 1."),
-            norm,
-        )))
-        sections.append((tr("매수 (주간 점검일, 다음 날 시가 체결)", "Buy (weekly check day, next-open fill)"), (
-            tr(f"Risk-on 주, 게이트 통과, 총점 순위 ≥ {p.score_buy_pct:g}. 점수 높은 순으로 빈 자리를 채움.",
-               f"Risk-on week, gate passed and total-score percentile ≥ {p.score_buy_pct:g}; "
-               f"best scores first into the open slots."),
-            _sizing(p),
-        )))
-        sections.append((tr("매도", "Sell"), (
-            tr(f"매주: 총점 순위 < {p.score_sell_pct:g} (매수 문턱보다 낮게 두어 잦은 매매를 막음).",
-               f"Weekly: score percentile < {p.score_sell_pct:g} (a lower bar than the buy, to avoid churning)."),
-            tr(f"매일: 종가가 {p.score_ma_long}일선 아래, 또는 초기 손절"
-               f"(종가 < 진입가 − {p.stop_atr_multiple:g} × ATR{p.atr_window}).",
-               f"Daily: close below MA{p.score_ma_long}, or the initial stop "
-               f"(close < entry − {p.stop_atr_multiple:g} × ATR{p.atr_window})."),
-            tr("Donchian 10 청산은 쓰지 않으며, 과열 종목도 계속 보유(과열은 신규 진입만 막음).",
-               "No Donchian 10 exit, and an overheated holding is kept (overheat only blocks new entries)."),
-        )))
+        )),
+        (_exit_heading(), (_donchian_exit(p), _stop(p))),
+    ]
 
+
+def _score_sections(p: StrategyParams) -> list[Section]:
+    """C1-C3: the 2-5 scoring mode's gate, score, buy and sell rules."""
+    return [_score_gate_section(p), _score_formula_section(p), _score_buy_section(p), _score_sell_section(p)]
+
+
+def _score_gate_section(p: StrategyParams) -> Section:
+    range_ind = (tr(f"종가 / {p.score_range_window}일 최고가", f"close / {p.score_range_window}-day high")
+                 if p.score_range_mode == "high52_prox"
+                 else tr(f"Range52 = {p.score_range_window}일 최저~최고 범위 안에서 종가의 위치",
+                         f"Range52 = position of the close in its {p.score_range_window}-day low-high range"))
+    return (tr("게이트 (모두 통과해야 함)", "Gate (all must pass)"), (
+        tr(f"종가가 {p.score_ma_long}일선 위(MA50Div > 0).",
+           f"Close above MA{p.score_ma_long} (MA50Div > 0)."),
+        tr(f"추세 위치 ≥ {p.gate_range_min:g}, 기준: {range_ind}.",
+           f"Trend position ≥ {p.gate_range_min:g}, using {range_ind}."),
+        tr(f"과열 아님: MA20Div가 유동성 충족 종목 중 상위 {(1 - p.gate_overheat_pct) * 100:g}% 밖.",
+           f"Not overheated: MA20Div outside the top {(1 - p.gate_overheat_pct) * 100:g}% of liquid names."),
+    ))
+
+
+def _score_formula_section(p: StrategyParams) -> Section:
+    norm = (tr("R3와 MA20Div를 ATR20 / 종가로 나눔(변동성 정규화).",
+               "R3 and MA20Div are divided by ATR20 / close (volatility normalised).")
+            if p.score_vol_normalize
+            else tr("R3와 MA20Div를 원래 수익률 그대로 사용(변동성 정규화 없음).",
+                    "R3 and MA20Div are used as raw returns (no volatility normalisation)."))
+    return (tr("점수", "Score"), (
+        tr(f"추세점수 = pct(MA50Div) + pct(추세 위치), 타이밍점수 = −pct(R{p.score_r_short}): "
+           f"최근에 눌린 종목일수록 점수가 높음. 가중치 1 : 1 : 1.",
+           f"Trend score = pct(MA50Div) + pct(trend position); timing score = −pct(R{p.score_r_short}), "
+           f"so a recent dip scores higher. Weights 1 : 1 : 1."),
+        norm,
+    ))
+
+
+def _score_buy_section(p: StrategyParams) -> Section:
+    return (tr("매수 (주간 점검일, 다음 날 시가 체결)", "Buy (weekly check day, next-open fill)"), (
+        tr(f"Risk-on 주, 게이트 통과, 총점 순위 ≥ {p.score_buy_pct:g}. 점수 높은 순으로 빈 자리를 채움.",
+           f"Risk-on week, gate passed and total-score percentile ≥ {p.score_buy_pct:g}; "
+           f"best scores first into the open slots."),
+        _sizing(p),
+    ))
+
+
+def _score_sell_section(p: StrategyParams) -> Section:
+    return (tr("매도", "Sell"), (
+        tr(f"매주: 총점 순위 < {p.score_sell_pct:g} (매수 문턱보다 낮게 두어 잦은 매매를 막음).",
+           f"Weekly: score percentile < {p.score_sell_pct:g} (a lower bar than the buy, to avoid churning)."),
+        tr(f"매일: 종가가 {p.score_ma_long}일선 아래, 또는 초기 손절"
+           f"(종가 < 진입가 − {p.stop_atr_multiple:g} × ATR{p.atr_window}).",
+           f"Daily: close below MA{p.score_ma_long}, or the initial stop "
+           f"(close < entry − {p.stop_atr_multiple:g} × ATR{p.atr_window})."),
+        tr("Donchian 10 청산은 쓰지 않으며, 과열 종목도 계속 보유(과열은 신규 진입만 막음).",
+           "No Donchian 10 exit, and an overheated holding is kept (overheat only blocks new entries)."),
+    ))
+
+
+def _data_section(v: Variant) -> Section:
+    """Which data the row needs (flows for A3-A5)."""
     if v.needs_flows:
         data = [tr("투자자 수급 데이터 필요(고르면 실행할 때 함께 받음, 한국 종목만). 받지 못하면 실행에서 제외됩니다.",
                    "Needs investor-flow data (fetched with the run when picked, KR stocks only); "
@@ -221,5 +260,4 @@ def describe_variant(vid: str, params: StrategyParams | None = None) -> VariantD
     else:
         data = [tr("가격 데이터만 사용. 수급 데이터 없이 실행됩니다.",
                    "Price data only; runs without investor flows.")]
-    sections.append((tr("데이터", "Data"), tuple(data)))
-    return VariantDescription(v.id, _title(v), _summary(v), tuple(sections), v.needs_flows)
+    return (tr("데이터", "Data"), tuple(data))

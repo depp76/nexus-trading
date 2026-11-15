@@ -49,12 +49,24 @@ class TotalAssetsGraphDialog(QDialog):
         dates_dt = [pd.to_datetime(d) for d in dates]
         x_dates = mdates.date2num(dates_dt)
 
+        self._plot_series(fig, ax, x_dates, kospi_returns, asset_returns, usd_asset_returns)
+        self._annotate_points(ax, x_dates, dates, asset_returns, usd_asset_returns, totals, usd_totals)
+        self._install_hover(ax, x_dates, dates, kospi_returns, asset_returns, usd_asset_returns, totals, usd_totals)
+
+        canvas = FigureCanvas(fig)
+        layout.addWidget(canvas)
+
+        self._build_buttons(layout, on_report)
+
+    @staticmethod
+    def _plot_series(fig, ax, x_dates, kospi_returns, asset_returns, usd_asset_returns) -> None:
+        """The three return lines, the zero line, axes, legend and titles."""
         # Series identity, not price direction: ink for the main series,
         # accent for its USD view, muted dashed for the benchmark (red/blue
         # stay reserved for gain/loss, docs/ui.md 1.1).
-        line_kospi, = ax.plot(x_dates, kospi_returns, color=TEXT_MUTED, linewidth=1.6, linestyle="--", marker=".", markersize=4, label="KOSPI")
-        line_asset, = ax.plot(x_dates, asset_returns, color=TEXT, linewidth=2, linestyle="-", marker=".", markersize=4, label=_LBL_ASSETS)
-        line_usd, = ax.plot(x_dates, usd_asset_returns, color=ACCENT, linewidth=2, linestyle="-", marker=".", markersize=4, label=_LBL_ASSETS_USD)
+        ax.plot(x_dates, kospi_returns, color=TEXT_MUTED, linewidth=1.6, linestyle="--", marker=".", markersize=4, label="KOSPI")
+        ax.plot(x_dates, asset_returns, color=TEXT, linewidth=2, linestyle="-", marker=".", markersize=4, label=_LBL_ASSETS)
+        ax.plot(x_dates, usd_asset_returns, color=ACCENT, linewidth=2, linestyle="-", marker=".", markersize=4, label=_LBL_ASSETS_USD)
 
         ax.axhline(0, color=TEXT_FAINT, linestyle='--', linewidth=1)
 
@@ -68,7 +80,9 @@ class TotalAssetsGraphDialog(QDialog):
         ax.set_ylabel(tr("누적 수익률 (%)", "Cumulative Return (%)"), fontsize=10)
         ax.set_title(tr("총자산과 KOSPI 누적 수익률", "Total Assets vs KOSPI Cumulative Return"), fontsize=12, fontweight="bold")
 
-        # Annotate actual values on the markers
+    @staticmethod
+    def _annotate_points(ax, x_dates, dates, asset_returns, usd_asset_returns, totals, usd_totals) -> None:
+        """Annotate actual values on the markers."""
         for i in range(len(dates)):
             # Total Assets (KRW)
             amt_krw = totals[i]
@@ -90,6 +104,9 @@ class TotalAssetsGraphDialog(QDialog):
                         textcoords="offset points", xytext=(0, -25), ha='center',
                         fontsize=8, color=ACCENT, fontweight="bold")
 
+    @staticmethod
+    def _install_hover(ax, x_dates, dates, kospi_returns, asset_returns, usd_asset_returns, totals, usd_totals) -> None:
+        """Hover tooltips (mplcursors) on the data points only."""
         # Create invisible scatter points to force cursor to snap only to actual data points
         sc_kospi = ax.scatter(x_dates, kospi_returns, alpha=0)
         sc_asset = ax.scatter(x_dates, asset_returns, alpha=0)
@@ -121,9 +138,7 @@ class TotalAssetsGraphDialog(QDialog):
                 sel.annotation.set_text(f"{lbl}\n{date_str}: {val_str}")
                 sel.annotation.get_bbox_patch().set(fc=HDR_BG, alpha=0.95, edgecolor=LINE)
 
-        canvas = FigureCanvas(fig)
-        layout.addWidget(canvas)
-
+    def _build_buttons(self, layout: QVBoxLayout, on_report) -> None:
         self.report_btn = make_button(tr("리포트", "Report"))
         self.report_btn.setToolTip(tr("매월 초와 중순의 보유 평가액, 현금, KOSPI", "Positions, cash and KOSPI at the start and middle of every month"))
         if on_report is not None:
