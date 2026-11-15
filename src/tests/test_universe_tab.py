@@ -81,10 +81,12 @@ class TestAddTickerRow(unittest.TestCase):
         from PyQt6.QtWidgets import QLabel
         tab = self.tab
         combo = tab.market_combo
-        self.assertEqual([combo.itemText(i) for i in range(combo.count())], ["KOSPI", "KOSDAQ", "NASDAQ", "NYSE"])
+        # one US choice (2026-11-15); the stored value is "US"
+        self.assertEqual([combo.itemText(i) for i in range(combo.count())], ["KOSPI", "KOSDAQ", "미국"])
+        self.assertEqual([combo.itemData(i) for i in range(combo.count())], ["KOSPI", "KOSDAQ", "US"])
         self.assertFalse([w for w in tab.findChildren(QLabel) if w.text() in ("추가할 시장", "Add to market")])
         self.assertIn("005930", tab.ticker_input.placeholderText())
-        combo.setCurrentText("NYSE")
+        combo.setCurrentIndex(combo.findData("US"))
         self.assertIn("AAPL", tab.ticker_input.placeholderText())
 
     def test_us_add_goes_to_the_fetch_thread_with_its_market(self):
@@ -100,11 +102,18 @@ class TestAddTickerRow(unittest.TestCase):
             def start(self):
                 pass
 
-        tab.market_combo.setCurrentText("NYSE")
+        tab.market_combo.setCurrentIndex(tab.market_combo.findData("US"))
         tab.ticker_input.setText("ko")
-        with patch("ui.universe_tab.SingleStockFetchThread", _Thread),              patch.object(tab, "_track_thread", side_effect=lambda t, attr=None: t),              patch.object(tab, "load_custom_settings"), patch.object(tab, "save_custom_settings"):
+        with patch("ui.universe_tab.SingleStockFetchThread", _Thread),                 patch.object(tab, "_track_thread", side_effect=lambda t, attr=None: t),                 patch.object(tab, "load_custom_settings"), patch.object(tab, "save_custom_settings"):
             tab.add_ticker()
-        self.assertEqual(started, [("NYSE", "KO")])
+        self.assertEqual(started, [("US", "KO")])
+
+    def test_market_toggles_show_index_names_and_fit(self):
+        tab = self.tab
+        labels = {m: b.text().replace("&&", "&") for m, b in tab._market_buttons.items()}
+        self.assertEqual(labels, {"KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ", "NASDAQ 100": "NASDAQ 100", "S&P500": "S&P 500"})
+        for b in tab._market_buttons.values():
+            self.assertGreaterEqual(b.width(), b.sizeHint().width())
 
 
 class TestStatusFilterButton(unittest.TestCase):

@@ -136,6 +136,21 @@ class TestTradeEntryDialog(unittest.TestCase):
         self.assertEqual(r["buy_amount"], 700000.0)      # blank amount -> price x qty
         self.assertEqual(r["sell_date"], "")
 
+    def test_us_is_one_choice_stored_as_us(self):
+        """2026-11-15: KOSPI / KOSDAQ / 미국 (was NASDAQ, NASDAQ 100, NYSE, AMEX)."""
+        dlg = self._dlg()
+        combo = dlg.market_combo
+        self.assertEqual([combo.itemData(i) for i in range(combo.count())], ["KOSPI", "KOSDAQ", "US"])
+        self.assertEqual(combo.itemText(2), "미국")
+        combo.setCurrentIndex(combo.findData("US"))
+        dlg.ticker_edit.setText("qqqm")
+        with patch("ui.dialogs.trade_edit.TickerValidateThread") as thread_cls:
+            thread_cls.return_value = MagicMock()
+            dlg.on_save()
+            thread_cls.assert_called_once_with("US", "QQQM")
+        dlg._on_ticker_validated(True, "Invesco NASDAQ 100 ETF", "")
+        self.assertEqual(dlg.result_data["market"], "US")
+
     def test_unknown_ticker_keeps_the_dialog_open(self):
         dlg = self._dlg()
         with patch("ui.dialogs.trade_edit.TickerValidateThread"):
