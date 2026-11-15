@@ -19,9 +19,11 @@ from ui.colors import QC_PROFIT, QC_LOSS, QC_FLAT
 from ui.theme import ACCENT, ACCENT_TEXT, TEXT, TEXT_MUTED, TEXT_FAINT, LINE, HDR_BG
 from ui.widgets import NumericItem
 
-_SUMMARY_HEADERS = ["Date", "KOSPI", "KOSPI Cum %", "Positions", "Cash", "Total",
-                    "Positions %", "Total Cum %", "vs KOSPI (%p)"]
-_HOLDING_HEADERS = ["Name", "Ticker", "Qty", "Cost", "Close", "Value", "Weight %"]
+_SUMMARY_HEADERS = [tr("날짜", "Date"), "KOSPI", tr("KOSPI 누적 %", "KOSPI Cum %"), tr("보유 평가액", "Positions"),
+                    tr("현금", "Cash"), tr("총자산", "Total"), tr("보유 비중 %", "Positions %"),
+                    tr("총자산 누적 %", "Total Cum %"), tr("KOSPI 대비 (%p)", "vs KOSPI (%p)")]
+_HOLDING_HEADERS = [tr("종목", "Name"), tr("코드", "Ticker"), tr("수량", "Qty"), tr("매입 원가", "Cost"),
+                    tr("종가", "Close"), tr("평가액", "Value"), tr("비중 %", "Weight %")]
 _RIGHT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 
 
@@ -73,22 +75,25 @@ class AssetsReportDialog(QDialog):
         super().__init__(parent)
         self._rows = rows
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint)
-        self.setWindowTitle("Total Assets — Early / Mid-Month Report")
+        self.setWindowTitle(tr("총자산 — 월초 / 월중 리포트", "Total Assets — Early / Mid-Month Report"))
         fit_to_screen(self, 1300, 900)
 
         v = QVBoxLayout(self)
         v.setContentsMargins(12, 10, 12, 10)
         v.setSpacing(8)
 
-        title = QLabel("Positions · Cash · KOSPI — first trading day and mid-month (≤ 15th)")
+        title = QLabel(tr("보유 평가액 · 현금 · KOSPI — 매월 첫 거래일과 월중 (15일 이전)", "Positions · Cash · KOSPI — first trading day and mid-month (≤ 15th)"))
         title.setFont(create_font(FONT_HEADING, QFont.Weight.Bold))
         v.addWidget(title)
-        note = QLabel(
+        note = QLabel(tr(
+            "Trading History 거래 기록으로 다시 계산하며, 각 날짜의 종가로 평가합니다 (미국 종목은 "
+            "그날의 USD/KRW 적용). 현금은 현재 예수금에 누적 출금액을 더한 값에서 거꾸로 계산합니다 "
+            "(날짜별 입출금은 기록되지 않음). 누적 %는 첫 행 대비입니다.",
             "Rebuilt from the Trading History trade log, valued at each day's close (US positions at "
             "that day's USD/KRW). Cash is rolled back from the current Deposit with cumulative "
             "Withdrawals added back (dated deposits/withdrawals are not recorded). "
             "Cumulative % is relative to the first row."
-        )
+        ))
         note.setObjectName("muted")
         note.setWordWrap(True)
         v.addWidget(note)
@@ -135,14 +140,14 @@ class AssetsReportDialog(QDialog):
         ax_x = ax_w.twinx()
 
         self._line_w, = ax_w.plot(x, weights, color=ACCENT, linewidth=2, marker="o", markersize=5,
-                                  label="Positions % (left)")
+                                  label=tr("보유 비중 % (왼쪽)", "Positions % (left)"))
         ax_w.set_ylim(0, 105)
-        ax_w.set_ylabel("Positions % of Total", fontsize=9, color=ACCENT_TEXT)
+        ax_w.set_ylabel(tr("총자산 중 보유 비중 %", "Positions % of Total"), fontsize=9, color=ACCENT_TEXT)
 
         ax_x.axhline(0, color=TEXT_FAINT, linewidth=1, linestyle="--")
         self._line_x, = ax_x.plot(x, excess, color=TEXT, linewidth=2, marker="s", markersize=5,
-                                  label="vs KOSPI %p (right)")
-        ax_x.set_ylabel("vs KOSPI (%p)", fontsize=9, color=TEXT)
+                                  label=tr("KOSPI 대비 %p (오른쪽)", "vs KOSPI %p (right)"))
+        ax_x.set_ylabel(tr("KOSPI 대비 (%p)", "vs KOSPI (%p)"), fontsize=9, color=TEXT)
         # Centre the right axis on 0 so the zero line reads as "even with KOSPI".
         lim = max(1.0, max((abs(v) for v in excess), default=0.0)) * 1.15
         ax_x.set_ylim(-lim, lim)
@@ -159,7 +164,7 @@ class AssetsReportDialog(QDialog):
         ax_w.set_xticks(x)
         ax_w.set_xticklabels([r["date"][2:].replace("-", ".") for r in rows], rotation=45, ha="right")
         ax_w.margins(x=0.02)
-        ax_w.set_title("Positions % of Total · vs KOSPI (%p)", fontsize=10, color=TEXT, loc="left")
+        ax_w.set_title(tr("총자산 중 보유 비중 % · KOSPI 대비 (%p)", "Positions % of Total · vs KOSPI (%p)"), fontsize=10, color=TEXT, loc="left")
         ax_w.legend(handles=[self._line_w, self._line_x], fontsize=8, loc="upper left", frameon=False)
 
         # Direct label on the latest point only; the rest are on hover.
@@ -186,10 +191,13 @@ class AssetsReportDialog(QDialog):
                 return
             r = rows[i]
             ex = _excess(r)
-            sel.annotation.set_text(
+            ex_txt = "-" if ex is None else f"{ex:+.1f}%p"
+            sel.annotation.set_text(tr(
+                f"{r['date']}\n보유 평가액 {weights[i]:.1f}%  ({r['value']:,.0f})\n"
+                f"총자산 {r['total']:,.0f}\nKOSPI 대비 {ex_txt}",
                 f"{r['date']}\nPositions {weights[i]:.1f}%  ({r['value']:,.0f})\n"
-                f"Total {r['total']:,.0f}\nvs KOSPI " + ("-" if ex is None else f"{ex:+.1f}%p")
-            )
+                f"Total {r['total']:,.0f}\nvs KOSPI {ex_txt}",
+            ))
             sel.annotation.get_bbox_patch().set(fc=HDR_BG, alpha=0.95, edgecolor=LINE)
 
         self.canvas.mpl_connect("button_press_event", self._on_chart_clicked)
@@ -247,11 +255,14 @@ class AssetsReportDialog(QDialog):
         row = self._rows[idx]
         self._highlight_chart(idx)
         holdings = row["holdings"]
-        self._holdings_lbl.setText(
+        self._holdings_lbl.setText(tr(
+            f"{row['date']} 보유 종목 — "
+            f"{len(holdings)}종목, 보유 평가액 {row['value']:,.0f} / 현금 {row['cash']:,.0f} KRW"
+            + ("" if row["priced"] else "   (* 종가 없음: 매입 원가로 평가)"),
             f"Holdings on {row['date']} — "
             f"{len(holdings)} position(s), positions {row['value']:,.0f} / cash {row['cash']:,.0f} KRW"
-            + ("" if row["priced"] else "   (* no close found: valued at cost)")
-        )
+            + ("" if row["priced"] else "   (* no close found: valued at cost)"),
+        ))
         tbl = self.holdings
         tbl.setUpdatesEnabled(False)
         try:
@@ -271,7 +282,7 @@ class AssetsReportDialog(QDialog):
 
     def _export_csv(self):
         import csv
-        path, _ = QFileDialog.getSaveFileName(self, "Export Report", "assets_report.csv", "CSV (*.csv)")
+        path, _ = QFileDialog.getSaveFileName(self, tr("리포트 내보내기", "Export Report"), "assets_report.csv", "CSV (*.csv)")
         if not path:
             return
         try:

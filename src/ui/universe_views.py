@@ -31,13 +31,13 @@ class RangeField:
 
 # The numeric columns that take a range filter, in table order.
 RANGE_FIELDS = (
-    RangeField("cap", "Cap", tr("억원", "100M KRW"), 1.0, False),
+    RangeField("cap", tr("시총", "Cap"), tr("억원", "100M KRW"), 1.0, False),
     RangeField("tper", "tPER", "x", 1.0, False),
     RangeField("fper", "fPER", "x", 1.0, False),
-    RangeField("chg", "Chg", "%", 1.0, True),
-    RangeField("range52w", "52W position", "% of range", 0.01, False),
-    RangeField("ma20div", "MA20 Div", "price / MA x100", 1.0, False),
-    RangeField("ma50div", "MA50 Div", "price / MA x100", 1.0, False),
+    RangeField("chg", tr("등락", "Chg"), "%", 1.0, True),
+    RangeField("range52w", tr("52주 위치", "52W position"), tr("범위 대비 %", "% of range"), 0.01, False),
+    RangeField("ma20div", "MA20 Div", tr("가격 / MA x100", "price / MA x100"), 1.0, False),
+    RangeField("ma50div", "MA50 Div", tr("가격 / MA x100", "price / MA x100"), 1.0, False),
     RangeField("d3", "3D", "%", 1.0, True),
     RangeField("d10", "10D", "%", 1.0, True),
     RangeField("d20", "20D", "%", 1.0, True),
@@ -156,7 +156,7 @@ def describe_view(state: dict) -> str:
         parts.append(f'"{s["search"]}"')
     if s["ranges"]:
         parts.append(describe_ranges(s["ranges"]))
-    return " \u00b7 ".join(parts) or "No filter"
+    return " \u00b7 ".join(parts) or tr("필터 없음", "No filter")
 
 
 def describe_ranges(ranges: dict) -> str:

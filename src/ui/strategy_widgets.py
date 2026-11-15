@@ -86,7 +86,8 @@ def fmt_target(target_sharpe: float) -> str:
 
 def target_text(target_sharpe: float = DEFAULT_TARGET_SHARPE) -> str:
     """Criterion H in words, for tooltips."""
-    return f"Sharpe ≥ {fmt_target(target_sharpe)} and |MDD| ≤ {TARGET_MDD * 100:g}%"
+    return tr(f"Sharpe ≥ {fmt_target(target_sharpe)}, |MDD| ≤ {TARGET_MDD * 100:g}% 동시 충족",
+              f"Sharpe ≥ {fmt_target(target_sharpe)} and |MDD| ≤ {TARGET_MDD * 100:g}%")
 
 
 def mdd_badge(mdd) -> tuple[str, str]:
@@ -135,6 +136,26 @@ def entry_label(run) -> str:
     if run.kind == "strategy" and run.id in VARIANTS:
         return describe_variant(run.id).title
     return run.label
+
+
+# Korean forms of research.BENCHMARK_LABELS (whose English stays the report's
+# text); the English UI shows run.label as before.
+_BENCHMARK_LABELS_KO = {
+    "BM1": "BM1: KOSPI 200 TR 매수 후 보유",
+    "BM2": "BM2: 유니버스 동일 비중",
+    "BM3": "BM3: KOSPI 200 ETF, MA200 위에서만 보유",
+    "BM4": "BM4: 무위험 수익 (CD 91일)",
+}
+
+
+def run_label(run) -> str:
+    """A run's one-line label for tooltips and titles: run.label in English;
+    in Korean the variant's picker title or the benchmark's Korean label."""
+    if run.kind == "strategy" and run.id in VARIANTS:
+        ko = f"{run.id}: {describe_variant(run.id).title}"
+    else:
+        ko = _BENCHMARK_LABELS_KO.get(run.id, run.label)
+    return tr(ko, run.label)
 
 
 # ---------------------------------------------------------------------------
@@ -241,12 +262,12 @@ def _sharpe_help(target: float) -> str:
 
 KPI_CARDS = [
     ("sharpe", "Sharpe", _sharpe_help(DEFAULT_TARGET_SHARPE)),
-    ("mdd", "Max drawdown", tr(f"고점 대비 최대 하락 · 목표 |MDD| ≤ {TARGET_MDD * 100:g}%",
+    ("mdd", tr("최대 낙폭", "Max drawdown"), tr(f"고점 대비 최대 하락 · 목표 |MDD| ≤ {TARGET_MDD * 100:g}%",
                                f"Deepest fall from a peak · target |MDD| ≤ {TARGET_MDD * 100:g}%")),
     ("cagr", "CAGR", tr("연평균 수익률", "Compound annual return")),
-    ("excess", "vs BM1", tr("시장(KODEX 200TR) 대비 CAGR 차이", "CAGR minus the market's (KODEX 200TR)")),
-    ("vol", "Volatility", tr("수익률 출렁임(연환산)", "Return volatility (annualised)")),
-    ("trades", "Trades", tr("기간 중 매매 횟수", "Number of trades in the period")),
+    ("excess", tr("BM1 대비", "vs BM1"), tr("시장(KODEX 200TR) 대비 CAGR 차이", "CAGR minus the market's (KODEX 200TR)")),
+    ("vol", tr("변동성", "Volatility"), tr("수익률 출렁임(연환산)", "Return volatility (annualised)")),
+    ("trades", tr("매매 수", "Trades"), tr("기간 중 매매 횟수", "Number of trades in the period")),
 ]
 
 
@@ -479,8 +500,8 @@ class SharpeBarDelegate(CellDelegate):
 # Tables
 # ---------------------------------------------------------------------------
 def comparison_headers(target_sharpe: float = DEFAULT_TARGET_SHARPE) -> list[str]:
-    return ["ID", "Entry", "CAGR", "Vol", f"Sharpe (| = {fmt_target(target_sharpe)})", "MDD", "Trades",
-            "vs BM1 (%p)", "Target (H)"]
+    return ["ID", tr("진입 규칙", "Entry"), "CAGR", "Vol", f"Sharpe (| = {fmt_target(target_sharpe)})", "MDD",
+            tr("매매 수", "Trades"), tr("BM1 대비 (%p)", "vs BM1 (%p)"), tr("목표 (H)", "Target (H)")]
 
 
 COMPARISON_HEADERS = comparison_headers()
@@ -519,7 +540,7 @@ def fill_comparison(table: QTableWidget, runs: list, target_sharpe: float = DEFA
             sharpe.setData(SHARPE_ROLE, {"value": m.get("sharpe"), "bench": bench})
             ok_mdd = mdd_ok(mdd)
             cells = [
-                _item(r.id, _LEFT, muted, r.label),
+                _item(r.id, _LEFT, muted, run_label(r)),
                 _item(entry_label(r), _LEFT, muted),
                 _item(fmt_pct(m.get("cagr")), color=_hex(m.get("cagr"))),
                 _item(fmt_pct(m.get("vol")), color=muted),
@@ -539,8 +560,9 @@ def fill_comparison(table: QTableWidget, runs: list, target_sharpe: float = DEFA
         table.setUpdatesEnabled(True)
 
 
-MONTH_HEADERS = ["Year"] + ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] \
-    + ["Year total"]
+_MONTHS_EN = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+MONTH_HEADERS = [tr("연도", "Year")] + [tr(f"{i}월", m) for i, m in enumerate(_MONTHS_EN, 1)] \
+    + [tr("연간", "Year total")]
 
 
 def _heat_item(v) -> QTableWidgetItem:

@@ -11,13 +11,17 @@ import logging
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from i18n import tr
+
 from strategy.trend_following import (
     ResearchCancelled, ResearchRequest, load_dataset, run_research, run_universe_scoring,
 )
 
 logger = logging.getLogger(__name__)
 
-CANCELLED_MESSAGE = "Cancelled"
+# Displayed as-is and compared only against this same constant (the language
+# is fixed per process), so translating it is safe.
+CANCELLED_MESSAGE = tr("취소됨", "Cancelled")
 
 
 class TrendFollowingResearchThread(QThread):

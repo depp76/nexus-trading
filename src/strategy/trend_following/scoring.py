@@ -27,6 +27,8 @@ marks as the one to avoid or sell), gate not required.
 """
 from __future__ import annotations
 
+from i18n import tr
+
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -306,14 +308,14 @@ def load_score_inputs(items: list[dict], progress=None, should_stop=None, max_wo
         raise ValueError("No tickers to score")
 
     _check_stop(should_stop)
-    _say(progress, "Loading KOSPI index history...")
+    _say(progress, tr("KOSPI 지수 이력 불러오는 중...", "Loading KOSPI index history..."))
     try:
         idx_df = get_historical_data(INDEX_TICKER, start)
     except Exception:
         logger.warning("KOSPI index history failed; scoring on the union calendar", exc_info=True)
         idx_df = None
 
-    _say(progress, f"Loading daily history for {len(tickers)} names...")
+    _say(progress, tr(f"{len(tickers)}종목 일봉 불러오는 중...", f"Loading daily history for {len(tickers)} names..."))
     frames: dict[str, pl.DataFrame] = {}
     done = 0
     with ThreadPoolExecutor(max_workers=max_workers) as exe:
@@ -330,7 +332,7 @@ def load_score_inputs(items: list[dict], progress=None, should_stop=None, max_wo
             if df is not None and not df.is_empty() and "Close" in df.columns:
                 frames[tk] = df
             if done % 25 == 0 or done == len(tickers):
-                _say(progress, f"Daily history {done}/{len(tickers)} ({len(frames)} usable)")
+                _say(progress, tr(f"일봉 {done}/{len(tickers)} (사용 가능 {len(frames)})", f"Daily history {done}/{len(tickers)} ({len(frames)} usable)"))
     if not frames:
         raise RuntimeError("No usable stock histories were loaded")
     frames = {tk: frames[tk] for tk in tickers if tk in frames}   # keep the Universe order
@@ -351,7 +353,7 @@ def run_universe_scoring(items: list[dict], params: StrategyParams | None = None
     p = params or StrategyParams()
     book, index_close = load_score_inputs(items, progress=progress, should_stop=should_stop)
     _check_stop(should_stop)
-    _say(progress, f"Scoring {book.N} names over {book.T} sessions...")
+    _say(progress, tr(f"{book.N}종목 · {book.T}세션 채점 중...", f"Scoring {book.N} names over {book.T} sessions..."))
     sb = compute_scores(book, p)
     rec = weekly_recommendation(sb, book, p, n_top=n_top, index_close=index_close)
     rec.info["n_requested"] = len(items)

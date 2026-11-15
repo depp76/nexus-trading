@@ -35,6 +35,11 @@ _TITLE = "Trading History"
 # are never clipped, labels right-aligned on one column, fields growing.
 _DIALOG_MIN_W = 400
 
+# Field-validator tooltips (red border + this text on bad input).
+_MSG_DATE = tr("날짜 형식이 올바르지 않습니다 (YYYY-MM-DD)", "Invalid date format (YYYY-MM-DD)")
+_MSG_POSITIVE = tr("0보다 큰 숫자를 입력하세요", "Enter a number greater than 0")
+_MSG_SELL_REQUIRED = tr("매도일을 입력하면 0보다 큰 숫자가 필요합니다", "A number greater than 0 is required when a sell date is entered")
+
 
 def _form_layout(dialog: QDialog) -> QFormLayout:
     layout = QFormLayout(dialog)
@@ -91,11 +96,11 @@ class BuyEditDialog(QDialog):
 
         # ---Real-time validation: red border + tooltip on bad input (roadmap 2-5) ---
         self._val_date = _mk_field_validator(
-            self.buy_date_edit, _validate_date_str, "Invalid date format (YYYY-MM-DD)")
+            self.buy_date_edit, _validate_date_str, _MSG_DATE)
         self._val_price = _mk_field_validator(
-            self.buy_price_edit, _validate_positive_number, "Enter a number greater than 0")
+            self.buy_price_edit, _validate_positive_number, _MSG_POSITIVE)
         self._val_qty = _mk_field_validator(
-            self.buy_qty_edit, _validate_positive_number, "Enter a number greater than 0")
+            self.buy_qty_edit, _validate_positive_number, _MSG_POSITIVE)
         self.buy_date_edit.textChanged.connect(self._val_date)
         self.buy_price_edit.textChanged.connect(self._val_price)
         self.buy_qty_edit.textChanged.connect(self._val_qty)
@@ -197,11 +202,11 @@ class SellEditDialog(QDialog):
             return _validate_positive_number(text)
 
         self._val_sell_date = _mk_field_validator(
-            self.sell_date_edit, _validate_sell_date, "Invalid date format (YYYY-MM-DD)")
+            self.sell_date_edit, _validate_sell_date, _MSG_DATE)
         self._val_sell_price = _mk_field_validator(
-            self.sell_price_edit, _validate_sell_amount_field, "A number greater than 0 is required when a sell date is entered")
+            self.sell_price_edit, _validate_sell_amount_field, _MSG_SELL_REQUIRED)
         self._val_sell_qty = _mk_field_validator(
-            self.sell_qty_edit, _validate_sell_amount_field, "A number greater than 0 is required when a sell date is entered")
+            self.sell_qty_edit, _validate_sell_amount_field, _MSG_SELL_REQUIRED)
         self.sell_date_edit.textChanged.connect(self._val_sell_date)
         self.sell_date_edit.textChanged.connect(self._val_sell_price)
         self.sell_date_edit.textChanged.connect(self._val_sell_qty)
@@ -288,11 +293,11 @@ class TradeEntryDialog(QDialog):
 
         # ---Real-time validation (roadmap 2-5) ---
         self._val_date = _mk_field_validator(
-            self.buy_date_edit, _validate_date_str, "Invalid date format (YYYY-MM-DD)")
+            self.buy_date_edit, _validate_date_str, _MSG_DATE)
         self._val_price = _mk_field_validator(
-            self.buy_price_edit, _validate_positive_number, "Enter a number greater than 0")
+            self.buy_price_edit, _validate_positive_number, _MSG_POSITIVE)
         self._val_qty = _mk_field_validator(
-            self.qty_edit, _validate_positive_number, "Enter a number greater than 0")
+            self.qty_edit, _validate_positive_number, _MSG_POSITIVE)
         self.buy_date_edit.textChanged.connect(self._val_date)
         self.buy_price_edit.textChanged.connect(self._val_price)
         self.qty_edit.textChanged.connect(self._val_qty)

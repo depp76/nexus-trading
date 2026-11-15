@@ -11,7 +11,7 @@ from ui.theme import ACCENT_TEXT, TEXT_MUTED, LINE, ZEBRA
 def show_stock_report_result(parent, ticker: str, name: str, result_text: str):
     """Display the AI per-stock report in a modal dialog."""
     result_dlg = QDialog(parent)
-    result_dlg.setWindowTitle(f"AI Stock Report — {name} ({ticker})")
+    result_dlg.setWindowTitle(tr(f"AI 종목 리포트 — {name} ({ticker})", f"AI Stock Report — {name} ({ticker})"))
     fit_to_screen(result_dlg, 560, 420)
     v = QVBoxLayout(result_dlg)
     v.setContentsMargins(16, 14, 16, 14)
@@ -34,7 +34,7 @@ def show_stock_report_result(parent, ticker: str, name: str, result_text: str):
     text_edit.setHtml(html_text)
     v.addWidget(text_edit, 1)
 
-    disclaimer_lbl = QLabel("※ This analysis is for reference only and does not constitute investment advice.")
+    disclaimer_lbl = QLabel(tr("※ 이 분석은 참고용이며 투자 권유가 아닙니다.", "※ This analysis is for reference only and does not constitute investment advice."))
     disclaimer_lbl.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
     disclaimer_lbl.setStyleSheet(f"color:{TEXT_MUTED};")
     v.addWidget(disclaimer_lbl)

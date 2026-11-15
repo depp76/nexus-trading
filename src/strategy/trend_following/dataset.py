@@ -14,6 +14,8 @@ amount is net quantity x that day's close from the same Naver page.
 """
 from __future__ import annotations
 
+from i18n import tr
+
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -469,7 +471,7 @@ def load_dataset(start, end=None, universe_size: int = 200, include_flows: bool 
                                   max_workers, min_rows, should_stop, allow_holdout)
 
     _check_stop(should_stop)
-    _say(progress, "Loading KOSPI index history...")
+    _say(progress, tr("KOSPI 지수 이력 불러오는 중...", "Loading KOSPI index history..."))
     idx_df = _cut_frame(get_historical_data("KS11", ws), end)
     if idx_df is None or idx_df.is_empty():
         raise RuntimeError("KOSPI index history unavailable (data.history returned nothing)")
@@ -483,9 +485,9 @@ def load_dataset(start, end=None, universe_size: int = 200, include_flows: bool 
         codes = [str(c).zfill(6) for c in tickers]
         names = {c: str((ticker_names or {}).get(c, "")) for c in codes}
         excluded = list(excluded_etf or [])
-        _say(progress, f"Using the fixed list of {len(codes)} names from {fixed_source or 'the caller'}")
+        _say(progress, tr(f"고정 목록 {len(codes)}종목 사용 ({fixed_source or '호출자'})", f"Using the fixed list of {len(codes)} names from {fixed_source or 'the caller'}"))
     else:
-        _say(progress, f"Loading KOSPI top {universe_size} listing (ETF/ETN excluded)...")
+        _say(progress, tr(f"KOSPI 상위 {universe_size} 목록 불러오는 중 (ETF/ETN 제외)...", f"Loading KOSPI top {universe_size} listing (ETF/ETN excluded)..."))
         listing = _load_listing(universe_size * LISTING_POOL_FACTOR)
         if not listing:
             raise RuntimeError("KOSPI listing unavailable (Naver and FDR both failed)")
@@ -497,7 +499,7 @@ def load_dataset(start, end=None, universe_size: int = 200, include_flows: bool 
             logger.warning("only %d stocks left after the ETF/ETN filter (requested %d)", len(kept), universe_size)
 
     _check_stop(should_stop)
-    _say(progress, f"Loading daily history for {len(codes)} names...")
+    _say(progress, tr(f"{len(codes)}종목 일봉 불러오는 중...", f"Loading daily history for {len(codes)} names..."))
     frames: dict[str, pl.DataFrame] = {}
     done = 0
     with ThreadPoolExecutor(max_workers=max_workers) as exe:
@@ -514,7 +516,7 @@ def load_dataset(start, end=None, universe_size: int = 200, include_flows: bool 
             if df is not None and not df.is_empty() and df.height >= min_rows:
                 frames[c] = df
             if done % 25 == 0 or done == len(codes):
-                _say(progress, f"Daily history {done}/{len(codes)} ({len(frames)} usable)")
+                _say(progress, tr(f"일봉 {done}/{len(codes)} (사용 가능 {len(frames)})", f"Daily history {done}/{len(codes)} ({len(frames)} usable)"))
     if not frames:
         raise RuntimeError("No usable stock histories were loaded")
     frames = {c: frames[c] for c in codes if c in frames}   # keep market-cap order
@@ -538,17 +540,17 @@ def load_dataset(start, end=None, universe_size: int = 200, include_flows: bool 
                 if fdf is not None and not fdf.is_empty():
                     flow_frames[c] = fdf
                 if done % 10 == 0 or done == len(frames):
-                    _say(progress, f"Investor flows {done}/{len(frames)} ({len(flow_frames)} with data)")
+                    _say(progress, tr(f"투자자 수급 {done}/{len(frames)} (자료 있음 {len(flow_frames)})", f"Investor flows {done}/{len(frames)} ({len(flow_frames)} with data)"))
 
     _check_stop(should_stop)
-    _say(progress, "Loading benchmark ETF...")
+    _say(progress, tr("벤치마크 ETF 불러오는 중...", "Loading benchmark ETF..."))
     bm_ticker, bm_tr = BM_TR_TICKER, True
     bm_df = _cut_frame(get_historical_data(bm_ticker, ws), end)
     if bm_df is None or bm_df.is_empty():
         bm_ticker, bm_tr = BM_PRICE_FALLBACK_TICKER, False
         bm_df = _cut_frame(get_historical_data(bm_ticker, ws), end)
 
-    _say(progress, "Loading CD 91-day rate...")
+    _say(progress, tr("CD 91일 금리 불러오는 중...", "Loading CD 91-day rate..."))
     rf_source = ""
     try:
         rf_df = _cut_frame(get_cd91_series(ws, end.isoformat()), end)
@@ -598,7 +600,7 @@ def _load_multi_market(start, end, warm_start, markets, universe_size, include_f
     days: set = set()
     for m in markets:
         _check_stop(should_stop)
-        _say(progress, f"Loading {m} index history...")
+        _say(progress, tr(f"{m} 지수 이력 불러오는 중...", f"Loading {m} index history..."))
         f = _cut_frame(get_historical_data(MARKET_INDEX[m], ws), end)
         if f is None or f.is_empty():
             raise RuntimeError(f"{m} index history unavailable (data.history returned nothing)")
@@ -611,7 +613,7 @@ def _load_multi_market(start, end, warm_start, markets, universe_size, include_f
     fx_frame = None
     usd_krw = 0.0
     if any(m in US_MARKETS for m in markets):
-        _say(progress, "Loading USD/KRW history...")
+        _say(progress, tr("USD/KRW 환율 이력 불러오는 중...", "Loading USD/KRW history..."))
         fx_frame = _cut_frame(get_usd_krw_history(), end)
         if fx_frame is None or fx_frame.is_empty():
             raise RuntimeError("USD/KRW history unavailable: US prices cannot be converted to KRW")
@@ -622,7 +624,7 @@ def _load_multi_market(start, end, warm_start, markets, universe_size, include_f
     excluded: list[dict] = []
     for m in markets:
         _check_stop(should_stop)
-        _say(progress, f"Loading {m} listing (top {pool}, ETF/ETN excluded)...")
+        _say(progress, tr(f"{m} 목록 불러오는 중 (상위 {pool}, ETF/ETN 제외)...", f"Loading {m} listing (top {pool}, ETF/ETN excluded)..."))
         kept, ex = _ranked_listing(m, pool, usd_krw)
         if not kept:
             raise RuntimeError(f"{m} listing unavailable")
@@ -635,7 +637,7 @@ def _load_multi_market(start, end, warm_start, markets, universe_size, include_f
     market_of = {r["Code"]: r["Market"] for r in rows}
 
     _check_stop(should_stop)
-    _say(progress, f"Loading daily history for {len(codes)} names...")
+    _say(progress, tr(f"{len(codes)}종목 일봉 불러오는 중...", f"Loading daily history for {len(codes)} names..."))
     frames: dict[str, pl.DataFrame] = {}
     done = 0
     with ThreadPoolExecutor(max_workers=max_workers) as exe:
@@ -652,7 +654,7 @@ def _load_multi_market(start, end, warm_start, markets, universe_size, include_f
             if df is not None and not df.is_empty() and df.height >= min_rows:
                 frames[c] = df
             if done % 25 == 0 or done == len(codes):
-                _say(progress, f"Daily history {done}/{len(codes)} ({len(frames)} usable)")
+                _say(progress, tr(f"일봉 {done}/{len(codes)} (사용 가능 {len(frames)})", f"Daily history {done}/{len(codes)} ({len(frames)} usable)"))
     if not frames:
         raise RuntimeError("No usable stock histories were loaded")
     frames = {c: frames[c] for c in codes if c in frames}
@@ -676,10 +678,10 @@ def _load_multi_market(start, end, warm_start, markets, universe_size, include_f
                 if fdf is not None and not fdf.is_empty():
                     flow_frames[c] = fdf
                 if done % 10 == 0 or done == len(kr_codes):
-                    _say(progress, f"Investor flows {done}/{len(kr_codes)} ({len(flow_frames)} with data)")
+                    _say(progress, tr(f"투자자 수급 {done}/{len(kr_codes)} (자료 있음 {len(flow_frames)})", f"Investor flows {done}/{len(kr_codes)} ({len(flow_frames)} with data)"))
 
     _check_stop(should_stop)
-    _say(progress, "Loading benchmark ETFs...")
+    _say(progress, tr("벤치마크 ETF 불러오는 중...", "Loading benchmark ETFs..."))
     bm_frames: dict[str, pl.DataFrame] = {}
     bm_missing: list[str] = []
     bm_tr = True
@@ -702,7 +704,7 @@ def _load_multi_market(start, end, warm_start, markets, universe_size, include_f
         bm_frames = {}
     bm_markets = {tk: BM_ETF_COST_MARKET.get(tk, "ETF") for tk in bm_frames}
 
-    _say(progress, "Loading CD 91-day rate...")
+    _say(progress, tr("CD 91일 금리 불러오는 중...", "Loading CD 91-day rate..."))
     rf_source = ""
     try:
         rf_df = _cut_frame(get_cd91_series(ws, end.isoformat()), end)

@@ -6,6 +6,8 @@ Split out of TradingHistoryTab on 2026-09-17; the class keeps thin delegates
 import datetime as _dt
 import logging
 
+from i18n import tr
+
 logger = logging.getLogger(__name__)
 
 
@@ -18,18 +20,18 @@ def trade_conflict(buy_date: str, qty: float, sell_date: str, sell_qty: float) -
     if buy_date and sell_date:
         try:
             if _dt.datetime.strptime(buy_date, "%Y-%m-%d") > _dt.datetime.strptime(sell_date, "%Y-%m-%d"):
-                return f"Buy date ({buy_date}) cannot be later than sell date ({sell_date})."
+                return tr(f"매수일({buy_date})이 매도일({sell_date})보다 늦을 수 없습니다.", f"Buy date ({buy_date}) cannot be later than sell date ({sell_date}).")
         except ValueError:
             pass
     if sell_qty < 0:
-        return "Sell quantity cannot be negative."
+        return tr("매도 수량은 음수일 수 없습니다.", "Sell quantity cannot be negative.")
     # A sell quantity beyond what was actually bought bypasses the
     # partial-sell proration in compute_pl_fields (its s_qty < b_qty branch),
     # so pl gets computed as the full sell_amount minus the full buy_amount --
     # inflating realized P/L with proceeds from shares that were never owned
     # (review_agy.md #2).
     if qty > 0 and sell_qty > qty:
-        return f"Sell quantity ({sell_qty:,.0f}) cannot exceed the holding quantity ({qty:,.0f})."
+        return tr(f"매도 수량({sell_qty:,.0f})이 보유 수량({qty:,.0f})보다 많을 수 없습니다.", f"Sell quantity ({sell_qty:,.0f}) cannot exceed the holding quantity ({qty:,.0f}).")
     return ""
 
 

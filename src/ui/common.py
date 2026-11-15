@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QFont, QPainter, QColor, QKeySequence
 
+from i18n import tr
 from ui.theme import TEXT, TEXT_FAINT, TEXT_MUTED
 from ui.colors import OK, DANGER, DANGER_BG
 
@@ -185,15 +186,15 @@ def refresh_state(enabled: bool, last_sync, last_failure, now, interval_ms: int)
     failure on that source's next success (docs/ui.md 8.8). "late" = no
     update for more than two intervals."""
     if not enabled:
-        return "off", "Auto-refresh is off"
+        return "off", tr("자동 갱신이 꺼져 있습니다", "Auto-refresh is off")
     if last_failure is not None:
         at, reason = last_failure
-        return "failed", f"Update failed at {at:%H:%M:%S}: {reason}"
+        return "failed", tr(f"{at:%H:%M:%S} 갱신 실패: {reason}", f"Update failed at {at:%H:%M:%S}: {reason}")
     if last_sync is None:
-        return "waiting", "Waiting for the first update"
+        return "waiting", tr("첫 갱신을 기다리는 중", "Waiting for the first update")
     if (now - last_sync).total_seconds() * 1000 > 2 * interval_ms:
-        return "late", "Late: no update for more than two intervals"
-    return "ok", "Updating"
+        return "late", tr("지연: 두 주기 넘게 갱신 없음", "Late: no update for more than two intervals")
+    return "ok", tr("갱신 중", "Updating")
 
 
 class RefreshFailures:

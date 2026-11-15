@@ -265,8 +265,10 @@ not fixtures. Trading History principal/deposit/withdrawal live in `QSettings`
   message-box titles (they are the tab names, 8.5), metric abbreviations (CAGR, MDD, Sharpe,
   tPER, MA20 Div, RSI ...), the narrow numeric column headers, IDs (A0-C3, BM1-BM4) and
   market names. The MA chart dialogs (`StockMaDialog` incl. its Trend Score section,
-  `IndexMaDialog`) followed on 2026-11-15; table column headers and footer/status-bar messages
-  were not converted (yet). Qt's own dialogs get Korean from the bundled `qtbase_ko`
+  `IndexMaDialog`) followed on 2026-11-15, and on the same day table/group headers, KPI strip labels,
+  status/footer/progress messages (worker threads and the strategy package's progress lines
+  included), empty-table hints and chart labels. Still English by design: the research
+  warnings/markdown reports and CSV/Excel export headers. Qt's own dialogs get Korean from the bundled `qtbase_ko`
   translator `main.py` installs (Korean mode only).
 - **UI language (user direction, 2026-11-15; docs/ui.md 8.20):** Korean (default) or English,
   picked with the header's flag buttons (`ui/language_switch.py`, saved in `QSettings`

@@ -179,8 +179,8 @@ class TestTrendFollowingTab(unittest.TestCase):
         # ui_redesign_2026-11 P1-1 item 5: the toggle panel became a result tab.
         self.assertEqual(tab.result_tabs.tabText(TAB_WARNINGS), f"경고 ({n})")
         self.assertEqual(tab.result_tabs.tabBar().tabTextColor(TAB_WARNINGS).name(), WARN)
-        self.assertIn("A3 not run", tab.warn_lbl.text())
-        self.assertIn("skipped A3", tab.status_lbl.text())
+        self.assertIn("A3 미실행", tab.warn_lbl.text())
+        self.assertIn("건너뜀 A3", tab.status_lbl.text())
 
     def test_tables_copy_selected_rows(self):
         """review_codex.md S4: every result table gets the app-wide Ctrl+C."""
@@ -227,7 +227,7 @@ class TestTrendFollowingTab(unittest.TestCase):
             tab._on_stop_clicked()
         self.assertTrue(worker.cancelled)
         self.assertFalse(tab.stop_btn.isEnabled())
-        self.assertIn("Stopping", tab.status_lbl.text())
+        self.assertIn("중지합니다", tab.status_lbl.text())
         worker.finished.emit(None, CANCELLED_MESSAGE)
         self.assertEqual(tab.status_lbl.text(), CANCELLED_MESSAGE)
         self.assertTrue(tab.run_btn.isEnabled())
@@ -244,7 +244,7 @@ class TestTrendFollowingTab(unittest.TestCase):
         self.assertEqual(tab.table.item(0, 0).text(), "A0")      # strategies first at 1x
         self.assertEqual(tab.table.item(0, 1).text(), "1x")
         self.assertTrue(tab.save_btn.isEnabled())
-        self.assertIn("Done", tab.status_lbl.text())
+        self.assertIn("완료", tab.status_lbl.text())
         self.assertGreater(len(tab.ax.lines), 0)
         tab.resize(1400, 900)
         tab.render(QPixmap(1400, 900))
@@ -479,7 +479,9 @@ class TestResultScreen(unittest.TestCase):
         from strategy.trend_following.research import SUMMARY_COLUMNS
         tab = self._tab()
         headers = [tab.table.horizontalHeaderItem(c).text() for c in range(tab.table.columnCount())]
-        self.assertEqual(headers, ["ID", "Cost"] + [h for h, _ in SUMMARY_COLUMNS[1:]])
+        from ui.trend_following_tab import SUMMARY_LABELS
+        self.assertEqual(headers, ["ID", "비용"] + [SUMMARY_LABELS.get(h, h) for h, _ in SUMMARY_COLUMNS[1:]])
+        self.assertIn("매매 수", headers)
         self.assertEqual(tab.table.rowCount(), len(self.result.runs))
 
     def test_toolbar_order_and_buttons(self):

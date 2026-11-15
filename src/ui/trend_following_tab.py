@@ -63,7 +63,7 @@ from ui.strategy_widgets import (
     TARGET_MDD, SegmentRow, KpiRow, TargetCheckCard, SharpeBarDelegate, COMPARISON_HEADERS, SHARPE_COL,
     DEFAULT_TARGET_SHARPE, comparison_headers, fmt_target,
     MONTH_HEADERS, comparison_rows, fill_comparison, fill_monthly,
-    drawdown_series, sorted_trades,
+    drawdown_series, sorted_trades, run_label,
 )
 from ui.dialogs.strategy_trades import StrategyTradesDialog, StrategyTradesView
 
@@ -87,6 +87,31 @@ _HOLDOUT_NOTE = tr(f"홀드아웃 구간({DEV_END:%Y-%m-%d} 이후)이 포함된
 _TRADES_EMPTY = tr("백테스트를 실행하면 선택한 규칙의 매매 내역이 나옵니다", "Run Backtest to list the selected rule's trades")
 _TRADES_EMPTY_BM = tr("벤치마크는 매매 내역이 없습니다. 전략 변형을 고르세요",
                       "Benchmarks have no trades; pick a strategy variant")
+
+
+# Display labels of the scorecard columns (strategy.trend_following.research
+# SUMMARY_COLUMNS, whose English names stay the report's headers); a name not
+# listed here (ID, CAGR, Vol, Sharpe, MDD, Calmar, IR, Beta, Alpha, periods) is shown as is.
+SUMMARY_LABELS = {
+    "Trades": tr("매매 수", "Trades"), "Win": tr("승률", "Win"), "Hold(d)": tr("보유(일)", "Hold(d)"),
+    "Turnover": tr("회전율", "Turnover"), "Cost/yr": tr("연 비용", "Cost/yr"), "Cash": tr("현금", "Cash"),
+    "vs BM1": tr("BM1 대비", "vs BM1"), "Up cap": tr("상승 포착", "Up cap"),
+    "Down cap": tr("하락 포착", "Down cap"),
+}
+
+
+def summary_headers() -> list[str]:
+    """The All Metrics table's header labels: ID, cost, then SUMMARY_COLUMNS."""
+    return ["ID", tr("비용", "Cost")] + [SUMMARY_LABELS.get(h, h) for h, _ in SUMMARY_COLUMNS[1:]]
+
+
+def _fit_headers(table: QTableWidget) -> None:
+    """Widen a fixed-width column whose header label (Korean or English) would
+    be cut; the stretch column is left to the layout."""
+    header = table.horizontalHeader()
+    for c in range(table.columnCount()):
+        if header.sectionResizeMode(c) != QHeaderView.ResizeMode.Stretch:
+            table.setColumnWidth(c, max(table.columnWidth(c), header.sectionSizeHint(c)))
 
 
 def _mult_key(m: float) -> str:
@@ -258,8 +283,10 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         root.setContentsMargins(*TAB_MARGINS)
         # No in-tab title (docs/ui.md 8.4): no other tab has one and the tab
         # label already names it. What a run does is on the Run button's tooltip.
-        self._run_tooltip = (f"Research backtest per trend_following.md {SPEC_VERSION}: variants "
-                             f"{', '.join(VARIANTS)} against BM1–BM4 with the 0x/1x/2x cost scenarios.")
+        self._run_tooltip = tr(f"trend_following.md {SPEC_VERSION} 기준 연구용 백테스트: 변형 "
+                               f"{', '.join(VARIANTS)}을 BM1–BM4와 0·1·2배 비용 시나리오로 비교합니다.",
+                               f"Research backtest per trend_following.md {SPEC_VERSION}: variants "
+                               f"{', '.join(VARIANTS)} against BM1–BM4 with the 0x/1x/2x cost scenarios.")
 
         root.addWidget(self._build_run_card())
         root.addWidget(self._build_result_head())
@@ -286,16 +313,18 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
 
         # Footer: status and errors in their own line, never over the results
         # (docs/ui.md 5.2), under the results like every tab's footer (8.4).
-        self.status_lbl = make_footer_label("Ready")
+        self.status_lbl = make_footer_label(tr("준비됨", "Ready"))
         root.addWidget(self.status_lbl)
 
         banner = QFrame()
         banner.setObjectName("DashboardCard")
         banner_layout = QHBoxLayout(banner)
         banner_layout.setContentsMargins(10, 6, 10, 6)
-        notice = QLabel("Research and backtesting signal generator, not investment advice. Backtests use today's "
-                        "KOSPI constituents (survivorship bias) and the cost assumptions of trend_following.md 4-1; "
-                        "nothing here places orders.")
+        notice = QLabel(tr("연구·백테스트용 신호 생성기이며 투자 권유가 아닙니다. 백테스트는 현재 KOSPI 구성 종목"
+                           "(생존 편향)과 trend_following.md 4-1의 비용 가정을 쓰며, 이 화면은 주문을 내지 않습니다.",
+                           "Research and backtesting signal generator, not investment advice. Backtests use today's "
+                           "KOSPI constituents (survivorship bias) and the cost assumptions of trend_following.md 4-1; "
+                           "nothing here places orders."))
         notice.setWordWrap(True)
         notice.setFont(create_font(FONT_SMALL))
         # Information, not an error: muted text on the card, not DANGER red (docs/ui.md 8.3).
@@ -656,6 +685,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             self.compare_table.setColumnWidth(c, w)
         # The description column takes the spare width, not the narrow verdict column.
         self.compare_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        _fit_headers(self.compare_table)
         self._sharpe_delegate = SharpeBarDelegate(self.compare_table)
         self.compare_table.setItemDelegateForColumn(SHARPE_COL, self._sharpe_delegate)
         self.compare_table.itemSelectionChanged.connect(self._on_compare_selection_changed)
@@ -667,13 +697,14 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.table = setup_table(QTableWidget(), empty_text=tr("백테스트를 실행하면 성과표가 채워집니다",
                                                                  "Run Backtest to fill the scorecard"))
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        headers = ["ID", "Cost"] + [h for h, _ in SUMMARY_COLUMNS[1:]]
+        headers = summary_headers()
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.horizontalHeader().setDefaultSectionSize(72)
         self.table.setColumnWidth(0, 60)
         self.table.setColumnWidth(1, 50)
+        _fit_headers(self.table)
         install_table_keys(self.table)      # Ctrl+C copies the selected rows as TSV (docs/ui.md 8.6)
         self.result_tabs.addTab(self.table, tr("전체 지표", "All Metrics"))
 
@@ -684,6 +715,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.monthly_table.setHorizontalHeaderLabels(MONTH_HEADERS)
         self.monthly_table.horizontalHeader().setDefaultSectionSize(58)
         self.monthly_table.setColumnWidth(len(MONTH_HEADERS) - 1, 80)
+        _fit_headers(self.monthly_table)
         install_table_keys(self.monthly_table)
         self.result_tabs.addTab(self.monthly_table, tr("월별 수익률", "Monthly Returns"))
 
@@ -782,7 +814,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self._running = True
         self._update_run_state()
         self.stop_btn.setEnabled(True)
-        self.status_lbl.setText("Starting...")
+        self.status_lbl.setText(tr("시작하는 중...", "Starting..."))
         thread.start()
 
     def _on_stop_clicked(self):
@@ -792,7 +824,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         if thread is not None and thread.isRunning():
             thread.cancel()
             self.stop_btn.setEnabled(False)
-            self.status_lbl.setText("Stopping after the current step...")
+            self.status_lbl.setText(tr("현재 단계가 끝나면 중지합니다...", "Stopping after the current step..."))
 
     def _on_progress(self, text: str):
         self.status_lbl.setText(text)
@@ -804,7 +836,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.stop_btn.setEnabled(False)
         self._update_run_state()
         if result is None:
-            self.status_lbl.setText(error if error == CANCELLED_MESSAGE else f"Run failed: {error}")
+            self.status_lbl.setText(error if error == CANCELLED_MESSAGE else tr(f"실행 실패: {error}", f"Run failed: {error}"))
             return
         self._result = result
         self.save_btn.setEnabled(True)
@@ -814,10 +846,13 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self._update_pending()
         self._show_warnings(result)
         n_runs = len(result.runs)
-        skipped = f" · skipped {', '.join(result.skipped)}" if result.skipped else ""
-        self.status_lbl.setText(
-            f"Done {result.created_at:%H:%M:%S} · {n_runs} runs · {result.dataset_info.get('n_tickers', 0)} names · "
-            f"{result.dataset_info.get('eval_start', '')} → {result.dataset_info.get('eval_end', '')}{skipped}")
+        skipped_ids = ', '.join(result.skipped)
+        skipped = tr(f" · 건너뜀 {skipped_ids}", f" · skipped {skipped_ids}") if result.skipped else ""
+        n_names = result.dataset_info.get('n_tickers', 0)
+        window = f"{result.dataset_info.get('eval_start', '')} → {result.dataset_info.get('eval_end', '')}"
+        self.status_lbl.setText(tr(
+            f"완료 {result.created_at:%H:%M:%S} · 실행 {n_runs}개 · 종목 {n_names}개 · {window}{skipped}",
+            f"Done {result.created_at:%H:%M:%S} · {n_runs} runs · {n_names} names · {window}{skipped}"))
 
     def set_target_sharpe(self, target: float):
         """Judge the shown result against `target` (cards, target check,
@@ -827,12 +862,14 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.target_card.set_target_sharpe(self.target_sharpe)
         self._sharpe_delegate.target = self.target_sharpe
         self.compare_table.setHorizontalHeaderLabels(comparison_headers(self.target_sharpe))
+        _fit_headers(self.compare_table)
         self.compare_table.viewport().update()
 
     # -------------------------------------------------------------- warnings
     def _show_warnings(self, result: ResearchResult):
         """Fill the Warnings tab from `result` (not from the current form)."""
-        lines = [f"{escape(vid)} not run: {escape(why)}" for vid, why in result.skipped.items()]
+        lines = [tr(f"{escape(vid)} 미실행: {escape(why)}", f"{escape(vid)} not run: {escape(why)}")
+                 for vid, why in result.skipped.items()]
         lines += [escape(w) for w in result.warnings]
         if result.request.allow_holdout:
             lines.insert(0, escape(_HOLDOUT_NOTE))
@@ -896,7 +933,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.cost_seg.select(_mult_key(mult))
         rows = comparison_rows(self._result, mult)
         first_bm = next((r.id for r in rows if r.kind != "strategy"), None)
-        self.variant_seg.set_keys([r.id for r in rows], tooltips={r.id: r.label for r in rows},
+        self.variant_seg.set_keys([r.id for r in rows], tooltips={r.id: run_label(r) for r in rows},
                                   group_starts={first_bm})
         self._syncing = True
         try:
@@ -1063,7 +1100,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         pick = self.trades_view._row_trade(row) if row is not None and 0 <= row < self.trades_table.rowCount() else None
         info = self._result.dataset_info
         dlg = StrategyTradesDialog(
-            tr(f"{run.id} · 비용 {run.cost_mult:g}x · {run.label}", f"{run.id} · cost {run.cost_mult:g}x · {run.label}"), trades, info.get("names"), info.get("ticker_markets"),
+            tr(f"{run.id} · 비용 {run.cost_mult:g}x · {run_label(run)}", f"{run.id} · cost {run.cost_mult:g}x · {run.label}"), trades, info.get("names"), info.get("ticker_markets"),
             select_ticker=pick.ticker if pick else None, select_exit=pick.exit_date if pick else None, parent=self)
         dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         dlg.show()
@@ -1107,7 +1144,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
                     if r.kind == "benchmark":
                         item.setForeground(QBrush(QColor(TEXT_MUTED)))
                     if c == 0:
-                        item.setToolTip(r.label)
+                        item.setToolTip(run_label(r))
                     self.table.setItem(i, c, item)
         finally:
             self.table.setUpdatesEnabled(True)
@@ -1169,11 +1206,11 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             dd_low = min(dd_low, float(np.nanmin(dd)))
         ax_dd.set_ylim(dd_low * 1.15, 1.0)
 
-        ax.set_title(f"NAV rebased to 100 · {self._mult:g}x costs", fontsize=FONT_SMALL, loc="left", color=TEXT)
+        ax.set_title(tr(f"NAV (시작 = 100) · 비용 {self._mult:g}x", f"NAV rebased to 100 · {self._mult:g}x costs"), fontsize=FONT_SMALL, loc="left", color=TEXT)
         ax.legend(fontsize=FONT_SMALL - 1, frameon=False, loc="upper left",
                   ncol=max(1, min(4, (len(chosen) + 3) // 4)))
         ax_dd.axhline(-TARGET_MDD * 100, color=SERIES_TARGET, linestyle="--", linewidth=1.0)
-        ax_dd.set_ylabel("Drawdown %", fontsize=FONT_SMALL - 1, color=TEXT_MUTED)
+        ax_dd.set_ylabel(tr("낙폭 %", "Drawdown %"), fontsize=FONT_SMALL - 1, color=TEXT_MUTED)
 
         for a in (ax, ax_dd):
             a.grid(True, color=LINE, linewidth=0.6)
@@ -1255,17 +1292,17 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             return
         os.makedirs(REPORTS_DIR, exist_ok=True)
         default = os.path.join(REPORTS_DIR, f"trend_following_{SPEC_VERSION}_{datetime.now():%Y%m%d_%H%M}.md")
-        path, _ = QFileDialog.getSaveFileName(self, "Save backtest report", default, "Markdown (*.md)")
+        path, _ = QFileDialog.getSaveFileName(self, tr("백테스트 리포트 저장", "Save backtest report"), default, "Markdown (*.md)")
         if not path:
             return
         try:
             with open(path, "w", encoding="utf-8") as f:
                 header = [f"- **{_HOLDOUT_NOTE}**"] if self._result.request.allow_holdout else None
                 f.write(self._result.to_markdown(header))
-            self.status_lbl.setText(f"Report saved: {path}")
+            self.status_lbl.setText(tr(f"리포트 저장됨: {path}", f"Report saved: {path}"))
         except Exception as e:
             logger.warning("Failed to save the Trend Following report", exc_info=True)
-            self.status_lbl.setText(f"Save failed: {e}")
+            self.status_lbl.setText(tr(f"저장 실패: {e}", f"Save failed: {e}"))
 
     def default_window(self) -> tuple[date, date]:
         return self.start_edit.date().toPyDate(), self.end_edit.date().toPyDate()

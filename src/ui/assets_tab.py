@@ -80,28 +80,26 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
     # ("KRW"/"USD") is relabeled live by _apply_currency_toggle(); the rest
     # are fixed.
     _GROUPS = [
-        ("Date", 0, 1, TEXT_SUB),
+        (tr("날짜", "Date"), 0, 1, TEXT_SUB),
         ("KOSPI", 1, 3, TEXT_SUB),
-        ("Total Assets", 4, 1, TEXT_SUB),
-        ("Weekly P/L", 5, 2, TEXT_SUB),
-        ("Cumulative P/L", 7, 2, TEXT_SUB),
-        ("vs KOSPI", 9, 1, TEXT_SUB),
+        (tr("총자산", "Total Assets"), 4, 1, TEXT_SUB),
+        (tr("주간 손익", "Weekly P/L"), 5, 2, TEXT_SUB),
+        (tr("누적 손익", "Cumulative P/L"), 7, 2, TEXT_SUB),
+        (tr("KOSPI 대비", "vs KOSPI"), 9, 1, TEXT_SUB),
     ]
-    # Sub-labels are English to match the rest of the app's UI (docs/ui.md's
-    # own table uses Korean sub-labels -- 종가/주간 %/누적 % -- but every
-    # other tab's column header is English, so these are the same grouping
-    # translated to stay consistent rather than the literal doc text).
+    # Group and sub-labels are Korean (docs/ui.md's own table: 종가/주간 %/
+    # 누적 %) with an English partner for the English UI (docs/ui.md 8.20).
     _COLUMNS = [
-        ColSpec("date",       "Week · Date", 140, 1.3, None, None),
-        ColSpec("kospi",      "Close",             80, 0.8, None, None),
-        ColSpec("kospi_wk",   "Weekly %",          70, 0.7, None, None),
-        ColSpec("kospi_cum",  "Cumulative %",      80, 0.8, None, None),
+        ColSpec("date",       tr("주차 · 날짜", "Week · Date"), 140, 1.3, None, None),
+        ColSpec("kospi",      tr("종가", "Close"),             80, 0.8, None, None),
+        ColSpec("kospi_wk",   tr("주간 %", "Weekly %"),          70, 0.7, None, None),
+        ColSpec("kospi_cum",  tr("누적 %", "Cumulative %"),      80, 0.8, None, None),
         ColSpec("total",      "KRW",              110, 1.1, None, None),
-        ColSpec("weekly_amt", "Amount",           100, 1.0, None, None),
+        ColSpec("weekly_amt", tr("금액", "Amount"),           100, 1.0, None, None),
         ColSpec("weekly_pct", "%",                 70, 0.7, None, None),
-        ColSpec("cum_amt",    "Amount",           100, 1.0, None, None),
+        ColSpec("cum_amt",    tr("금액", "Amount"),           100, 1.0, None, None),
         ColSpec("cum_pct",    "%",                 70, 0.7, None, None),
-        ColSpec("excess",     "vs KOSPI (%p)",     90, 0.9, None, None),
+        ColSpec("excess",     tr("KOSPI 대비 (%p)", "vs KOSPI (%p)"),     96, 0.9, None, None),
     ]
     # Derived rather than hardcoded so a future reorder of _COLUMNS can't
     # silently desync the "Total Assets" column checks below it
@@ -169,7 +167,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         # Not a fixed 200px any more: chart and table share a splitter below
         # so the user sets the split (docs/ui.md 8.16).
         self._chart_canvas.setMinimumHeight(120)
-        self._chart_canvas.setToolTip("Double-click for the detailed weekly graph")
+        self._chart_canvas.setToolTip(tr("더블클릭하면 상세 주간 그래프가 열립니다", "Double-click for the detailed weekly graph"))
         self._chart_canvas.mpl_connect("button_press_event", self._on_chart_clicked)
 
         # ---Controls bar ---
@@ -268,7 +266,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         # ---Table (docs/ui.md 4.2/4.5: one spec -- label/min-width/weight --
         # instead of a separate _COLS_SUB list and a flat widths=[...] list) ---
         self._table = _AssetsTable(self._stretch_columns)
-        setup_table(self._table, empty_text="No weekly records yet -- pick a week and Add Record")
+        setup_table(self._table, empty_text=tr("주간 기록이 없습니다 -- 주를 고르고 기록 추가를 누르세요", "No weekly records yet -- pick a week and Add Record"))
         self._table.setColumnCount(len(self._COLUMNS))
 
         self._grouped_hdr = GroupedHeaderView(
@@ -596,13 +594,13 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
 
     def _show_graph(self):
         if len(self._records) == 0:
-            self.status_message.emit("Graph: no records to plot yet")
+            self.status_message.emit(tr("그래프: 아직 그릴 기록이 없습니다", "Graph: no records to plot yet"))
             return
         # Same guard as _refresh_table_impl: until AssetMetricsPreloadThread
         # has warmed the USD/KRW and KOSPI caches, _rate_kospi_for_date()
         # would do its first-call network fetch right here on the UI thread.
         if not self._metrics_ready:
-            self.status_message.emit("Graph: USD/KRW and KOSPI history are still loading -- try again in a moment")
+            self.status_message.emit(tr("그래프: USD/KRW와 KOSPI 시세를 아직 불러오는 중입니다 -- 잠시 후 다시 시도하세요", "Graph: USD/KRW and KOSPI history are still loading -- try again in a moment"))
             return
 
         dates = []
@@ -719,13 +717,13 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
     def _on_export_clicked(self):
         metrics = self._compute_records_metrics()
         if not metrics:
-            self.status_message.emit("Export: no records to export yet")
+            self.status_message.emit(tr("내보내기: 아직 내보낼 기록이 없습니다", "Export: no records to export yet"))
             return
 
         default_name = f"total_assets_{datetime.now().strftime('%Y%m%d')}.xlsx"
         path, selected_filter = QFileDialog.getSaveFileName(
-            self, "Export Total Assets", default_name,
-            "Excel Workbook (*.xlsx);;CSV File (*.csv)",
+            self, tr("총자산 내보내기", "Export Total Assets"), default_name,
+            tr("Excel 통합 문서 (*.xlsx);;CSV 파일 (*.csv)", "Excel Workbook (*.xlsx);;CSV File (*.csv)"),
         )
         if not path:
             return
@@ -780,7 +778,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
             QMessageBox.warning(self, _TITLE, tr(f"내보내지 못했습니다:\n{e}", f"Failed to export:\n{e}"))
             return
 
-        self.status_message.emit(f"Exported {len(rows)} row(s) to {path}")
+        self.status_message.emit(tr(f"{len(rows)}행을 {path}(으)로 내보냈습니다", f"Exported {len(rows)} row(s) to {path}"))
 
     def _on_cell_double_clicked(self, row, col):
         # COL_TOTAL_ASSETS is "Total Assets" (docs/ui.md 4.2) in both the old
@@ -801,7 +799,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
             if rec is None:
                 return
             current_val = rec.get("total", 0)
-            text, ok = QInputDialog.getText(self, "Edit Total Assets", "Enter new Total Assets amount:", text=f"{current_val:,.0f}")
+            text, ok = QInputDialog.getText(self, tr("총자산 수정", "Edit Total Assets"), tr("새 총자산 금액을 입력하세요:", "Enter new Total Assets amount:"), text=f"{current_val:,.0f}")
             if ok:
                 try:
                     val = float(text.replace(',', '').strip())
@@ -1007,7 +1005,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
             d_it = QTableWidgetItem(label)
             d_it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             if m["manual"]:
-                d_it.setToolTip("Manually entered/edited")
+                d_it.setToolTip(tr("직접 입력/수정한 값", "Manually entered/edited"))
             # Sorting is enabled on this table (default indicator: newest
             # first), which reorders visual rows without touching
             # self._records -- indexing self._records by the visual row
@@ -1088,7 +1086,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         asset_rebased = [(100.0 * m[total_key] / first_total) if first_total else 100.0 for m in metrics]
         kospi_rebased = [(100.0 * m["kospi_close"] / first_kospi) if first_kospi else 100.0 for m in metrics]
 
-        ax.plot(x, asset_rebased, color=ACCENT, linewidth=2, label=f"Total Assets ({self._currency})")
+        ax.plot(x, asset_rebased, color=ACCENT, linewidth=2, label=tr(f"총자산 ({self._currency})", f"Total Assets ({self._currency})"))
         ax.plot(x, kospi_rebased, color=TEXT_MUTED, linewidth=1.4, label="KOSPI")
         ax.fill_between(x, kospi_rebased, asset_rebased, color=PROFIT, alpha=0.14)
 
@@ -1097,7 +1095,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         ax.margins(x=0.02)
         ax.grid(True, linestyle=":", alpha=0.4)
         ax.legend(fontsize=8, loc="upper left")
-        ax.set_ylabel("Index (first week = 100)", fontsize=8)
+        ax.set_ylabel(tr("지수 (첫 주 = 100)", "Index (first week = 100)"), fontsize=8)
         # Same currency and period as the table under it (docs/ui.md 8.16).
         ax.set_title(tr(f"{metrics[0]['date']} ~ {metrics[-1]['date']} · {self._currency} · 저장된 주간 기록", f"{metrics[0]['date']} ~ {metrics[-1]['date']} · {self._currency} · saved weekly records"),
                      fontsize=8, loc="left", color=TEXT_MUTED)

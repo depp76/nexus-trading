@@ -113,10 +113,11 @@ class MainWindow(QMainWindow):
         self._refresh_dot = QLabel("●")
         self._refresh_dot.setFont(create_font(FONT_SMALL))
         header_layout.addWidget(self._refresh_dot)
-        self.auto_refresh_cb = QCheckBox(f"Auto-refresh · {self.AUTO_REFRESH_MS // 1000}s")
+        self.auto_refresh_cb = QCheckBox(tr(f"자동 갱신 · {self.AUTO_REFRESH_MS // 1000}초",
+                                               f"Auto-refresh · {self.AUTO_REFRESH_MS // 1000}s"))
         self.auto_refresh_cb.toggled.connect(self._toggle_global_auto_timer)
         header_layout.addWidget(self.auto_refresh_cb)
-        self.update_time_label = QLabel("last -")
+        self.update_time_label = QLabel(tr("최근 갱신 -", "last -"))
         self.update_time_label.setObjectName("faint")
         self.update_time_label.setFont(create_font(FONT_SMALL, style_name="Semilight"))
         header_layout.addSpacing(6)
@@ -170,7 +171,7 @@ class MainWindow(QMainWindow):
         # Native status bar: the one place for short-lived progress and result
         # text from every tab (e.g. "Fetching KOSPI quotes... (3/5)"). Each tab's
         # own lasting status line sits in that tab's footer (docs/ui.md 8.4).
-        self.statusBar().showMessage("Ready")
+        self.statusBar().showMessage(tr("준비됨", "Ready"))
 
         # Load Trading History from the database (primary source).
         self.trading_history_tab.load_from_db()
@@ -245,7 +246,8 @@ class MainWindow(QMainWindow):
     def _on_sync_time(self, _text: str):
         self._last_sync_at = datetime.now()
         self._failures.clear("Trading Universe")
-        self.update_time_label.setText(f"last {self._last_sync_at:%H:%M:%S}")
+        self.update_time_label.setText(tr(f"최근 갱신 {self._last_sync_at:%H:%M:%S}",
+                                             f"last {self._last_sync_at:%H:%M:%S}"))
         self._update_refresh_indicator()
 
     def _set_failure(self, source: str, reason: str | None):
@@ -259,7 +261,7 @@ class MainWindow(QMainWindow):
         self._set_failure("Trading Universe", reason)
 
     def _on_history_failed(self, reason: str):
-        self._set_failure("Trading History", f"prices: {reason}")
+        self._set_failure("Trading History", tr(f"가격: {reason}", f"prices: {reason}"))
 
     def _on_history_ok(self):
         self._set_failure("Trading History", None)

@@ -68,9 +68,9 @@ class TestMatches(unittest.TestCase):
         self.assertEqual(a, {"market": ["KOSPI"], "status": "", "search": "x", "ranges": {"tper": [None, 12.0]}})
         self.assertTrue(same_state(a, dict(a, name="mine")))
         self.assertEqual(describe_ranges({"tper": [0, 12], "range52w": [90, None]}),
-                         "tPER 0–12 · 52W position ≥ 90")
+                         "tPER 0–12 · 52주 위치 ≥ 90")
         self.assertEqual(describe_view({"status": "On", "ranges": {}}), "보유")
-        self.assertEqual(describe_view(empty_state()), "No filter")
+        self.assertEqual(describe_view(empty_state()), "필터 없음")
 
 
 def _stock(ticker, market="KOSPI", per=None, price=100.0, low=None, high=None, mode="pct", chg=0.0):
