@@ -93,7 +93,7 @@ class TestTabButtons(unittest.TestCase):
     def test_strategy_tab(self):
         from ui.trend_following_tab import TrendFollowingTab
         tab = TrendFollowingTab()
-        self._check(tab, "리서치 실행")
+        self._check(tab, "백테스트 실행")
         self.assertEqual(tab.stop_btn.objectName(), "")
 
     def test_assets_tab_has_no_delete_button(self):
@@ -313,7 +313,7 @@ class TestButtonOrderAndSizing(unittest.TestCase):
 
     def test_variant_picker_bulk_buttons_on_top_and_cancel_ok_below(self):
         from ui.dialogs.variant_picker import VariantPickerDialog
-        dlg = VariantPickerDialog(("A0",), flows_on=False)
+        dlg = VariantPickerDialog(("A0",))
         dlg.show()
         app.processEvents()
         pos = {b.text(): b.mapTo(dlg, b.rect().topLeft()) for b in dlg.findChildren(QPushButton)}

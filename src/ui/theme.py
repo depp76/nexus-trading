@@ -286,6 +286,10 @@ def app_qss(font_css: str) -> str:
     QLabel#faint {{ color: {TEXT_FAINT}; }}
     /* Caveats attached to a result (Strategy's Warnings panel): caution, not failure (8.3). */
     QLabel#warn  {{ color: {WARN}; }}
+    /* An input error under its field (Strategy run card: start >= end). */
+    QLabel#fieldError {{ color: {DANGER}; }}
+    /* The input the Strategy status line asks to fix. */
+    QPushButton[invalid="true"], QDateEdit[invalid="true"] {{ border-color: {DANGER_LINE}; }}
     /* What a Strategy result was computed with (8.16). */
     QLabel#resultBasis {{ color: {TEXT_MUTED}; }}
 

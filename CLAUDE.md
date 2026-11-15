@@ -101,8 +101,8 @@ Dev tooling is in `requirements-dev.txt`
   `--snapshot`, `--factor-ic`, `--robustness`, `--variants`, ...), `raw_check.py` (A5 sample check
   of split-adjusted vs unadjusted prices), `variant_info.py` (`describe_variant`: each matrix
   row's rules in Korean, built from the `Variant` flags and `StrategyParams`). The
-  Strategy tab runs the research matrix; its variants are picked in `VariantPickerDialog`
-  (list + description of the highlighted row; A3-A5 untickable while Investor flows is off);
+  Strategy tab runs the research matrix; its variants are picked in `TrendConditionsDialog` (a `VariantPickerDialog` plus the run conditions)
+  (list + description of the highlighted row; every row tickable, flows are loaded when A3-A5 are chosen; no flows or event-study switches since 2026-11-15);
   factor IC and robustness reports come from `run.py` only.
   Strategy code imports `data.*` directly (never `data_fetcher`); `data/` never imports it.
   Tests live in `src/tests/strategy/trend_following/` on synthetic price paths
@@ -112,11 +112,11 @@ Dev tooling is in `requirements-dev.txt`
   Update" checkbox starts and stops it and everything downstream), the app stylesheet, and
   logging setup (root INFO; `app.log` gets INFO and above, the console WARNING and above).
 - **`src/ui/`**: `universe_tab.py` (`UniverseTab`), `history_tab.py` (`TradingHistoryTab`),
-  `assets_tab.py` (`TradingRecordTab`), `strategy_tab.py` (`StrategyTab`, the sub-tab host
-  that merges its children's `collect_threads_to_stop()`), `trend_following_tab.py`
-  (`TrendFollowingTab`: request form (three-column card, two meaning rows that each wrap, docs/ui.md 8.18) or its chip-row summary ->
+  `assets_tab.py` (`TradingRecordTab`), `strategy_tab.py` (`StrategyTab`: a `QStackedWidget` of the
+  `STRATEGY_TABS` pages switched by each page's strategy selector; merges their `collect_threads_to_stop()`), `trend_following_tab.py`
+  (`TrendFollowingTab`: run toolbar (전략 selector | 시장 menu | 기간 | 조건... | 중지 백테스트 실행, one line or two fixed lines by width) + status line, rules and run conditions in `ui/dialogs/trend_conditions.py` `TrendConditionsDialog` (`TrendConditions`); docs/ui.md 8.19 -> result head (basis, "다음 실행에 적용", Save) ->
   `TrendFollowingResearchThread` -> variant/cost segments, KPI cards, NAV + drawdown chart,
-  target-check card, result tabs (comparison, all metrics, monthly, trades, event study,
+  target-check card, result tabs (comparison, all metrics, monthly, trades,
   warnings), "Save Report" to `reports/`; docs/ui.md 8.10), `strategy_widgets.py` (that
   screen's widgets: `KpiRow`, `TargetCheckCard`, `SharpeBarDelegate`, `SegmentRow`, table
   fillers, `DEFAULT_TARGET_SHARPE` (1.0; the run's target comes from the form)/`TARGET_MDD`; the trade list shared by the tab and its popup is
@@ -137,7 +137,7 @@ Dev tooling is in `requirements-dev.txt`
   `QCalendarWidget` rules have no current caller and are kept for the next `QDateEdit`),
   `dialogs/` (one module per
   dialog group: `index_ma`, `stock_ma`, `trade_edit`, `trade_history`, `assets_graph`,
-  `holdings_summary`, `assets_report`, `stock_report`, `variant_picker`, `strategy_trades`; import from `ui.dialogs`),
+  `holdings_summary`, `assets_report`, `stock_report`, `variant_picker`, `trend_conditions`, `strategy_trades`; import from `ui.dialogs`),
   `history_table.py` (cell factories, `fill_table_rows`, `SectionTable` + the column
   `SECTIONS` for the history grid), `history_calc.py` (pure P/L maths, no Qt:
   `compute_pl_fields`, `build_monthly_rows`, `summarize_positions`), `assets_report.py` (pure maths for the Total Assets graph's
