@@ -1,0 +1,11 @@
+# One line ending everywhere (2026-11-15): LF in the repository and in the
+# working tree, whatever core.autocrlf says. The tree had CRLF, LF and mixed
+# files side by side (Windows autocrlf checkouts next to tool-written files).
+* text=auto eol=lf
+
+# Never touch binary payloads.
+*.png binary
+*.jpg binary
+*.ico binary
+*.parquet binary
+*.db binary

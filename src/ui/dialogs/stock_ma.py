@@ -61,7 +61,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QScrollBar, QButtonGroup,
     QTableWidget, QTableWidgetItem, QHeaderView, QSplitter, QWidget, QSizePolicy,
 )
-from PyQt6.QtCore import Qt, QPoint, QTimer
+from PyQt6.QtCore import Qt, QPoint, QTimer, QObject, QEvent
 from PyQt6.QtGui import QColor, QFont, QFontMetrics
 
 from i18n import tr
@@ -147,6 +147,30 @@ def _segment_button(text: str, group: QButtonGroup = None, checked: bool = False
     if group is not None:
         group.addButton(btn)
     return btn
+
+
+class _EqualColumns(QObject):
+    """Keeps `cols` of `table` one width -- at least `floor`, plus an equal
+    share of whatever the viewport has left -- whenever the table resizes."""
+
+    def __init__(self, table: QTableWidget, cols: list, floor: int):
+        super().__init__(table)
+        self._table, self._cols, self._floor = table, cols, floor
+        table.viewport().installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Resize:
+            self.apply()
+        return False
+
+    def apply(self) -> None:
+        t = self._table
+        fixed = sum(t.columnWidth(c) for c in range(t.columnCount()) if c not in self._cols)
+        share = (t.viewport().width() - fixed) // len(self._cols)
+        w = max(self._floor, share)
+        for c in self._cols:
+            if t.columnWidth(c) != w:
+                t.setColumnWidth(c, w)
 
 
 class StockMaDialog(QDialog):
@@ -513,10 +537,11 @@ class StockMaDialog(QDialog):
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         if equal_cols:
             # The spare panel width is shared equally by those columns (the
-            # last one used to take it all), so they stay the same width.
+            # last one used to take it all), never below what their numbers
+            # need. Not QHeaderView.Stretch: that sizes from the table's
+            # geometry alone and cut "-12,345,678" with a wider font (CI).
             hdr.setStretchLastSection(False)
-            for c in equal_cols:
-                hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.Stretch)
+            table._equal_cols = _EqualColumns(table, list(equal_cols), same)
         else:
             hdr.setStretchLastSection(True)
         scrollbar_w = table.style().pixelMetric(table.style().PixelMetric.PM_ScrollBarExtent)
