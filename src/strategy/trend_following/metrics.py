@@ -198,23 +198,20 @@ def cash_flow_ledger(res: BacktestResult) -> dict:
     reported per spec 9-27). Reporting only: reads the engine's ledger, changes
     nothing. All amounts in KRW.
 
-    ``years[y]``: ``start`` (the value y starts from), ``end_pre`` (y's last
-    close before the reset, net of the trim's costs; the final value for the
-    last year), ``banked`` / ``topped_up`` (the engine's figures; the bank is
-    already net of the trim's costs), ``net_flow`` (banked - topped_up) and
+    ``years[y]``: ``start`` (the value y starts from), ``end_pre`` (y's value
+    at its last close after the year-end trim, before banking or topping up;
+    the final value for the last year), ``banked`` / ``topped_up`` (the
+    engine's figures), ``net_flow`` (banked - topped_up) and
     ``residual`` (value right after the reset - seed, the integer-share
     leftover). ``reset`` is False for the last year (never reset: the data
     ends) and for every year of a run without annual reset; those years have
     ``net_flow`` / ``residual`` None. ``final_diff`` = final value - seed and
     ``total_pnl`` = sum banked - sum topped_up + final_diff.
 
-    ``end_pre / start - 1`` is ``yearly_returns`` exactly. ``fill_gap`` =
-    end_pre - (value after the reset + banked - topped_up): the trimmed shares
-    are sold at the tick-rounded, slipped fill price while the engine counts
-    only commission and tax as the trim's cost, so the fill-vs-close difference
-    (a few hundred to ~1,000 KRW a year on the real data) is in neither the
-    bank nor the NAV chain (spec 9-27). Sum of ``end_pre - start`` = total_pnl
-    + sum of fill_gap, exactly.
+    ``end_pre / start - 1`` is ``yearly_returns`` exactly, and the sum of
+    ``end_pre - start`` over the years equals ``total_pnl`` exactly. (Until
+    2026-11-15 the engine left the trim's fill-vs-close difference out of the
+    NAV chain, so a ``fill_gap`` field had to close this sum; spec 9-28.)
     """
     dates = list(res.dates)
     seed = float((res.params or {}).get("seed_krw", 0.0)) or float(res.year_start_equity_by_year.get(
@@ -238,7 +235,6 @@ def cash_flow_ledger(res: BacktestResult) -> dict:
             "start": float(start), "end_pre": end_pre, "banked": banked, "topped_up": topped,
             "net_flow": (banked - topped) if reset else None,
             "residual": (float(nxt) - seed) if nxt is not None else None,
-            "fill_gap": (end_pre - float(nxt) - banked + topped) if nxt is not None else 0.0,
             "reset": reset,
         }
         prev_end = float(nxt) if nxt is not None else end_pre
