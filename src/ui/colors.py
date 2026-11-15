@@ -60,7 +60,12 @@ MA_DIV_NEUTRAL_PCT = 2.0
 # on the dark surface, so period order reads as lightness instead of five
 # competing hues (MA Chart Redesign issue #2; Soft Slate keeps every step
 # >= 3:1 against the chart face). Close is neutral ink (ui.theme.TEXT).
-MA_RAMP = {"MA5": "#ece6ff", "MA10": "#cabff5", "MA20": "#a99be6", "MA50": "#9286cf"}
+# 2026-11-15: the old ramp started at #ece6ff, almost the close line's white
+# (CIE dE 11.7 to TEXT), so MA5 and Close could not be told apart. The
+# ramp is now one saturated lavender hue (HLS 252 deg) stepped by contrast
+# on the chart face (6.2 / 4.9 / 3.9 / 3.1:1, all >= 3:1): MA5 is dE 32 from
+# Close and neighbouring steps are dE ~16 apart (MA20/MA50 were 8).
+MA_RAMP = {"MA5": "#d1c5ff", "MA10": "#bcabff", "MA20": "#a993ff", "MA50": "#977cff"}
 
 # Pre-allocated QColor instances -- avoids re-parsing the hex string on every
 # cell of every row (_populate_row/fill_table_rows run per cell per refresh).

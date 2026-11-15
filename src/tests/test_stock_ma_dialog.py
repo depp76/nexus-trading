@@ -8,7 +8,8 @@ from datetime import date, timedelta
 
 import numpy as np
 import polars as pl
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QPushButton
+from PyQt6.QtCore import QPoint
 from PyQt6.QtGui import QPixmap
 
 app = QApplication.instance() or QApplication([])
@@ -121,7 +122,7 @@ class TestStockChart(unittest.TestCase):
         self.assertFalse(d._panel_axes["price"].get_visible())
         self.assertEqual(d._end_labels, {})
         d._set_panel("vol", False)
-        self.assertEqual(d._visible_panels(), [("div", 3)])
+        self.assertEqual(d._visible_panels(), [("div", 1)])          # fixed slot, not enlarged
         _show(d, set())                                 # nothing at all: empty price panel
         self.assertEqual(d._visible_panels(), [("price", 3)])
         d.render(QPixmap(800, 500))
@@ -142,14 +143,18 @@ class TestStockChart(unittest.TestCase):
         d = StockMaDialog("005930", "Samsung", "KOSPI", _df(ew=True))
         row = next(iter(d._period_buttons.values())).parentWidget().parentWidget()
         self.assertIsInstance(row.layout(), FlowLayout)
-        groups = [row.layout().itemAt(i).widget() for i in range(row.layout().count())]
+        items = [row.layout().itemAt(i).widget() for i in range(row.layout().count())]
+        groups = items[:3]
         self.assertEqual(groups, [next(iter(d._series_buttons.values())).parentWidget(),
                                   next(iter(d._period_buttons.values())).parentWidget(),
                                   next(iter(d._panel_buttons.values())).parentWidget()])
+        self.assertEqual(items[3:], [d._as_of_lbl])                   # the as-of date ends the row
         # wide: one line; narrow: groups move down whole
         self.assertEqual(len(row.layout().lines(4000)), 1)
         narrow = row.layout().lines(groups[0].sizeHint().width() + 10)
-        self.assertEqual([len(line) for line in narrow], [1, 1, 1])
+        self.assertEqual([item.widget() for line in narrow for item in line][:3], groups)
+        self.assertEqual(len(narrow[0]), 1)
+        self.assertEqual(len(narrow[1]), 1)
         # one width for the segment, wide enough for every label ("3개월" was cut at 52 px)
         widths = {b.width() for b in d._period_buttons.values()}
         self.assertEqual(len(widths), 1)
@@ -179,10 +184,91 @@ class TestStockChart(unittest.TestCase):
             self.assertLessEqual(ann.get_window_extent(r).x1, fig_w)
         d.close()
 
+    def test_toggles_do_not_move_the_price_chart(self):
+        """2026-11-15 (user direction): series and panel toggles and the
+        period buttons keep the price panel where it is; every panel has a
+        fixed slot and one switched off leaves its slot empty."""
+        d = StockMaDialog("005930", "Samsung", "KOSPI", _df(ew=True))
+        d.showNormal()
+        d.resize(1400, 800)
+        d.show()
+        QApplication.processEvents()
+        price = d._panel_axes["price"]
+        slots = {k: tuple(ax.get_position().bounds) for k, ax in d._panel_axes.items()}
+        margins = d._margins
+
+        def check(tag):
+            d._canvas.draw()
+            self.assertEqual(tuple(price.get_position().bounds), slots["price"], tag)
+            for k, ax in d._panel_axes.items():
+                self.assertEqual(tuple(ax.get_position().bounds), slots[k], tag)
+            self.assertEqual(d._margins, margins, tag)
+
+        for key in ("MA5", "MA20", "EW", "MA50", "Div"):
+            d._series_buttons[key].click()
+            check(key)
+        for key in ("vol", "rsi"):
+            d._panel_buttons[key].click()
+            check(key)
+        self.assertFalse(d._panel_axes["vol"].get_visible())         # its slot stays empty
+        for period in ("1M", "3M", "All", "1Y"):
+            d._apply_period(period)
+            check(period)
+        d.close()
+
+    def test_right_panel_lines_up_with_the_buttons_and_the_chart(self):
+        """2026-11-15: the as-of date ends the button row; the right panel's
+        table title is level with the first button line, the investor table
+        starts level with the chart's top edge, Trend Score sits under the
+        table; the investor groups share one column width; no Close button."""
+        rows = [{"Date": f"2025-04-{i:02d}", "Close": 59000, "Foreigner": 1234567 * (i % 3 - 1),
+                 "Institution": -500 * i, "Retail": -3 * i} for i in range(1, 11)]
+        for width in (1900, 1100):          # one and two button lines
+            d = StockMaDialog("005930", "Samsung", "KOSPI", _df(), investor_data=rows)
+            d.showNormal()
+            d.resize(width, 800)
+            d.show()
+            for _ in range(3):
+                QApplication.processEvents()
+            row = next(iter(d._period_buttons.values())).parentWidget().parentWidget()
+            self.assertIs(d._as_of_lbl.parentWidget(), row)
+            self.assertTrue(d._as_of_lbl.text())
+
+            def gy(w, local=0):
+                return w.mapToGlobal(QPoint(0, local)).y()
+
+            def mid(w):
+                return gy(w, w.height() // 2)
+
+            first_btn = next(iter(d._series_buttons.values()))
+            self.assertLessEqual(abs(mid(d._right_title) - mid(first_btn)), 1, width)
+            self.assertLessEqual(abs(gy(d._right_table) - gy(d._canvas)), 1, width)
+            self.assertGreater(gy(d.trend_section), gy(d._right_table))
+            # the as-of date ends whichever line the panel buttons are on
+            self.assertLessEqual(abs(mid(d._as_of_lbl) - mid(d._panel_buttons["rsi"])), 2)
+            widths = [d._right_table.columnWidth(c) for c in (2, 3, 4)]   # Foreigner, Institution, Retail
+            self.assertLessEqual(max(widths) - min(widths), 1, widths)
+            self.assertFalse([b for b in d.findChildren(QPushButton) if b.text() in ("닫기", "Close")])
+            d.close()
+
+    def test_without_a_table_the_trend_title_takes_the_button_line(self):
+        d = StockMaDialog("005930", "Samsung", "KOSPI", _df())
+        d.showNormal()
+        d.resize(1900, 800)
+        d.show()
+        for _ in range(3):
+            QApplication.processEvents()
+        self.assertIsNone(d._right_table)
+        title = d.trend_section.layout().itemAt(0).widget()
+        btn = next(iter(d._series_buttons.values()))
+        mid = lambda w: w.mapToGlobal(QPoint(0, w.height() // 2)).y()   # noqa: E731
+        self.assertLessEqual(abs(mid(title) - mid(btn)), 2)
+        d.close()
+
     def test_simple_chart_row_has_no_series_group(self):
         d = StockMaDialog("KR3YT", "KR 3Y", "Index", _df(volume=False), change_mode="bp")
         row = next(iter(d._period_buttons.values())).parentWidget().parentWidget()
-        self.assertEqual(row.layout().count(), 2)                 # periods + panels
+        self.assertEqual(row.layout().count(), 3)                 # periods + panels + as-of
 
     def test_panel_toggles_regrid(self):
         d = self.dlg
@@ -287,11 +373,11 @@ class TestTrendScoreSection(unittest.TestCase):
         top = rec.top[0]
         d = StockMaDialog(top.ticker, "X", "KOSPI", _df(), trend_rec=rec)
         sec = d.trend_section
-        self.assertFalse(sec.hint_lbl.isVisibleTo(sec))
         self.assertEqual(sec.cards["ma50"].value.text(), f"{top.pct_ma50:.2f}")
         self.assertEqual(sec.cards["range52"].value.text(), f"{top.pct_range52:.2f}")
-        self.assertIn(f"{top.week_avg:+.2f}", sec.total_lbl.text())
-        self.assertIn("Top 1", sec.total_lbl.text())
+        self.assertEqual(sec.total_lbl.text(), f"{top.week_avg:+.2f}")
+        self.assertIn(f"{top.latest_total:+.2f}", sec.hint_lbl.text())
+        self.assertIn("Top 1", sec.hint_lbl.text())
         self.assertEqual({b.text() for b in sec.gate_badges.values()}, {"통과"})
         d.close()
 
@@ -299,18 +385,46 @@ class TestTrendScoreSection(unittest.TestCase):
         rec = self._rec()
         d = StockMaDialog("SPIKE", "X", "KOSPI", _df(), trend_rec=rec)
         self.assertEqual(d.trend_section.gate_badges["heat"].objectName(), "badgeFail")
-        self.assertIn("Bottom", d.trend_section.total_lbl.text())
+        self.assertIn("Bottom", d.trend_section.hint_lbl.text())
         d.close()
 
-    def test_hint_before_a_run_or_for_an_unscored_name(self):
-        from ui.trend_score_section import NOT_RUN_TEXT, NOT_SCORED_TEXT
+    def test_no_score_keeps_every_row_with_dashes(self):
+        """2026-11-15: before a run, or for an unscored name, the block keeps
+        its rows ("-" values, neutral "-" badges); the "run Trend Score in
+        Trading Universe" line is gone, an unscored name says why in a tooltip."""
+        from ui.trend_score_section import NOT_SCORED_SHORT, NOT_SCORED_TEXT
         d = StockMaDialog("005930", "Samsung", "KOSPI", _df())
-        self.assertEqual(d.trend_section.hint_lbl.text(), NOT_RUN_TEXT)
-        self.assertEqual(d.trend_section.cards, {})
+        sec = d.trend_section
+        self.assertEqual(sec.total_lbl.text(), "-")
+        self.assertEqual(sec.hint_lbl.text(), "")
+        self.assertEqual({c.value.text() for c in sec.cards.values()}, {"-"})
+        self.assertEqual(set(sec.cards), {"ma50", "range52", "r3"})
+        self.assertEqual({(b.objectName(), b.text()) for b in sec.gate_badges.values()}, {("badgeNa", "-")})
         d.close()
         d = StockMaDialog("THIN", "X", "KOSPI", _df(), trend_rec=self._rec())
-        self.assertEqual(d.trend_section.hint_lbl.text(), NOT_SCORED_TEXT)
+        sec = d.trend_section
+        self.assertEqual(sec.hint_lbl.text(), NOT_SCORED_SHORT)
+        self.assertEqual(sec.hint_lbl.toolTip(), NOT_SCORED_TEXT)
+        self.assertEqual(len(sec.gate_badges), 4)
         d.close()
+
+    def test_block_height_and_type_sizes_do_not_depend_on_the_score(self):
+        from ui.common import FONT_BODY, FONT_HEADING, FONT_KPI
+        rec = self._rec()
+        heights = []
+        for ticker, r in ((rec.top[0].ticker, rec), ("005930", None), ("THIN", rec)):
+            d = StockMaDialog(ticker, "X", "KOSPI", _df(), trend_rec=r)
+            sec = d.trend_section
+            sec.ensurePolished()
+            heights.append(sec.sizeHint().height())
+            self.assertEqual(sec.title_lbl.font().pointSize(), FONT_BODY)
+            self.assertTrue(sec.title_lbl.font().bold())
+            self.assertEqual(sec.total_lbl.font().pointSize(), FONT_KPI)
+            card = sec.cards["ma50"].value
+            card.ensurePolished()
+            self.assertEqual(card.font().pointSize(), FONT_HEADING)
+            d.close()
+        self.assertEqual(len(set(heights)), 1, heights)
 
     def test_no_section_outside_kr_stocks(self):
         d = StockMaDialog("AAPL", "Apple", "NASDAQ 100", _df(), trend_rec=self._rec())
