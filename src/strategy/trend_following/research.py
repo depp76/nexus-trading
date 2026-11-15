@@ -269,33 +269,32 @@ def cash_flow_table(runs: list[RunSummary], korean: bool = False) -> list[str]:
     return [_table(heads, rows)]
 
 
-def render_markdown(result: ResearchResult, header: list[str] | None = None) -> str:
-    """`header` lines (provenance block from run.py) go right under the title."""
+def _md_header(result: ResearchResult, header: list[str] | None) -> list[str]:
+    """Title, the caller's provenance lines and the run's settings block."""
     req = result.request
     p = req.params
-    out: list[str] = []
-    out.append(f"# Trend Following backtest report — spec {result.spec_version}")
-    out.append("")
+    info = result.dataset_info
+    out = [f"# Trend Following backtest report — spec {result.spec_version}", ""]
     if header:
         out += list(header)
         out.append("")
     out.append(f"- Generated: {result.created_at:%Y-%m-%d %H:%M}")
-    out.append(f"- Window: {result.dataset_info.get('eval_start', '')} → {result.dataset_info.get('eval_end', '')}")
-    mk = "+".join(result.dataset_info.get("markets") or ["KOSPI"])
-    out.append(f"- Universe: {result.dataset_info.get('n_tickers', 0)} {mk} names "
-               f"(requested top {result.dataset_info.get('universe_size_requested', p.universe_size)}), "
+    out.append(f"- Window: {info.get('eval_start', '')} → {info.get('eval_end', '')}")
+    mk = "+".join(info.get("markets") or ["KOSPI"])
+    out.append(f"- Universe: {info.get('n_tickers', 0)} {mk} names "
+               f"(requested top {info.get('universe_size_requested', p.universe_size)}), "
                f"liquidity floor {p.min_avg_trading_value / 1e8:,.0f}억 KRW (20d avg value)")
-    out.append(f"- Benchmark ETF: {result.dataset_info.get('bm_ticker', '-')} "
-               f"({'total return' if result.dataset_info.get('bm_is_total_return') else 'PRICE ONLY'}); "
-               f"risk-free: {result.dataset_info.get('rf_source', '-')}")
-    out.append(f"- Flows loaded: {result.dataset_info.get('has_flows', False)} "
-               f"(coverage {_pct(result.dataset_info.get('flow_coverage', 0.0), 0)}); "
+    out.append(f"- Benchmark ETF: {info.get('bm_ticker', '-')} "
+               f"({'total return' if info.get('bm_is_total_return') else 'PRICE ONLY'}); "
+               f"risk-free: {info.get('rf_source', '-')}")
+    out.append(f"- Flows loaded: {info.get('has_flows', False)} "
+               f"(coverage {_pct(info.get('flow_coverage', 0.0), 0)}); "
                f"{'KOSPI' if mk == 'KOSPI' else 'any-market'} risk-on share of sessions: "
-               f"{_pct(result.dataset_info.get('regime_on_share', 0.0), 0)}")
+               f"{_pct(info.get('regime_on_share', 0.0), 0)}")
     if mk != "KOSPI":
-        by_m = result.dataset_info.get("names_by_market") or {}
+        by_m = info.get("names_by_market") or {}
         out.append(f"- Markets (spec 9-25): {', '.join(f'{m} {n}' for m, n in by_m.items()) or mk}; each name's L1/RS on "
-                   f"its own market index; US prices in KRW ({result.dataset_info.get('fx_source', '-')}); "
+                   f"its own market index; US prices in KRW ({info.get('fx_source', '-')}); "
                    f"US costs: commission {_pct(req.cost_model.us_commission_rate, 2)}/side + SEC fee on sales, "
                    "no tax, no tick/limit")
     out.append(f"- Seed {p.seed_krw:,.0f} KRW, annual reset {p.annual_reset}, max positions {p.max_positions}, "
@@ -308,12 +307,19 @@ def render_markdown(result: ResearchResult, header: list[str] | None = None) -> 
                f"limit-move block {cm.block_limit_up_down}")
     if result.skipped:
         out.append("- Requested but not run: " + ", ".join(f"{v} ({why})" for v, why in result.skipped.items()))
-    if result.warnings:
-        out.append("")
-        out.append("## Warnings")
-        out += [f"- {w}" for w in result.warnings]
+    return out
 
-    for mult in req.cost_multipliers:
+
+def _md_warnings(result: ResearchResult) -> list[str]:
+    if not result.warnings:
+        return []
+    return ["", "## Warnings"] + [f"- {w}" for w in result.warnings]
+
+
+def _md_results(result: ResearchResult) -> list[str]:
+    """One 6-4 summary table per 4-1 cost multiplier."""
+    out: list[str] = []
+    for mult in result.request.cost_multipliers:
         rows = result.runs_at(mult)
         if not rows:
             continue
@@ -322,98 +328,126 @@ def render_markdown(result: ResearchResult, header: list[str] | None = None) -> 
         out.append("")
         out.append(_table([h for h, _ in SUMMARY_COLUMNS],
                           [[fn(r) for _, fn in SUMMARY_COLUMNS] for r in rows]))
+    return out
 
+
+def _md_verdict(result: ResearchResult) -> list[str]:
+    """6-4 verdict of each strategy row against BM1 / BM3 at 1x costs."""
     strat_1x = result.runs_at(1.0, "strategy")
-    if strat_1x:
-        out.append("")
-        out.append("## 6-4 verdict (1x costs)")
-        out.append("")
-        out.append(_table(
-            ["ID", "Sharpe & Calmar > BM1", "Sharpe & Calmar > BM3", "Up/Down capture shape (60-80% / 30-50%)",
-             "Period wins vs BM1"],
-            [[r.id,
-              "yes" if r.metrics.get("bm1_beats_risk_adjusted") else "no",
-              "yes" if r.metrics.get("bm3_beats_risk_adjusted") else "no",
-              _shape_ok(r.metrics),
-              ", ".join(f"{k}:{'W' if v else ('L' if v is False else '-')}"
-                        for k, v in (r.metrics.get("bm1_period_win") or {}).items())]
-             for r in strat_1x]))
+    if not strat_1x:
+        return []
+    return ["", "## 6-4 verdict (1x costs)", "", _table(
+        ["ID", "Sharpe & Calmar > BM1", "Sharpe & Calmar > BM3", "Up/Down capture shape (60-80% / 30-50%)",
+         "Period wins vs BM1"],
+        [[r.id,
+          "yes" if r.metrics.get("bm1_beats_risk_adjusted") else "no",
+          "yes" if r.metrics.get("bm3_beats_risk_adjusted") else "no",
+          _shape_ok(r.metrics),
+          ", ".join(f"{k}:{'W' if v else ('L' if v is False else '-')}"
+                    for k, v in (r.metrics.get("bm1_period_win") or {}).items())]
+         for r in strat_1x])]
 
-    out.append("")
-    out.append("## Cost sensitivity (CAGR / Sharpe by multiplier)")
-    out.append("")
+
+def _md_cost_sensitivity(result: ResearchResult) -> list[str]:
+    """CAGR / Sharpe of every run id under each 4-1 cost multiplier."""
     ids = []
     for r in result.runs:
         if r.id not in ids:
             ids.append(r.id)
-    mults = list(req.cost_multipliers)
-    out.append(_table(["ID"] + [f"{m:g}x" for m in mults],
-                      [[i] + [_cell_for(result, i, m) for m in mults] for i in ids]))
+    mults = list(result.request.cost_multipliers)
+    return ["", "## Cost sensitivity (CAGR / Sharpe by multiplier)", "",
+            _table(["ID"] + [f"{m:g}x" for m in mults],
+                   [[i] + [_cell_for(result, i, m) for m in mults] for i in ids])]
 
-    out.append("")
-    out.append("## Cost breakdown (1x, whole window)")
-    out.append("")
-    out.append(_table(["ID", "Commission", "Tax", "Slippage", "Total", "Turnover/yr", "Banked", "Topped up"],
-                      [[r.id, _won(r.metrics["cost_commission"]), _won(r.metrics["cost_tax"]),
-                        _won(r.metrics["cost_slippage"]), _won(r.metrics["cost_total"]),
-                        _num(r.metrics["turnover"], 1), _won(r.metrics["banked"]), _won(r.metrics["topped_up"])]
-                       for r in result.runs_at(1.0)]))
 
+def _md_cost_breakdown(result: ResearchResult) -> list[str]:
+    """4-1 cost components and the 9-2 banked / topped-up totals at 1x."""
+    return ["", "## Cost breakdown (1x, whole window)", "",
+            _table(["ID", "Commission", "Tax", "Slippage", "Total", "Turnover/yr", "Banked", "Topped up"],
+                   [[r.id, _won(r.metrics["cost_commission"]), _won(r.metrics["cost_tax"]),
+                     _won(r.metrics["cost_slippage"]), _won(r.metrics["cost_total"]),
+                     _num(r.metrics["turnover"], 1), _won(r.metrics["banked"]), _won(r.metrics["topped_up"])]
+                    for r in result.runs_at(1.0)])]
+
+
+def _md_c_series(result: ResearchResult) -> list[str]:
+    """6-2 / 9-16: turnover and holding period of the score-mode (C-series) rows."""
     c_rows = [r for r in result.runs_at(1.0, "strategy") if VARIANTS.get(r.id) is not None
               and VARIANTS[r.id].mode == "score"]
-    if c_rows:
-        out.append("")
-        out.append("## 6-2 C-series turnover and holding period (1x)")
-        out.append("")
-        out.append("Weekly rank-based rules trade more than the breakout rows, so turnover and holding period are "
-                   "reported next to the cost they drive (round trips per year, calendar days).")
-        out.append("")
-        out.append(_table(["ID", "Trades", "Turnover (round trips/yr)", "Avg hold (d)", "Cost/yr", "Win"],
-                          [[r.id, str(r.metrics["n_trades"]), _num(r.metrics["turnover"], 1),
-                            _num(r.metrics["avg_holding_days"], 0), _pct(r.metrics["cost_pct_per_year"], 2),
-                            _pct(r.metrics["win_rate"], 0)] for r in c_rows]))
+    if not c_rows:
+        return []
+    return ["", "## 6-2 C-series turnover and holding period (1x)", "",
+            "Weekly rank-based rules trade more than the breakout rows, so turnover and holding period are "
+            "reported next to the cost they drive (round trips per year, calendar days).",
+            "",
+            _table(["ID", "Trades", "Turnover (round trips/yr)", "Avg hold (d)", "Cost/yr", "Win"],
+                   [[r.id, str(r.metrics["n_trades"]), _num(r.metrics["turnover"], 1),
+                     _num(r.metrics["avg_holding_days"], 0), _pct(r.metrics["cost_pct_per_year"], 2),
+                     _pct(r.metrics["win_rate"], 0)] for r in c_rows])]
 
+
+def _md_yearly_returns(result: ResearchResult) -> list[str]:
     yearly_rows = result.runs_at(1.0)
-    if yearly_rows:
-        years = sorted({y for r in yearly_rows for y in r.metrics["yearly"]})
-        out.append("")
-        out.append("## Yearly returns (1x)")
-        out.append("")
-        out.append(_table(["ID"] + [str(y) for y in years],
-                          [[r.id] + [_pct(r.metrics["yearly"].get(y)) for y in years] for r in yearly_rows]))
+    if not yearly_rows:
+        return []
+    years = sorted({y for r in yearly_rows for y in r.metrics["yearly"]})
+    return ["", "## Yearly returns (1x)", "",
+            _table(["ID"] + [str(y) for y in years],
+                   [[r.id] + [_pct(r.metrics["yearly"].get(y)) for y in years] for r in yearly_rows])]
 
+
+def _md_cash_flows(result: ResearchResult) -> list[str]:
+    """The 9-2 / 9-27 yearly withdrawal/deposit table with its explanation."""
     flows = cash_flow_table(result.runs_at(1.0))
-    if flows:
-        seed_man = p.seed_krw / 1e4
-        out.append("")
-        out.append("## Yearly cash flows (1x, KRW 만 원)")
-        out.append("")
-        out.append(f"Spec 9-2 / 9-27: each year starts from {seed_man:,.0f}만 원; at the year's last close the excess "
-                   "is withdrawn (+, after the year-end trim's costs) or the shortfall deposited (-). The last year "
-                   "is not reset (the data ends), so its column is the final value minus the seed. P&L = banked - "
-                   "topped up + that difference. Leftover = value right after the last reset minus the seed "
-                   "(integer shares). BM4 has no account and is left out.")
-        out.append("")
-        out += flows
+    if not flows:
+        return []
+    seed_man = result.request.params.seed_krw / 1e4
+    return ["", "## Yearly cash flows (1x, KRW 만 원)", "",
+            f"Spec 9-2 / 9-27: each year starts from {seed_man:,.0f}만 원; at the year's last close the excess "
+            "is withdrawn (+, after the year-end trim's costs) or the shortfall deposited (-). The last year "
+            "is not reset (the data ends), so its column is the final value minus the seed. P&L = banked - "
+            "topped up + that difference. Leftover = value right after the last reset minus the seed "
+            "(integer shares). BM4 has no account and is left out.",
+            ""] + flows
 
-    if result.event_study:
-        out.append("")
-        out.append("## 6-1 event study: forward returns after Donchian-20 breakouts (from next open)")
-        out.append("")
-        headers = ["Group", "n"] + [f"{s} {h}d" for h in HORIZONS for s in ("mean", "hit", "excess")]
-        rows = []
-        for e in result.event_study:
-            row = [e["group"], str(e.get("n", 0))]
-            for h in HORIZONS:
-                row += [_pct(e.get(f"mean_{h}")), _pct(e.get(f"hit_{h}"), 0), _pct(e.get(f"excess_{h}"))]
-            rows.append(row)
-        out.append(_table(headers, rows))
 
-    out.append("")
-    out.append("## Variants")
-    out.append("")
-    out += [f"- {VARIANTS[v].label}" for v in req.variant_ids if v in VARIANTS]
-    out.append("")
+def _md_event_study(result: ResearchResult) -> list[str]:
+    """6-1 forward returns after Donchian-20 breakouts, per group and horizon."""
+    if not result.event_study:
+        return []
+    headers = ["Group", "n"] + [f"{s} {h}d" for h in HORIZONS for s in ("mean", "hit", "excess")]
+    rows = []
+    for e in result.event_study:
+        row = [e["group"], str(e.get("n", 0))]
+        for h in HORIZONS:
+            row += [_pct(e.get(f"mean_{h}")), _pct(e.get(f"hit_{h}"), 0), _pct(e.get(f"excess_{h}"))]
+        rows.append(row)
+    return ["", "## 6-1 event study: forward returns after Donchian-20 breakouts (from next open)", "",
+            _table(headers, rows)]
+
+
+def _md_variants(result: ResearchResult) -> list[str]:
+    """The 6-2 labels of the requested variants, then the closing blank line."""
+    return (["", "## Variants", ""]
+            + [f"- {VARIANTS[v].label}" for v in result.request.variant_ids if v in VARIANTS]
+            + [""])
+
+
+def render_markdown(result: ResearchResult, header: list[str] | None = None) -> str:
+    """`header` lines (provenance block from run.py) go right under the title;
+    the sections follow in a fixed order, each one empty when it has no rows."""
+    out: list[str] = []
+    out += _md_header(result, header)
+    out += _md_warnings(result)
+    out += _md_results(result)
+    out += _md_verdict(result)
+    out += _md_cost_sensitivity(result)
+    out += _md_cost_breakdown(result)
+    out += _md_c_series(result)
+    out += _md_yearly_returns(result)
+    out += _md_cash_flows(result)
+    out += _md_event_study(result)
+    out += _md_variants(result)
     return "\n".join(out)
 
 
