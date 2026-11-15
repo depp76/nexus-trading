@@ -25,7 +25,8 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
 import trade_db
 from threads.fetch_threads import AssetMetricsPreloadThread, AssetReportThread
-from ui.widgets import GroupedHeaderView, ColSpec, NumericItem
+from ui.table_headers import GroupedHeaderView
+from ui.table_items import ColSpec, NumericItem
 from ui.dialogs import TotalAssetsGraphDialog, AssetsReportDialog
 from ui.assets_report import report_dates, build_report
 from ui.colors import PROFIT, LOSS
@@ -819,7 +820,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
     # below now, so every numeric cell needs a real sort key independent of
     # its display text. Plain QTableWidgetItem(text) has none (Qt falls back
     # to comparing the display string), which is exactly the bug
-    # ui.widgets.NumericItem exists to avoid -- see its docstring.
+    # ui.table_items.NumericItem exists to avoid -- see its docstring.
     @staticmethod
     def _pct_item(val: float | None) -> QTableWidgetItem:
         if val is None:

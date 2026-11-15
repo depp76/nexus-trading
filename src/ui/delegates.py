@@ -110,7 +110,7 @@ class CellDelegate(QStyledItemDelegate):
 
 
 # ---------------------------------------------------------------------------
-# Trading Universe (ui/widgets.py StockTable)
+# Trading Universe (ui/universe_table.py StockTable)
 # ---------------------------------------------------------------------------
 # docs/ui.md 1.7: one vocabulary for the highlight states custom_settings.json
 # stores as "On"/"Tg" (kept as-is; the places that display it -- this

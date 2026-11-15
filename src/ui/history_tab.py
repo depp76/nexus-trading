@@ -24,7 +24,7 @@ from threads.fetch_threads import (
     SingleStockFetchThread,
 )
 from threads.realtime import RealtimePriceThread
-from ui.widgets import GroupedHeaderView
+from ui.table_headers import GroupedHeaderView
 from ui.dialogs import (
     BuyEditDialog,
     SellEditDialog,

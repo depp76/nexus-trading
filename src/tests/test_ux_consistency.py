@@ -202,6 +202,16 @@ class TestBadgesAndKpiCard(unittest.TestCase):
 
 
 class TestDialogTables(unittest.TestCase):
+    def test_trade_history_dialog_opens_with_no_matching_trades(self):
+        """It raised AttributeError (no item in row 0, only the total row) and never opened."""
+        from ui.dialogs.trade_history import StockTradeHistoryDialog
+        for is_open in (False, True):
+            dlg = StockTradeHistoryDialog("ACME", [], 0, 0, 0, is_open_position=is_open)
+            tbl = dlg.findChild(QTableWidget)
+            self.assertGreaterEqual(tbl.rowCount(), 1)
+            self.assertTrue(tbl.item(0, 0) is not None or tbl.cellWidget(0, 0) is not None or tbl.columnSpan(0, 0) >= 1)
+            dlg.close()
+
     def test_trade_history_dialog_uses_table_defaults(self):
         from ui.dialogs.trade_history import StockTradeHistoryDialog
         rec = {"buy_date": "2026-01-02", "buy_price": 100, "qty": 10, "buy_amount": 1000,
