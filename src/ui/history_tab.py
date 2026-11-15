@@ -91,6 +91,11 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._open_data    = []
         self._current_path = ""
         self._price_thread: QThread | None = None
+        # The running price fetch: its id and, per input index, the record it
+        # was asked for with that record's company/ticker at the time
+        # (review_codex.md C10; see _on_prices_ready).
+        self._price_req_id = 0
+        self._price_req: list = []
         self._deposit_thread = None
         self._row_data: list = []   # (kind, rec) per visible table row
         self._settings = QSettings("PortfolioManagement", "PortfolioManagement")
@@ -170,17 +175,21 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._kpi_labels = card.cells  # key -> (value QLabel | None, sub QLabel)
         cell = card.add
 
+        # Headline figures first at the KPI size, then the supporting ones
+        # (and the three inputs) at body size after a divider (docs/ui.md
+        # 8.16): every value and input stays in the strip.
         cell("total_asset", "Total Assets", "Valuation + cash")
-        cell("cumulative_asset", "Cumulative Assets", "Live NAV + withdrawals")
         cell("total_pl", "Total P/L", "Realized + unrealized")
         cell("total_pl_pct", "Total P/L (%)", "vs Principal")
+        card.add_divider()
+        cell("cumulative_asset", "Cumulative Assets", "Live NAV + withdrawals", primary=False)
         self._principal_edit = self._make_money_input("e.g. 50,000,000")
-        cell("principal", "Principal", "Deposits − withdrawals", self._principal_edit)
-        cell("cost_basis", "Cost Basis", "Open positions cost")
+        cell("principal", "Principal", "Deposits − withdrawals", self._principal_edit, primary=False)
+        cell("cost_basis", "Cost Basis", "Open positions cost", primary=False)
         self._deposit_edit = self._make_money_input("e.g. 10,000,000")
-        cell("deposit", "Deposit", "", self._deposit_edit)
+        cell("deposit", "Deposit", "", self._deposit_edit, primary=False)
         self._withdrawal_edit = self._make_money_input("e.g. 5,000,000")
-        cell("withdrawal", "Withdrawal", "Cumulative", self._withdrawal_edit)
+        cell("withdrawal", "Withdrawal", "Cumulative", self._withdrawal_edit, primary=False)
 
         # Every cell has the same stretch factor, so the columns come out
         # equal whenever the window is wide enough; when it is not, each cell
@@ -197,16 +206,25 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         edit.textEdited.connect(lambda t, e=edit: _fmt_num_edit(e, t))
         return edit
 
-    def _build_controls_row(self) -> QHBoxLayout:
+    def _build_controls_row(self) -> QVBoxLayout:
         """The tab's one toolbar row (docs/ui.md 8.4): table filters on the
         left -- holdings jump, company search, period, grouping, the 30-day
         rule -- and actions on the right with Add Trade, the primary, last.
         (Consolidated from two dashboard cards and a separate controls row on
         2026-09-20; reordered to the shared filters-left/actions-right layout
         on 2026-10-25.)"""
+        # Two rows (docs/ui.md 8.17): finding a stock | the actions with Add
+        # Trade last, then how the table is cut (period, grouping, stale
+        # prices). One row needed ~1,600px and squeezed the inputs.
+        rows = QVBoxLayout()
+        rows.setSpacing(6)
+        rows.setContentsMargins(0, 0, 0, 0)
         row = QHBoxLayout()
         row.setSpacing(8)
         row.setContentsMargins(0, 0, 0, 0)
+        view_row = QHBoxLayout()
+        view_row.setSpacing(8)
+        view_row.setContentsMargins(0, 0, 0, 0)
 
         self._open_stocks_combo = QComboBox()
         self._open_stocks_combo.addItem("보유 종목...")
@@ -219,12 +237,11 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._search_stock_pl_edit = QLineEdit()
         self._search_stock_pl_edit.setPlaceholderText("종목 검색")
         self._search_stock_pl_edit.setFixedHeight(_BTN_H)
-        self._search_stock_pl_edit.setMinimumWidth(150)
+        self._search_stock_pl_edit.setMinimumWidth(180)
         self._search_stock_pl_edit.setMaximumWidth(250)
         self._search_stock_pl_edit.returnPressed.connect(self._on_search_stock_pl)
         row.addWidget(self._search_stock_pl_edit)
         row.addWidget(make_button("검색", on_click=self._on_search_stock_pl))
-        row.addSpacing(8)
 
         # Period filter (mockup "periods": 1M/3M/YTD/All), by buy date.
         self._period_filter = "All"
@@ -232,9 +249,9 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         for label in ("1M", "3M", "YTD", "All"):
             btn = make_button(_PERIOD_LABELS.get(label, label), width=48, checkable=True, checked=(label == "All"))
             btn.clicked.connect(lambda checked, p=label: self._on_period_filter_changed(p))
-            row.addWidget(btn)
+            view_row.addWidget(btn)
             self._period_buttons[label] = btn
-        row.addSpacing(8)
+        view_row.addSpacing(14)
 
         # Row grouping: by status (closed, then open) or by month (all trades
         # newest first with a month summary row after each month). A view
@@ -247,9 +264,9 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         for key, label in (("status", "상태별"), ("month", "월별")):
             btn = make_button(label, width=84, checkable=True, checked=(key == "status"))
             btn.clicked.connect(lambda _c, k=key: self._on_grouping_changed(k))
-            row.addWidget(btn)
+            view_row.addWidget(btn)
             self._group_buttons[key] = btn
-        row.addSpacing(8)
+        view_row.addSpacing(14)
 
         # docs/ui.md 3.5: the 30-day rule used to be hardcoded with no UI
         # trace of it, so a user seeing a blank current-price cell had no
@@ -259,7 +276,8 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             "오래된 시세 숨김", tooltip="매도 후 30일이 지난 거래의 현재가를 숨깁니다",
             checkable=True, checked=True)
         self._stale_toggle_btn.toggled.connect(self._on_stale_toggle_changed)
-        row.addWidget(self._stale_toggle_btn)
+        view_row.addWidget(self._stale_toggle_btn)
+        view_row.addStretch()
 
         row.addStretch()
 
@@ -269,7 +287,9 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         row.addWidget(self._fetch_dep_btn)
         row.addWidget(make_button("다시 읽기", on_click=self._reload_current))
         row.addWidget(make_button("거래 추가", "primary", self._show_add_trade_dialog))
-        return row
+        rows.addLayout(row)
+        rows.addLayout(view_row)
+        return rows
 
     def _on_grouping_changed(self, key: str):
         self._sort_by_date = key == "month"
@@ -511,10 +531,13 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._rt_price_thread.status_message.connect(self.status_message.emit)
         self._rt_price_thread.start()
 
-    def _on_realtime_prices_fetched(self, prices_dict):
+    def _on_realtime_prices_fetched(self, prices_dict, complete: bool = True):
+        """RealtimePriceThread.prices_fetched. Partial quotes are applied, but
+        only a complete answer clears the failure indicator (review_codex.md C12)."""
         if not prices_dict:
             return
-        self.price_refresh_ok.emit()
+        if complete:
+            self.price_refresh_ok.emit()
             
         updated = False
         
@@ -593,72 +616,67 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             buy_amts.append(r["buy_amount"])
             is_open.append(True)
 
+        self._price_req_id += 1
+        self._price_req = [(r, r.get("company"), r.get("ticker", ""))
+                           for r in self._closed_data + self._open_data]
         thread = self._track_thread(PositionPriceFetchThread(
             names, tickers, markets, buy_prices, qtys, buy_amts, is_open, skip_fetch,
+            request_id=self._price_req_id,
         ), '_price_thread')
         thread.prices_ready.connect(self._on_prices_ready)
         thread.status_message.connect(self.status_message.emit)
         self._path_label.setText("Loading current prices...")
         thread.start()
 
-    def _on_prices_ready(self, results: list):
-        """
-        results: list of dicts with keys:
-          index, curr_price, curr_pl, curr_pl_pct, ticker, market
-        """
+    def _on_prices_ready(self, results: list, request_id: int):
+        """PositionPriceFetchThread.prices_ready. Each result dict has
+        index (into the inputs of that run), curr_price, curr_pl, curr_pl_pct,
+        ticker, market, name, wk1, wk2, mth1.
+
+        Results are applied to the record each input came from, not to the
+        same list position now (review_codex.md C10): a trade deleted, sold
+        or split while the fetch ran used to shift the lists, so a late result
+        wrote another trade's ticker, company and price. A result from an
+        older run, for a record no longer listed, or for one whose company or
+        ticker was edited since the request is dropped."""
+        if request_id != self._price_req_id:
+            return
         self._path_label.setText("")
+        closed_ids = {id(r) for r in self._closed_data}
+        open_ids = {id(r) for r in self._open_data}
         updated = False
-        num_closed = len(self._closed_data)
-        
+
         for res in results:
             idx = res["index"]
+            if not 0 <= idx < len(self._price_req):
+                continue
+            rec, company, ticker = self._price_req[idx]
+            if rec.get("company") != company or rec.get("ticker", "") != ticker:
+                continue
+            is_closed = id(rec) in closed_ids
+            if not is_closed and id(rec) not in open_ids:
+                continue          # deleted (or the lists were reloaded) since the request
+
+            if res.get("ticker"):
+                rec["ticker"] = res.get("ticker")
+            if res.get("market"):
+                rec["market"] = res.get("market")
+            if res.get("name"):
+                rec["company"] = res.get("name")
             curr_price = res.get("curr_price", 0.0)
-            if idx < num_closed:
-                # Closed data
-                if res.get("ticker"):
-                    self._closed_data[idx]["ticker"] = res.get("ticker")
-                if res.get("market"):
-                    self._closed_data[idx]["market"] = res.get("market")
-                if res.get("name"):
-                    self._closed_data[idx]["company"] = res.get("name")
-                self._closed_data[idx]["curr_price"] = curr_price
-                if curr_price > 0:
-                    # col 17 "Position P/L(%)" = Change rate of current price vs sell price (reference for opportunity cost after selling)
-                    sell_price = self._closed_data[idx].get("sell_price", 0.0)
-                    if sell_price > 0:
-                        self._closed_data[idx]["curr_pl_pct"] = (curr_price - sell_price) / sell_price * 100
+            # Open: curr_price only, P/L is calculated in _refresh_summary.
+            rec["curr_price"] = curr_price
+            if is_closed and curr_price > 0:
+                # col 17 "Position P/L(%)" = change of the current price vs the
+                # sell price (opportunity cost after selling)
+                sell_price = rec.get("sell_price", 0.0)
+                if sell_price > 0:
+                    rec["curr_pl_pct"] = (curr_price - sell_price) / sell_price * 100
+            for key in ("wk1", "wk2", "mth1"):
+                if res.get(key, 0.0) != 0.0:
+                    rec[key] = res[key]
+            updated = True
 
-
-                # Map past % changes for closed positions
-                if "wk1" in res and res["wk1"] != 0.0:
-                    self._closed_data[idx]["wk1"] = res["wk1"]
-                if "wk2" in res and res["wk2"] != 0.0:
-                    self._closed_data[idx]["wk2"] = res["wk2"]
-                if "mth1" in res and res["mth1"] != 0.0:
-                    self._closed_data[idx]["mth1"] = res["mth1"]
-
-                updated = True
-            else:
-                # Open data: save curr_price only, P/L is calculated real-time in _refresh_summary
-                open_idx = idx - num_closed
-                if 0 <= open_idx < len(self._open_data):
-                    if res.get("ticker"):
-                        self._open_data[open_idx]["ticker"] = res.get("ticker")
-                    if res.get("market"):
-                        self._open_data[open_idx]["market"] = res.get("market")
-                    if res.get("name"):
-                        self._open_data[open_idx]["company"] = res.get("name")
-                    self._open_data[open_idx]["curr_price"] = res.get("curr_price", 0.0)
-
-                    if "wk1" in res and res["wk1"] != 0.0:
-                        self._open_data[open_idx]["wk1"] = res["wk1"]
-                    if "wk2" in res and res["wk2"] != 0.0:
-                        self._open_data[open_idx]["wk2"] = res["wk2"]
-                    if "mth1" in res and res["mth1"] != 0.0:
-                        self._open_data[open_idx]["mth1"] = res["mth1"]
-
-                    updated = True
-                    
         if updated:
             self._refresh_summary()
             self._apply_filter()
@@ -963,25 +981,31 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         if kind == "monthly":
             return
 
+        # Every edit is built on a copy and applied to `rec` only once the DB
+        # write succeeded, so a failed save leaves screen and DB on the
+        # pre-edit state (review_codex.md C11; the sell edit below did this
+        # already).
         if col == 0:
             curr_val = rec.get("company", "")
             new_str, ok = QInputDialog.getText(self, "Edit", "Company Name:", text=str(curr_val))
             if ok and new_str.strip():
-                rec["company"] = new_str.strip()
-                rec["is_overridden"] = True
-                self._save_overrides([rec])
+                edited = dict(rec, company=new_str.strip(), is_overridden=True)
+                if not self._save_overrides([edited]):
+                    return
+                rec.update(edited)
                 self._refresh_summary()
                 self._apply_filter()
             return
-            
+
         if col == 2:
             curr_val = rec.get("ticker", "")
             new_str, ok = QInputDialog.getText(self, "Edit", "Ticker:", text=str(curr_val))
             if ok and new_str.strip():
                 new_ticker = new_str.strip()
-                rec["ticker"] = new_ticker
-                rec["is_overridden"] = True
-                self._save_overrides([rec])
+                edited = dict(rec, ticker=new_ticker, is_overridden=True)
+                if not self._save_overrides([edited]):
+                    return            # no price or name lookup for an unsaved ticker
+                rec.update(edited)
 
                 self._start_price_fetch()
                 self._refresh_summary()
@@ -999,15 +1023,18 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             dlg = BuyEditDialog(rec, self)
             if dlg.exec() == QDialog.DialogCode.Accepted and dlg.result_data:
                 res = dlg.result_data
-                rec["buy_date"]   = res["buy_date"]
-                rec["buy_price"]  = res["buy_price"]
-                rec["qty"]        = res["qty"]
-                rec["buy_amount"] = res["buy_amount"]
-                rec["is_overridden"] = True
+                edited = dict(rec)
+                edited["buy_date"]   = res["buy_date"]
+                edited["buy_price"]  = res["buy_price"]
+                edited["qty"]        = res["qty"]
+                edited["buy_amount"] = res["buy_amount"]
+                edited["is_overridden"] = True
+                if not self._save_overrides([edited]):
+                    return
+                rec.update(edited)
                 self._compute_pl_fields(rec)
                 self._refresh_summary()
                 self._apply_filter()
-                self._save_overrides([rec])
             return
 
         if col in self._SELL_EDIT_COLS:
@@ -1087,17 +1114,21 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         name = (result or {}).get("name")
         if not name:
             return
-        changed = []
-        for rec in self._open_data + self._closed_data:
-            if rec.get("ticker") == ticker and rec.get("company") != name:
-                rec["company"] = name
-                rec["is_overridden"] = True
-                changed.append(rec)
-        if not changed:
+        targets = [rec for rec in self._open_data + self._closed_data
+                   if rec.get("ticker") == ticker and rec.get("company") != name]
+        if not targets:
             return
-        self._save_overrides(changed)
+        edited = [dict(rec, company=name, is_overridden=True) for rec in targets]
+        if not self._save_overrides(edited):     # C11: nothing applied unless saved
+            return
+        for rec, new in zip(targets, edited):
+            rec.update(new)
         self._refresh_summary()
         self._apply_filter()
+        # The price fetch the ticker edit started was asked for under the old
+        # company name; its results for these records are dropped
+        # (_on_prices_ready), so ask again under the resolved one.
+        self._start_price_fetch()
 
     def _show_add_trade_dialog(self):
         """Open TradeEntryDialog to add manual trade record."""

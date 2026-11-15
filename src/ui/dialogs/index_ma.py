@@ -4,9 +4,8 @@ Split out of the former single ui/dialogs.py (2026-09-17)."""
 import logging
 
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QPushButton,
+    QDialog, QVBoxLayout,
 )
-from PyQt6.QtCore import Qt
 
 import matplotlib.dates as mdates
 import mplcursors
@@ -16,8 +15,9 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 logger = logging.getLogger(__name__)
 
 from data_fetcher import INDEX_TICKERS
+from ui.common import make_button, button_row, fit_to_screen
 from ui.colors import MA_RAMP
-from ui.theme import TEXT, TEXT_MUTED
+from ui.theme import TEXT, TEXT_MUTED, HDR_BG, LINE
 
 
 # ---------------------------------------------------------------------------
@@ -32,7 +32,7 @@ class IndexMaDialog(QDialog):
         """
         super().__init__(parent)
         self.setWindowTitle("Major Indices — Moving Averages")
-        self.resize(1100, 620)
+        fit_to_screen(self, 1100, 620)
 
         layout = QVBoxLayout(self)
 
@@ -69,7 +69,7 @@ class IndexMaDialog(QDialog):
                     val = sel.target[1]
                     lbl = sel.artist.get_label()
                     sel.annotation.set_text(f"{lbl}\n{date_str}: {val:,.0f}")
-                    sel.annotation.get_bbox_patch().set(fc="white", alpha=0.9, edgecolor="gray")
+                    sel.annotation.get_bbox_patch().set(fc=HDR_BG, alpha=0.95, edgecolor=LINE)
             else:
                 ax.text(0.5, 0.5, f"Failed to load\n{err or ''}",
                         ha="center", va="center", transform=ax.transAxes,
@@ -80,6 +80,4 @@ class IndexMaDialog(QDialog):
         canvas = FigureCanvas(fig)
         layout.addWidget(canvas)
 
-        close_btn = QPushButton("닫기")
-        close_btn.clicked.connect(self.accept)
-        layout.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignRight)
+        layout.addLayout(button_row(make_button("닫기", on_click=self.accept)))

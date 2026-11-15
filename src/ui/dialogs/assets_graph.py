@@ -4,7 +4,7 @@ Split out of the former single ui/dialogs.py (2026-09-17)."""
 import logging
 
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
+    QDialog, QVBoxLayout,
 )
 from PyQt6.QtCore import Qt
 
@@ -14,7 +14,8 @@ import mplcursors
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
-from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_FAINT
+from ui.common import make_button, button_row, fit_to_screen
+from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_FAINT, HDR_BG, LINE
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ class TotalAssetsGraphDialog(QDialog):
         super().__init__(parent)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint | Qt.WindowType.WindowMinimizeButtonHint)
         self.setWindowTitle("Total Assets — Cumulative Return")
-        self.resize(900, 600)
+        fit_to_screen(self, 900, 600)
         self.showMaximized()
 
         layout = QVBoxLayout(self)
@@ -113,21 +114,16 @@ class TotalAssetsGraphDialog(QDialog):
                     val_str = f"{val:+.1f}%"
 
                 sel.annotation.set_text(f"{lbl}\n{date_str}: {val_str}")
-                sel.annotation.get_bbox_patch().set(fc="white", alpha=0.9, edgecolor="gray")
+                sel.annotation.get_bbox_patch().set(fc=HDR_BG, alpha=0.95, edgecolor=LINE)
 
         canvas = FigureCanvas(fig)
         layout.addWidget(canvas)
 
-        btns = QHBoxLayout()
-        btns.addStretch()
-        self.report_btn = QPushButton("리포트")
+        self.report_btn = make_button("리포트")
         self.report_btn.setToolTip("Positions, cash and KOSPI at the start and middle of every month")
         if on_report is not None:
             self.report_btn.clicked.connect(on_report)
         else:
             self.report_btn.hide()
-        btns.addWidget(self.report_btn)
-        close_btn = QPushButton("닫기")
-        close_btn.clicked.connect(self.accept)
-        btns.addWidget(close_btn)
-        layout.addLayout(btns)
+        # View dialog: 리포트 → 닫기, bottom right (docs/ui.md 8.17).
+        layout.addLayout(button_row(self.report_btn, make_button("닫기", on_click=self.accept)))

@@ -5,9 +5,13 @@ per-view match counts go through `matches()` here, so a view's count is
 always exactly the number of rows the view shows.
 
 A *filter state* (also what a saved view stores) is a dict:
-    {"market": "ALL"|"KOSPI"|"KOSDAQ", "status": ""|"On"|"Tg",
+    {"market": "ALL" | [market, ...], "status": ""|"On"|"Tg",
      "search": str, "ranges": {field_key: [lo | None, hi | None]}}
-Range bounds are kept in the units the user typed (see RANGE_FIELDS).
+`market` is the list of markets switched on in the toolbar (MARKETS keys),
+or "ALL" for a view that leaves the market selection alone (the built-in
+views, "clear filters"); index rows are never hidden by it. An older saved
+view's single market string reads as a one-market list. Range bounds are
+kept in the units the user typed (see RANGE_FIELDS).
 """
 from __future__ import annotations
 
@@ -40,6 +44,18 @@ RANGE_FIELDS = (
 )
 FIELD_BY_KEY = {f.key: f for f in RANGE_FIELDS}
 
+# The toolbar's markets in display order: the row "market" value -> button label.
+MARKETS = {"KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ", "NASDAQ 100": "NASDAQ", "S&P500": "S&P500"}
+
+
+def market_list(market) -> list | str:
+    """A state's `market` as "ALL" or a list of known markets in display order."""
+    if not market or market == "ALL":
+        return "ALL"
+    given = {market} if isinstance(market, str) else set(market)
+    picked = [m for m in MARKETS if m in given]
+    return picked or "ALL"
+
 # The spec's own examples (docs/ui.md 2.6: "저PER", "신고가 근접"); always
 # listed, never deleted. Held/Target are the toolbar's status button.
 BUILTIN_VIEWS = (
@@ -56,7 +72,7 @@ def normalize(state: dict) -> dict:
     """A clean copy: known keys only, ranges with at least one bound, bounds
     as floats. Used before saving and comparing."""
     out = empty_state()
-    out["market"] = state.get("market") or "ALL"
+    out["market"] = market_list(state.get("market"))
     out["status"] = state.get("status") or ""
     out["search"] = (state.get("search") or "").strip()
     for key, bounds in (state.get("ranges") or {}).items():
@@ -82,8 +98,8 @@ def matches(row: dict, state: dict) -> bool:
     {"market", "status", "name", "ticker", "mode", "values": {key: float | None}}
     where None means the cell has no value (e.g. no PER, no 52W range yet);
     a row with no value never passes a filter on that column."""
-    market = state.get("market") or "ALL"
-    if market != "ALL" and row.get("market") != market:
+    markets = market_list(state.get("market"))
+    if markets != "ALL" and row.get("market") != "Index" and row.get("market") not in markets:
         return False
     status = state.get("status") or ""
     if status and row.get("status") != status:
@@ -119,7 +135,7 @@ def describe_view(state: dict) -> str:
     s = normalize(state)
     parts = []
     if s["market"] != "ALL":
-        parts.append(s["market"])
+        parts.append("+".join(MARKETS[m] for m in s["market"]))
     if s["status"]:
         parts.append({"On": "보유", "Tg": "관심"}.get(s["status"], s["status"]))
     if s["search"]:

@@ -152,7 +152,7 @@ def describe_variant(vid: str, params: StrategyParams | None = None) -> VariantD
             "Donchian 10 청산은 쓰지 않으며, 과열 종목도 계속 보유(과열은 신규 진입만 막음).",
         )))
 
-    data = ["투자자 수급 데이터 필요(Investor flows 체크). 없으면 실행에서 제외됩니다."] if v.needs_flows else \
+    data = ["투자자 수급 데이터 필요(고르면 실행할 때 함께 받음, 한국 종목만). 받지 못하면 실행에서 제외됩니다."] if v.needs_flows else \
         ["가격 데이터만 사용. 수급 데이터 없이 실행됩니다."]
     sections.append(("데이터", tuple(data)))
     return VariantDescription(v.id, _title(v), _summary(v), tuple(sections), v.needs_flows)

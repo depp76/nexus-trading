@@ -64,9 +64,9 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont, QFontMetrics
 
 from ui.trend_score_section import TrendScoreSection
-from ui.common import create_font, setup_table, BTN_H, FONT_TITLE, FONT_BODY, FONT_SMALL, FONT_CAPTION
+from ui.common import create_font, setup_table, BTN_H, FONT_HEADING, FONT_BODY, FONT_SMALL, FONT_CAPTION, make_button, button_row, fit_to_screen
 from ui.colors import PROFIT, LOSS, MA_RAMP, MA_DIV_NEUTRAL_PCT
-from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_FAINT, LINE, SURFACE
+from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_FAINT, LINE, SURFACE, INK_ON_LIGHT
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +155,7 @@ class StockMaDialog(QDialog):
 
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint | Qt.WindowType.WindowMinimizeButtonHint)
         self.setWindowTitle(f"{name} ({ticker}) — Moving Averages")
-        self.resize(1200, 720)
+        fit_to_screen(self, 1200, 720)
         self.showMaximized()
 
         self._is_simple_chart = ticker in _SIMPLE_CHART_TICKERS or change_mode == 'bp'
@@ -217,9 +217,7 @@ class StockMaDialog(QDialog):
         if self.scrollbar is not None:
             chart_v.addWidget(self.scrollbar)
 
-        close_btn = QPushButton("닫기")
-        close_btn.clicked.connect(self.accept)
-        root.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignRight)
+        root.addLayout(button_row(make_button("닫기", on_click=self.accept)))
 
     # ------------------------------------------------------------- top rows
     def _build_header_row(self) -> QHBoxLayout:
@@ -228,7 +226,7 @@ class StockMaDialog(QDialog):
         row.setSpacing(10)
 
         name_lbl = QLabel(self._name)
-        name_lbl.setFont(create_font(FONT_TITLE - 2, QFont.Weight.Bold))
+        name_lbl.setFont(create_font(FONT_HEADING, QFont.Weight.Bold))
         row.addWidget(name_lbl)
 
         meta_lbl = QLabel(f"{self._ticker} · {self._market}")
@@ -238,7 +236,7 @@ class StockMaDialog(QDialog):
 
         last, chg = self._last_close_and_change()
         self._price_lbl = QLabel(self._fmt_price(last) if last is not None else "—")
-        self._price_lbl.setFont(create_font(FONT_TITLE - 2, QFont.Weight.Bold))
+        self._price_lbl.setFont(create_font(FONT_HEADING, QFont.Weight.Bold))
         row.addWidget(self._price_lbl)
         self._chg_lbl = QLabel(self._fmt_change(chg) if chg is not None else "")
         self._chg_lbl.setFont(create_font(FONT_BODY, style_name="Semilight"))
@@ -711,12 +709,12 @@ class StockMaDialog(QDialog):
             if y is None or not np.isfinite(y):
                 continue
             if key == "Close":
-                text, bg, fg = self._fmt_str.format(y), TEXT, SURFACE
+                text, bg, fg = self._fmt_str.format(y), TEXT, INK_ON_LIGHT
             elif key == "EW":
-                text, bg, fg = f"EW {_compact(y)}", TEXT_MUTED, SURFACE
+                text, bg, fg = f"EW {_compact(y)}", TEXT_MUTED, INK_ON_LIGHT
             else:
                 bg = MA_RAMP[key]
-                text, fg = f"{key} {_compact(y)}", (SURFACE if key in ("MA5", "MA10") else TEXT)
+                text, fg = f"{key} {_compact(y)}", INK_ON_LIGHT   # every MA_RAMP step is light
             entries.append((key, float(y), text, bg, fg))
         if not entries:
             return
@@ -835,7 +833,7 @@ class StockMaDialog(QDialog):
                     ann.set_horizontalalignment("right" if left else "left")
                     ann.set_text(self._hover_text(key, y))
                     r, g, b = to_rgb(color)
-                    ann.set_color(TEXT if 0.299 * r + 0.587 * g + 0.114 * b > 0.6 else SURFACE)
+                    ann.set_color(INK_ON_LIGHT if 0.299 * r + 0.587 * g + 0.114 * b > 0.5 else TEXT)
                     ann.get_bbox_patch().set_facecolor(color)
                     marker.set_visible(True)
                     ann.set_visible(True)
@@ -860,7 +858,7 @@ class StockMaDialog(QDialog):
         if bottom not in self._date_badges:
             self._date_badges[bottom] = self._panel_axes[bottom].annotate(
                 "", xy=(0, 0), xycoords=("data", "axes fraction"), xytext=(0, -3), textcoords="offset points",
-                fontsize=_TICK_PT, color=SURFACE, ha="center", va="top", annotation_clip=False, zorder=10,
+                fontsize=_TICK_PT, color=INK_ON_LIGHT, ha="center", va="top", annotation_clip=False, zorder=10,
                 bbox=dict(boxstyle="round,pad=0.3", facecolor=ACCENT, edgecolor="none"))
         ann = self._date_badges[bottom]
         ann.xy = (self._x[idx], 0)

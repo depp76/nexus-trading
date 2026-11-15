@@ -1,12 +1,12 @@
 """ui/dialogs/holdings_summary.py — Per-company P/L summary popup for the Trading
 History tab (split out of TradingHistoryTab on 2026-09-17)."""
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView,
-    QLabel, QPushButton,
+    QDialog, QVBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView,
+    QLabel,
 )
 from PyQt6.QtCore import Qt
 
-from ui.common import create_font, FONT_SMALL, TABLE_ROW_H
+from ui.common import create_font, FONT_SMALL, TABLE_ROW_H, make_button, button_row, fit_to_screen
 from ui.colors import PROFIT, LOSS, QC_PROFIT, QC_LOSS, QC_FLAT
 from ui.widgets import NumericItem
 
@@ -65,7 +65,7 @@ def build_holdings_summary(parent, closed_data: list, open_data: list):
     # ---Build dialog ---
     dlg = QDialog(parent)
     dlg.setWindowTitle("Holdings Summary - P/L by Company")
-    dlg.resize(800, min(100 + 28 * len(rows) + 130, 780))
+    fit_to_screen(dlg, 800, min(100 + 28 * len(rows) + 130, 780))
 
     v = QVBoxLayout(dlg)
     v.setContentsMargins(12, 10, 12, 10)
@@ -136,12 +136,7 @@ def build_holdings_summary(parent, closed_data: list, open_data: list):
     subtotal_lbl.setFont(create_font(FONT_SMALL, style_name="Semilight"))
     v.addWidget(subtotal_lbl)
 
-    close_btn = QPushButton("닫기")
-    close_btn.clicked.connect(dlg.accept)
-    btn_row = QHBoxLayout()
-    btn_row.addStretch()
-    btn_row.addWidget(close_btn)
-    v.addLayout(btn_row)
+    v.addLayout(button_row(make_button("닫기", on_click=dlg.accept)))
     return dlg
 
 

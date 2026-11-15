@@ -5,8 +5,8 @@ import logging
 from datetime import datetime
 
 from PyQt6.QtWidgets import (
-    QDialog, QHBoxLayout, QFormLayout,
-    QPushButton, QLineEdit, QComboBox, QMessageBox,
+    QDialog, QFormLayout,
+    QLineEdit, QComboBox, QMessageBox,
     QApplication,
 )
 from PyQt6.QtCore import Qt
@@ -15,6 +15,8 @@ from PyQt6.QtCore import Qt
 logger = logging.getLogger(__name__)
 
 from ui.common import (
+    make_button,
+    button_row,
     _fmt_num_edit,
     _fmt_num_value,
     _validate_date_str,
@@ -28,6 +30,19 @@ from threads.fetch_threads import TickerValidateThread
 # Message boxes carry the owning tab's name (docs/ui.md 8.5).
 _TITLE = "Trading History"
 
+# Edit dialogs (docs/ui.md 8.17): 380px wide at least so dates and amounts
+# are never clipped, labels right-aligned on one column, fields growing.
+_DIALOG_MIN_W = 400
+
+
+def _form_layout(dialog: QDialog) -> QFormLayout:
+    layout = QFormLayout(dialog)
+    layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+    layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+    layout.setHorizontalSpacing(10)
+    layout.setVerticalSpacing(8)
+    return layout
+
 
 # ---------------------------------------------------------------------------
 # BuyEditDialog — Edit buy details in TradingHistoryTab
@@ -37,12 +52,12 @@ class BuyEditDialog(QDialog):
     def __init__(self, current_data, parent=None):
         super().__init__(parent)
         self.setWindowTitle("매수 수정")
-        self.setMinimumWidth(300)
+        self.setMinimumWidth(_DIALOG_MIN_W)
         self.result_data = None
         self._sell_date_str = current_data.get("sell_date", "") or ""
         self._sell_qty = float(current_data.get("sell_qty", 0.0) or 0.0)
 
-        layout = QFormLayout(self)
+        layout = _form_layout(self)
 
         self.buy_date_edit = QLineEdit(current_data.get("buy_date", ""))
         self.buy_date_edit.setPlaceholderText("YYYY-MM-DD")
@@ -59,15 +74,11 @@ class BuyEditDialog(QDialog):
         layout.addRow("수량:", self.buy_qty_edit)
         layout.addRow("매수 금액:", self.buy_amount_edit)
 
-        btn_box = QHBoxLayout()
-        save_btn = QPushButton("저장")
-        save_btn.clicked.connect(self.on_save)
-        cancel_btn = QPushButton("취소")
-        cancel_btn.clicked.connect(self.reject)
-
-        save_btn.setObjectName("primary")
-        btn_box.addWidget(save_btn)
-        btn_box.addWidget(cancel_btn)
+        # 취소 → 저장, right-aligned; no default button, so Enter in a
+        # field never saves (docs/ui.md 8.17).
+        save_btn = make_button("저장", "primary", self.on_save)
+        cancel_btn = make_button("취소", on_click=self.reject)
+        btn_box = button_row(cancel_btn, save_btn)
 
         # ---1,000-separator auto-format ---
         self.buy_price_edit.textEdited.connect(
@@ -133,12 +144,12 @@ class SellEditDialog(QDialog):
     def __init__(self, current_data, parent=None):
         super().__init__(parent)
         self.setWindowTitle("매도 수정")
-        self.setMinimumWidth(300)
+        self.setMinimumWidth(_DIALOG_MIN_W)
         self.result_data = None
         self._buy_date_str = current_data.get("buy_date", "")
         self._orig_qty = float(current_data.get("qty", 0.0))
 
-        layout = QFormLayout(self)
+        layout = _form_layout(self)
 
         self.sell_date_edit = QLineEdit(current_data.get("sell_date", ""))
         self.sell_date_edit.setPlaceholderText("YYYY-MM-DD (보유 중이면 비움)")
@@ -153,15 +164,11 @@ class SellEditDialog(QDialog):
         layout.addRow("매도 수량:", self.sell_qty_edit)
         layout.addRow("매도 금액:", self.sell_amount_edit)
 
-        btn_box = QHBoxLayout()
-        save_btn = QPushButton("저장")
-        save_btn.clicked.connect(self.on_save)
-        cancel_btn = QPushButton("취소")
-        cancel_btn.clicked.connect(self.reject)
-
-        save_btn.setObjectName("primary")
-        btn_box.addWidget(save_btn)
-        btn_box.addWidget(cancel_btn)
+        # 취소 → 저장, right-aligned; no default button, so Enter in a
+        # field never saves (docs/ui.md 8.17).
+        save_btn = make_button("저장", "primary", self.on_save)
+        cancel_btn = make_button("취소", on_click=self.reject)
+        btn_box = button_row(cancel_btn, save_btn)
 
         # ---1,000-separator auto-format ---
         # Price/amount accept decimals like the buy side (US sell prices were
@@ -243,12 +250,12 @@ class TradeEntryDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("거래 추가")
-        self.setMinimumWidth(300)
+        self.setMinimumWidth(_DIALOG_MIN_W)
         self.result_data = None
         self._validate_thread = None
         self._pending = None  # input snapshot of the in-flight ticker check
 
-        layout = QFormLayout(self)
+        layout = _form_layout(self)
 
         self.market_combo = QComboBox()
         self.market_combo.addItems(["KOSPI", "KOSDAQ", "NASDAQ", "NASDAQ 100", "NYSE", "AMEX"])
@@ -290,15 +297,10 @@ class TradeEntryDialog(QDialog):
         self.qty_edit.textChanged.connect(self._val_qty)
         self._val_date(); self._val_price(); self._val_qty()
 
-        btn_box = QHBoxLayout()
-        self.save_btn = QPushButton("저장")
-        self.save_btn.clicked.connect(self.on_save)
-        self.cancel_btn = QPushButton("취소")
-        self.cancel_btn.clicked.connect(self.reject)
-
-        self.save_btn.setObjectName("primary")
-        btn_box.addWidget(self.save_btn)
-        btn_box.addWidget(self.cancel_btn)
+        # 취소 → 저장, right-aligned; no default button (docs/ui.md 8.17).
+        self.save_btn = make_button("저장", "primary", self.on_save)
+        self.cancel_btn = make_button("취소", on_click=self.reject)
+        btn_box = button_row(self.cancel_btn, self.save_btn)
 
         layout.addRow(btn_box)
 

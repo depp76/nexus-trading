@@ -11,43 +11,43 @@ hardcoded threshold ladder should compute it via heatmap_bg() instead.
 """
 from PyQt6.QtGui import QColor
 
-PROFIT = "#3b6fc4"   # gain, up
-LOSS = "#d1453b"      # loss, down
-FLAT = "#75798c"      # zero / not applicable
+PROFIT = "#a5c9ff"   # gain, up (Soft Slate: light blue on the dark surface, docs/ui.md 8.16)
+LOSS = "#ffb1a8"     # loss, down (light red)
+FLAT = "#aeb8c6"     # zero / not applicable
 
 # Danger button hue (delete/destructive actions) -- kept separate from
 # PROFIT/LOSS so it doesn't flip meaning when the price-direction convention
 # changes (2026-09-22: PROFIT/LOSS swapped to blue=up/red=down, but "danger"
 # must stay red regardless of which one currently means "up").
-DANGER = "#d1453b"
-DANGER_BG = "#fdf0ef"     # danger hover / invalid-input field fill
-DANGER_LINE = "#f0c4c1"   # danger button outline
+DANGER = "#ff9e94"
+DANGER_BG = "#5a3f47"     # danger hover / invalid-input field fill
+DANGER_LINE = "#a0646a"   # danger button outline
 
 # Status / judgement colors (docs/ui.md 8.3) -- a third channel next to
 # PROFIT/LOSS (price direction) and the accent (selection/emphasis). OK is
 # "good / done" (a cheap tPER, a fetched deposit); WARN is "look at this"
 # (an expensive tPER). WARN is amber rather than red so it never reads as
 # LOSS; a failure uses DANGER.
-OK = "#2e7d5b"
-WARN = "#b8650a"
+OK = "#8fd6b0"
+WARN = "#f2b866"
 
 # Badge fills for the status channel (docs/ui.md 8.3; ui_redesign_2026-11 P0-1).
-# Text colors are one step darker than OK/WARN/DANGER so a small badge label
-# keeps 4.5:1 contrast on its fill.
-OK_BG, OK_TEXT = "#e8f3ee", "#2e7d5b"
-WARN_BG, WARN_TEXT = "#fff6e8", "#8a4f08"
-FAIL_BG, FAIL_TEXT = DANGER_BG, "#b3362e"
-NA_BG, NA_TEXT = "#f0f1f8", "#595d6c"
+# Dark fills with text one step lighter than OK/WARN/DANGER so a small badge
+# label keeps 4.5:1 contrast on its fill.
+OK_BG, OK_TEXT = "#2f5446", "#bdefd3"
+WARN_BG, WARN_TEXT = "#5a4a2e", "#ffdda6"
+FAIL_BG, FAIL_TEXT = "#5e3b42", "#ffc7c0"
+NA_BG, NA_TEXT = "#4a5666", "#dce1e9"
 
 # Chart series roles (strategy charts; ui_redesign_2026-11 P0-1).
-SERIES_SELECTED = "#9184d9"   # = theme.ACCENT, solid
-SERIES_BENCH = "#9397ab"      # = theme.TEXT_FAINT, dashed
+SERIES_SELECTED = "#c4b8f1"   # = theme.ACCENT, solid
+SERIES_BENCH = "#afb9c6"      # = theme.TEXT_FAINT, dashed
 SERIES_TARGET = WARN          # target lines (the -15% drawdown), dashed
-DRAWDOWN_ALPHA = 0.18         # LOSS fill under the drawdown curve
+DRAWDOWN_ALPHA = 0.25         # LOSS fill under the drawdown curve
 # Several runs on one chart (docs/ui.md 8.14): one hue per selected run, in
 # selection order, the accent first. Pure blue/red are left out so a series
 # colour never reads as PROFIT/LOSS; BM1 keeps SERIES_BENCH.
-SERIES_PALETTE = ("#9184d9", "#2a9d8f", "#e07a1f", "#5b8c2a", "#c2549d", "#a68a2e", "#5c6f82", "#8d6e63")
+SERIES_PALETTE = ("#c4b8f1", "#6fd3c4", "#f5a863", "#a6d96a", "#f08cc8", "#e3c86a", "#9fb8d0", "#d2a894")
 
 # MA divergence (price / MA x 100): within +-MA_DIV_NEUTRAL_PCT of 100 is
 # "neutral". The MA chart's three background bands (StockMaDialog) and the
@@ -56,10 +56,11 @@ SERIES_PALETTE = ("#9184d9", "#2a9d8f", "#e07a1f", "#5b8c2a", "#c2549d", "#a68a2
 # MA Chart Redesign issue #6: the two used to have different thresholds).
 MA_DIV_NEUTRAL_PCT = 2.0
 
-# Moving-average lines: one accent ramp, darkest for the shortest window,
-# so period order reads as lightness instead of five competing hues
-# (MA Chart Redesign issue #2). Close is neutral ink (ui.theme.TEXT).
-MA_RAMP = {"MA5": "#6d5fb8", "MA10": "#9184d9", "MA20": "#b5abfc", "MA50": "#d8d5f2"}
+# Moving-average lines: one accent ramp, brightest for the shortest window
+# on the dark surface, so period order reads as lightness instead of five
+# competing hues (MA Chart Redesign issue #2; Soft Slate keeps every step
+# >= 3:1 against the chart face). Close is neutral ink (ui.theme.TEXT).
+MA_RAMP = {"MA5": "#ece6ff", "MA10": "#cabff5", "MA20": "#a99be6", "MA50": "#9286cf"}
 
 # Pre-allocated QColor instances -- avoids re-parsing the hex string on every
 # cell of every row (_populate_row/fill_table_rows run per cell per refresh).

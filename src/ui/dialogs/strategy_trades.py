@@ -88,6 +88,9 @@ class StrategyTradesView(QWidget):
         for w in extra_widgets:
             bar.addWidget(w)
         root.addLayout(bar)
+        # Summary on the line under the filter bar, above the table (docs/ui.md 8.17).
+        self.summary_lbl = make_footer_label("")
+        root.addWidget(self.summary_lbl)
 
         self.table = setup_table(QTableWidget(0, len(COLUMNS)), empty_text=empty_text)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -100,9 +103,6 @@ class StrategyTradesView(QWidget):
             self.table.cellDoubleClicked.connect(on_activate)
         install_table_keys(self.table, on_activate=on_activate)   # Ctrl+C copies the selected rows as TSV
         root.addWidget(self.table, 1)
-
-        self.summary_lbl = make_footer_label("")
-        root.addWidget(self.summary_lbl)
         self.fit_columns()
 
     # ------------------------------------------------------------------ data

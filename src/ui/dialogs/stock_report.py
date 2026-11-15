@@ -1,9 +1,9 @@
 """ui/dialogs/stock_report.py — Gemini per-stock AI report popup (roadmap 2-1,
 review.md 2-1)."""
-from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QTextEdit
 from PyQt6.QtGui import QFont
 
-from ui.common import create_font, FONT_HEADING, FONT_BODY, FONT_CAPTION
+from ui.common import create_font, FONT_HEADING, FONT_BODY, FONT_CAPTION, make_button, button_row, fit_to_screen
 from ui.theme import ACCENT_TEXT, TEXT_MUTED, LINE, ZEBRA
 
 
@@ -11,7 +11,7 @@ def show_stock_report_result(parent, ticker: str, name: str, result_text: str):
     """Display the AI per-stock report in a modal dialog."""
     result_dlg = QDialog(parent)
     result_dlg.setWindowTitle(f"AI Stock Report — {name} ({ticker})")
-    result_dlg.resize(480, 320)
+    fit_to_screen(result_dlg, 560, 420)
     v = QVBoxLayout(result_dlg)
     v.setContentsMargins(16, 14, 16, 14)
     v.setSpacing(10)
@@ -38,11 +38,6 @@ def show_stock_report_result(parent, ticker: str, name: str, result_text: str):
     disclaimer_lbl.setStyleSheet(f"color:{TEXT_MUTED};")
     v.addWidget(disclaimer_lbl)
 
-    close_btn = QPushButton("닫기")
-    close_btn.clicked.connect(result_dlg.accept)
-    btn_row = QHBoxLayout()
-    btn_row.addStretch()
-    btn_row.addWidget(close_btn)
-    v.addLayout(btn_row)
+    v.addLayout(button_row(make_button("닫기", on_click=result_dlg.accept)))
 
     result_dlg.exec()

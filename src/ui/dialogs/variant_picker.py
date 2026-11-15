@@ -2,9 +2,8 @@
 rows (A0-A5, B, C1-C3) a Trend Following research run backtests, with each
 row's rules shown next to the list (strategy.trend_following.describe_variant).
 
-Opened from the Strategy tab's "Variants..." button. Rows that need investor
-flows (A3-A5) stay listed so their description can be read, but cannot be
-ticked while the tab's Investor flows box is off.
+Opened from the Strategy tab's "전략 선택..." button. Every row can be ticked;
+the tab loads investor flows when a ticked row needs them (A3-A5).
 
 The list labels and descriptions are Korean (user direction, 2026-11-13);
 the buttons stay English like the rest of the app's chrome.
@@ -20,7 +19,7 @@ from PyQt6.QtWidgets import (
 )
 
 from strategy.trend_following import VARIANTS, StrategyParams, describe_variant
-from ui.common import make_button
+from ui.common import make_button, button_row, fit_to_screen
 from ui.theme import TEXT, TEXT_MUTED, TEXT_SUB
 
 # List groups, in VARIANTS order within each (spec 6-2).
@@ -44,20 +43,26 @@ def description_html(vid: str, params: StrategyParams | None = None) -> str:
 
 
 class VariantPickerDialog(QDialog):
-    """`selected`: the ids ticked on open. `flows_on`: whether flow-dependent
-    rows may be ticked. `params`: the numbers quoted in the descriptions (the
-    tab's current form). After `exec()`, `selected_ids()` is the choice in
+    """`selected`: the ids ticked on open. `params`: the numbers quoted in the
+    descriptions (the tab's current form). After `exec()`, `selected_ids()` is the choice in
     VARIANTS order."""
 
-    def __init__(self, selected, flows_on: bool, params: StrategyParams | None = None, parent=None):
+    def __init__(self, selected, params: StrategyParams | None = None, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("전략 변형 선택")
-        self.resize(880, 540)
-        self._flows_on = flows_on
+        self.setWindowTitle("전략 선택")
+        fit_to_screen(self, 880, 540)
         self._params = params
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 10, 12, 10)
+        # Bulk selection sits on the list it acts on; the bottom row is only
+        # 취소 → 확인 (docs/ui.md 8.17).
+        bulk = QHBoxLayout()
+        bulk.setSpacing(6)
+        bulk.addWidget(make_button("전체 선택", on_click=lambda: self._set_all(True)))
+        bulk.addWidget(make_button("전체 해제", on_click=lambda: self._set_all(False)))
+        bulk.addStretch()
+        root.addLayout(bulk)
         root.setSpacing(8)
 
         self.list = QListWidget()
@@ -95,14 +100,8 @@ class VariantPickerDialog(QDialog):
         self.count_lbl.setObjectName("muted")
         root.addWidget(self.count_lbl)
 
-        buttons = QHBoxLayout()
-        buttons.addWidget(make_button("전체", on_click=lambda: self._set_all(True)))
-        buttons.addWidget(make_button("해제", on_click=lambda: self._set_all(False)))
-        buttons.addStretch()
-        buttons.addWidget(make_button("취소", on_click=self.reject))
         self.ok_btn = make_button("확인", "primary", self.accept)
-        buttons.addWidget(self.ok_btn)
-        root.addLayout(buttons)
+        root.addLayout(button_row(make_button("취소", on_click=self.reject), self.ok_btn))
 
         self.list.currentItemChanged.connect(self._on_current_changed)
         self.list.itemChanged.connect(self._update_count)
@@ -112,31 +111,18 @@ class VariantPickerDialog(QDialog):
         self._update_count()
 
     def _make_item(self, vid: str, checked: bool) -> QListWidgetItem:
-        v = VARIANTS[vid]
         d = describe_variant(vid, self._params)
-        blocked = v.needs_flows and not self._flows_on
-        item = QListWidgetItem(f"{vid}  {d.title}" + ("  (수급 필요)" if blocked else ""))
+        item = QListWidgetItem(f"{vid}  {d.title}")
         item.setData(_VID_ROLE, vid)
-        flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-        if blocked:
-            # Still selectable so the description can be read, just not tickable.
-            item.setForeground(QBrush(QColor(TEXT_MUTED)))
-            item.setToolTip("Strategy 탭에서 Investor flows를 체크하면 이 변형을 실행할 수 있습니다.")
-        else:
-            flags |= Qt.ItemFlag.ItemIsUserCheckable
-        item.setFlags(flags)
-        item.setCheckState(Qt.CheckState.Checked if checked and not blocked else Qt.CheckState.Unchecked)
+        item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsUserCheckable)
+        item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
         self._items[vid] = item
         return item
-
-    def _checkable(self, item: QListWidgetItem) -> bool:
-        return bool(item.flags() & Qt.ItemFlag.ItemIsUserCheckable)
 
     def _set_all(self, on: bool):
         state = Qt.CheckState.Checked if on else Qt.CheckState.Unchecked
         for item in self._items.values():
-            if self._checkable(item):
-                item.setCheckState(state)
+            item.setCheckState(state)
 
     def _on_current_changed(self, item, _prev=None):
         vid = item.data(_VID_ROLE) if item is not None else None
@@ -144,15 +130,11 @@ class VariantPickerDialog(QDialog):
             self.detail.setHtml(description_html(vid, self._params))
 
     def _update_count(self, *_):
-        n = len(self.selected_ids())
-        available = sum(1 for item in self._items.values() if self._checkable(item))
-        note = "" if available == len(self._items) else " · 수급 변형은 Investor flows를 켜야 선택 가능"
-        self.count_lbl.setText(f"{available}개 중 {n}개 선택{note}")
+        self.count_lbl.setText(f"{len(self._items)}개 중 {len(self.selected_ids())}개 선택")
 
     def select(self, vid: str):
         """Show `vid`'s description (as a click on its row would)."""
         self.list.setCurrentItem(self._items[vid])
 
     def selected_ids(self) -> tuple[str, ...]:
-        return tuple(vid for vid, item in self._items.items()
-                     if self._checkable(item) and item.checkState() == Qt.CheckState.Checked)
+        return tuple(vid for vid, item in self._items.items() if item.checkState() == Qt.CheckState.Checked)

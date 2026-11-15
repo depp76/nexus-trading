@@ -13,7 +13,7 @@ from datetime import datetime
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QLineEdit, QLabel, QHeaderView, QComboBox, QMessageBox,
-    QInputDialog, QFileDialog, QMenu,
+    QInputDialog, QFileDialog, QMenu, QSplitter, QFrame,
 )
 from PyQt6.QtCore import Qt, QTimer, QSettings, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QKeySequence, QShortcut
@@ -60,7 +60,7 @@ class _AssetsTable(QTableWidget):
 from ui.common import (
     FONT_BODY,
     create_font, ThreadOwnerMixin, make_button, setup_table, TAB_MARGINS, TAB_SPACING,
-    install_table_keys,
+    install_table_keys, remember_splitter,
 )
 
 
@@ -165,8 +165,9 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self._chart_fig = Figure(figsize=(6, 2), constrained_layout=True)
         self._chart_ax = self._chart_fig.add_subplot(111)
         self._chart_canvas = FigureCanvas(self._chart_fig)
-        self._chart_canvas.setFixedHeight(200)
-        root.addWidget(self._chart_canvas)
+        # Not a fixed 200px any more: chart and table share a splitter below
+        # so the user sets the split (docs/ui.md 8.16).
+        self._chart_canvas.setMinimumHeight(120)
         self._chart_canvas.setToolTip("Double-click for the detailed weekly graph")
         self._chart_canvas.mpl_connect("button_press_event", self._on_chart_clicked)
 
@@ -183,7 +184,8 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self._asset_edit = QLineEdit()
         self._asset_edit.setFont(create_font(FONT_BODY, style_name="Semilight"))
         self._asset_edit.setPlaceholderText("자동 입력")
-        self._asset_edit.setFixedWidth(120)
+        self._asset_edit.setMinimumWidth(160)
+        self._asset_edit.setMaximumWidth(180)
         self._asset_edit.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._asset_edit.textEdited.connect(self._fmt_asset_input)
         self._asset_edit.textEdited.connect(self._on_asset_edit_user_typed)
@@ -200,8 +202,10 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         lbl_assets = QLabel("총자산:")
         lbl_assets.setFont(create_font(FONT_BODY, style_name="Semilight"))
 
-        live_asset_title = QLabel("현재 총자산:")
-        live_asset_title.setToolTip("계좌 평가액 + 누적 출금액 (Trading History 기준)")
+        # "실시간": the live estimate from Trading History, not a saved
+        # weekly record (docs/ui.md 8.16).
+        live_asset_title = QLabel("현재 총자산(실시간):")
+        live_asset_title.setToolTip("계좌 평가액 + 누적 출금액 (Trading History 기준 실시간 추정, 저장된 주간 기록이 아님)")
         live_asset_title.setFont(create_font(FONT_BODY, style_name="Semilight"))
 
         # docs/ui.md issue #7 (mockup): these were QLineEdit(readOnly), which
@@ -211,7 +215,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self.live_asset_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.live_asset_lbl.setFont(create_font(FONT_BODY, QFont.Weight.Bold))
         self.live_asset_lbl.setStyleSheet(f"color:{TEXT};")
-        self.live_asset_lbl.setFixedWidth(120)
+        self.live_asset_lbl.setMinimumWidth(120)
 
         live_diff_title = QLabel("주간 손익:")
         live_diff_title.setFont(create_font(FONT_BODY, style_name="Semilight"))
@@ -220,14 +224,23 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self.live_diff_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.live_diff_lbl.setFont(create_font(FONT_BODY, QFont.Weight.Bold))
         self.live_diff_lbl.setStyleSheet(f"color:{TEXT};")
-        self.live_diff_lbl.setFixedWidth(150)
+        self.live_diff_lbl.setMinimumWidth(150)
 
+        ctrl.setSpacing(6)
         ctrl.addWidget(lbl_date)
         ctrl.addWidget(self._date_combo)
-        ctrl.addSpacing(12)
+        ctrl.addWidget(today_btn)
+        ctrl.addSpacing(14)
         ctrl.addWidget(lbl_assets)
         ctrl.addWidget(self._asset_edit)
-        ctrl.addSpacing(12)
+        ctrl.addSpacing(14)
+        # The live figures are read-only and not part of the record being
+        # entered: their own group, set apart by a divider.
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.VLine)
+        divider.setObjectName("kpiDivider")
+        ctrl.addWidget(divider)
+        ctrl.addSpacing(8)
         ctrl.addWidget(live_asset_title)
         ctrl.addWidget(self.live_asset_lbl)
         ctrl.addSpacing(12)
@@ -246,8 +259,9 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
 
         # Actions on the right, the primary last (docs/ui.md 8.4).
         ctrl.addStretch()
-        ctrl.addWidget(today_btn)
         ctrl.addWidget(add_btn)
+        # Order (docs/ui.md 8.16): header (currency, rate, graph, export) ->
+        # live total + record input -> trend chart -> weekly table.
         root.addLayout(ctrl)
 
         # ---Table (docs/ui.md 4.2/4.5: one spec -- label/min-width/weight --
@@ -281,7 +295,18 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self._delete_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self._table)
         self._delete_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
         self._delete_shortcut.activated.connect(self._delete_selected)
-        root.addWidget(self._table)
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(self._chart_canvas)
+        splitter.addWidget(self._table)
+        # The table gets most of the height at first (proposal 4: "초기에는 표를 충분히").
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 3)
+        # 200px is the starting chart height, not a fixed one; the user's
+        # last split is restored (docs/ui.md 8.17).
+        remember_splitter(splitter, "assets_chart_table", [200, 600])
+        self._splitter = splitter
+        root.addWidget(splitter, 1)
 
     def _select_latest_week(self):
         self._date_combo.setCurrentIndex(self._date_combo.count() - 1)
@@ -1043,10 +1068,15 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         ax = self._chart_ax
         ax.clear()
         if len(metrics) < 2:
-            ax.text(0.5, 0.5, "Not enough data yet", ha="center", va="center",
+            # An empty state, not an empty 0..1 axis (docs/ui.md 8.16).
+            ax.set_axis_off()
+            msg = ("주간 기록을 추가하면 추이가 표시됩니다" if not metrics
+                   else "주간 기록이 2주 이상 쌓이면 추이가 표시됩니다")
+            ax.text(0.5, 0.5, msg, ha="center", va="center",
                      transform=ax.transAxes, color=TEXT_MUTED, fontsize=9)
             self._chart_canvas.draw()
             return
+        ax.set_axis_on()
 
         usd = (self._currency == "USD")
         total_key = "total_usd" if usd else "total_krw"
@@ -1067,6 +1097,9 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         ax.grid(True, linestyle=":", alpha=0.4)
         ax.legend(fontsize=8, loc="upper left")
         ax.set_ylabel("Index (first week = 100)", fontsize=8)
+        # Same currency and period as the table under it (docs/ui.md 8.16).
+        ax.set_title(f"{metrics[0]['date']} ~ {metrics[-1]['date']} · {self._currency} · 저장된 주간 기록",
+                     fontsize=8, loc="left", color=TEXT_MUTED)
 
         self._chart_canvas.draw()
 

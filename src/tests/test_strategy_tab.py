@@ -57,15 +57,11 @@ class _Sig:
 
 class TestTrendFollowingTab(unittest.TestCase):
     def test_request_reflects_the_form(self):
+        from strategy.trend_following import VARIANTS
+        from ui.dialogs import TrendConditions
         tab = TrendFollowingTab()
-        tab.universe_spin.setValue(120)
-        tab.liquidity_spin.setValue(50)
-        tab.positions_spin.setValue(8)
-        tab.weekday_combo.setCurrentIndex(2)
-        tab.cost_combo.setCurrentIndex(1)
-        tab.flows_cb.setChecked(True)
-        tab.set_variant_choice([vid for vid in tab._selected_variants() if vid != "A3"])
-        tab.event_cb.setChecked(False)
+        tab.set_conditions(TrendConditions(variant_ids=[v for v in VARIANTS if v != "A3"], universe_size=120,
+                                           min_liquidity_eok=50, max_positions=8, check_weekday=2, cost_choice=1))
         req = tab.build_request()
         self.assertEqual(req.params.universe_size, 120)
         self.assertEqual(req.params.min_avg_trading_value, 50e8)
@@ -77,54 +73,93 @@ class TestTrendFollowingTab(unittest.TestCase):
         self.assertTrue(req.include_flows)
         self.assertFalse(req.run_event_study)
         self.assertEqual(req.start, date(2021, 1, 1))
-
-    def test_flow_variants_follow_the_flows_checkbox(self):
-        """review_codex.md S1: without investor flows A3-A5 cannot run, so they
-        are left out of the request and the label says why; ticking flows
-        restores them, and a picker choice made with flows off keeps them."""
+    def test_nothing_is_chosen_until_the_picker_is_used(self):
+        """No rule at first; the status line says how to fix it, the 조건
+        button is outlined and Run stays off (strategy_run_settings_ui.md 3)."""
+        tab = TrendFollowingTab()
+        self.assertEqual(tab._selected_variants(), ())
+        self.assertEqual(tab.conditions_btn.text(), "조건...")
+        self.assertFalse(hasattr(tab, "flows_cb"))
+        self.assertFalse(hasattr(tab, "event_cb"))
+        self.assertFalse(tab.build_request().run_event_study)
+        self.assertFalse(tab.run_btn.isEnabled())
+        self.assertEqual(tab.status_summary_lbl.text(), "조건에서 규칙을 1개 이상 선택하세요")
+        self.assertEqual(tab.status_summary_lbl.objectName(), "fieldError")
+        self.assertTrue(tab.conditions_btn.property("invalid"))
+        with patch("ui.trend_following_tab.TrendFollowingResearchThread", _FakeThread):
+            _FakeThread.instances.clear()
+            tab._on_run_clicked()
+        self.assertEqual(_FakeThread.instances, [])
+        tab.set_variant_choice(["C1", "A0"])
+        self.assertTrue(tab.run_btn.isEnabled())
+        self.assertFalse(tab.conditions_btn.property("invalid"))
+        self.assertTrue(tab.status_summary_lbl.text().startswith("규칙 2개 · 시총 상위 200 · 비용 0·1·2배 비교"))
+        self.assertEqual(tab._selected_variants(), ("A0", "C1"))           # matrix order
+    def test_flows_load_only_when_a_chosen_strategy_needs_them(self):
         from strategy.trend_following import VARIANTS
         flow_ids = [vid for vid, v in VARIANTS.items() if v.needs_flows]
         self.assertTrue(flow_ids)
         tab = TrendFollowingTab()
-        self.assertFalse(tab.flows_cb.isChecked())
+        tab.set_variant_choice(["A0", "B"])
+        self.assertFalse(tab.build_request().include_flows)
+        tab.set_variant_choice(["A0", flow_ids[0]])
         req = tab.build_request()
-        self.assertFalse(set(flow_ids) & set(req.variant_ids))
-        self.assertIn("A0", req.variant_ids)
-        self.assertIn("투자자 수급 필요", tab.variants_lbl.text())
-
-        tab.flows_cb.setChecked(True)
-        self.assertEqual(tab._selected_variants(), tuple(VARIANTS))
-        self.assertEqual(tab.variants_lbl.text(), f"변형 {len(VARIANTS)}개 전체")
-        tab.set_variant_choice([v for v in VARIANTS if v != flow_ids[0]])
-        tab.flows_cb.setChecked(False)
-        tab.set_variant_choice(["A0", "B"])    # picker with flows off: flow rows untouched
-        tab.flows_cb.setChecked(True)
-        self.assertEqual(set(tab._selected_variants()), {"A0", "B"} | set(flow_ids[1:]))
-
-    def test_variants_button_opens_the_picker_and_applies_its_choice(self):
+        self.assertTrue(req.include_flows)
+        self.assertEqual(req.variant_ids, ("A0", flow_ids[0]))
+    def test_conditions_dialog_applies_or_keeps(self):
+        """적용 replaces the conditions, 취소 keeps them; focus returns to 조건."""
+        from ui.dialogs import TrendConditions
         tab = TrendFollowingTab()
+        tab.set_conditions(TrendConditions(variant_ids=("A0",), max_positions=8))
         seen = {}
+        answer = {"code": QDialog.DialogCode.Accepted}
 
         class _Dlg:
-            def __init__(self, selected, flows_on, params=None, parent=None):
-                seen.update(selected=tuple(selected), flows_on=flows_on, params=params)
+            def __init__(self, conditions, parent=None):
+                seen["in"] = conditions
 
             def exec(self):
-                return QDialog.DialogCode.Accepted
+                return answer["code"]
 
-            def selected_ids(self):
-                return ("A1", "C1")
+            def conditions(self):
+                return TrendConditions(variant_ids=("A1", "C1"), max_positions=5)
 
-        tab.positions_spin.setValue(8)
-        before = tab._selected_variants()
-        with patch("ui.trend_following_tab.VariantPickerDialog", _Dlg):
-            tab._on_variants_clicked()
-        self.assertEqual(seen["selected"], before)
-        self.assertFalse(seen["flows_on"])
-        self.assertEqual(seen["params"].max_positions, 8)     # descriptions quote the form's numbers
-        self.assertEqual(tab._selected_variants(), ("A1", "C1"))
-        self.assertIn("A1, C1", tab.variants_lbl.text())
+        with patch("ui.trend_following_tab.TrendConditionsDialog", _Dlg), \
+             patch.object(tab.conditions_btn, "setFocus") as focus:
+            tab._on_conditions_clicked()
+            self.assertEqual(seen["in"].max_positions, 8)
+            self.assertEqual(tab._selected_variants(), ("A1", "C1"))
+            self.assertEqual(tab.build_request().params.max_positions, 5)
+            answer["code"] = QDialog.DialogCode.Rejected
+            tab._on_conditions_clicked()
+            self.assertEqual(tab._selected_variants(), ("A1", "C1"))
+            self.assertEqual(focus.call_count, 2)
 
+    def test_conditions_dialog_edits_a_copy(self):
+        from ui.dialogs import TrendConditions, TrendConditionsDialog
+        start = TrendConditions(variant_ids=("A3", "C1"), universe_size=150, cost_choice=1, target_sharpe=1.2)
+        dlg = TrendConditionsDialog(start)
+        self.assertEqual(dlg.conditions(), start)
+        self.assertEqual(dlg.ok_btn.text(), "적용")
+        self.assertEqual([lbl.text() for lbl in dlg.field_names],
+                         ["시가총액 상위", "20일 평균 거래대금 하한", "최대 보유 종목 수",
+                          "주간 점검 요일", "거래비용", "평가 기준 · 목표 Sharpe"])
+        self.assertIn("원화 시가총액", dlg.market_note.text())
+        dlg.positions_spin.setValue(9)
+        dlg.select("A3")
+        self.assertIn("최대 9종목", dlg.detail.toPlainText())                # descriptions follow the inputs
+        self.assertEqual(dlg.conditions().max_positions, 9)
+        self.assertEqual(start.max_positions, 6)
+    def test_cost_choice_and_market_popup(self):
+        from ui.dialogs import TrendConditions
+        from ui.dialogs.trend_conditions import COST_CHOICES
+        tab = TrendFollowingTab()
+        self.assertEqual(tab.run_cost_mults(), tuple(COST_CHOICES[0][1]))
+        tab.set_conditions(TrendConditions(variant_ids=("A0",), cost_choice=1))
+        self.assertEqual(tab.build_request().cost_multipliers, (1.0,))
+        self.assertIn("비용 1배만", tab.status_summary())
+        self.assertIs(tab.market_btn.menu(), tab.market_menu)
+        self.assertEqual(tab.market_btn.text(), "KOSPI")
     def test_skipped_variants_and_warnings_are_shown_without_saving(self):
         """review_codex.md S1/S3: a run that could not load flows names the
         skipped variants and shows every warning in the tab."""
@@ -150,17 +185,19 @@ class TestTrendFollowingTab(unittest.TestCase):
     def test_tables_copy_selected_rows(self):
         """review_codex.md S4: every result table gets the app-wide Ctrl+C."""
         tab = TrendFollowingTab()
-        for tbl in (tab.table, tab.event_table, tab.compare_table, tab.monthly_table, tab.trades_table):
+        for tbl in (tab.table, tab.compare_table, tab.monthly_table, tab.trades_table):
             self.assertTrue(hasattr(tbl, "_table_keys"))
 
     def test_run_tooltip_lists_every_variant(self):
         from strategy.trend_following import VARIANTS
         tab = TrendFollowingTab()
+        tab.set_variant_choice(["A0"])
         for vid in VARIANTS:
             self.assertIn(vid, tab.run_btn.toolTip())
 
     def test_run_starts_a_tracked_worker_and_disables_the_button(self):
         tab = TrendFollowingTab()
+        tab.set_variant_choice(["A0"])
         _FakeThread.instances.clear()
         with patch("ui.trend_following_tab.TrendFollowingResearchThread", _FakeThread):
             tab._on_run_clicked()
@@ -179,6 +216,7 @@ class TestTrendFollowingTab(unittest.TestCase):
     def test_stop_cancels_the_worker_and_reports_cancelled(self):
         from threads.strategy_threads import CANCELLED_MESSAGE
         tab = TrendFollowingTab()
+        tab.set_variant_choice(["A0"])
         self.assertFalse(tab.stop_btn.isEnabled())
         _FakeThread.instances.clear()
         with patch("ui.trend_following_tab.TrendFollowingResearchThread", _FakeThread):
@@ -205,7 +243,6 @@ class TestTrendFollowingTab(unittest.TestCase):
         self.assertEqual(tab.table.rowCount(), len(result.runs))
         self.assertEqual(tab.table.item(0, 0).text(), "A0")      # strategies first at 1x
         self.assertEqual(tab.table.item(0, 1).text(), "1x")
-        self.assertEqual(tab.event_table.rowCount(), len(result.event_study))
         self.assertTrue(tab.save_btn.isEnabled())
         self.assertIn("Done", tab.status_lbl.text())
         self.assertGreater(len(tab.ax.lines), 0)
@@ -255,14 +292,35 @@ class TestTrendFollowingTab(unittest.TestCase):
                 self.assertIn("# Trend Following backtest report", f.read())
 
     def test_rejects_bad_window(self):
+        """A date error replaces the summary on the status line, the dates
+        are outlined and Run is off."""
         tab = TrendFollowingTab()
+        tab.set_variant_choice(["A0"])
         tab.start_edit.setDate(tab.end_edit.date())
-        with patch("ui.trend_following_tab.QMessageBox.warning") as warn, \
-             patch("ui.trend_following_tab.TrendFollowingResearchThread", _FakeThread):
+        self.assertIn("시작일이 종료일보다 앞이어야 합니다", tab.status_summary_lbl.text())
+        self.assertEqual(tab.status_summary_lbl.objectName(), "fieldError")
+        self.assertTrue(tab.start_edit.property("invalid"))
+        self.assertFalse(tab.run_btn.isEnabled())
+        with patch("ui.trend_following_tab.TrendFollowingResearchThread", _FakeThread):
             _FakeThread.instances.clear()
             tab._on_run_clicked()
-        warn.assert_called_once()
         self.assertEqual(_FakeThread.instances, [])
+    def test_failed_rerun_keeps_the_last_result_and_its_save(self):
+        tab = TrendFollowingTab()
+        result = _result(("A0",), (1.0,))
+        tab._on_research_finished(result, "")
+        tab.set_variant_choice(["A0"])
+        _FakeThread.instances.clear()
+        with patch("ui.trend_following_tab.TrendFollowingResearchThread", _FakeThread):
+            tab._on_run_clicked()
+        self.assertFalse(tab.run_btn.isEnabled())                  # running: one run per tab
+        tab.set_variant_choice(["A0", "A1"])                        # an edit while running
+        self.assertFalse(tab.run_btn.isEnabled())
+        _FakeThread.instances[0].finished.emit(None, "boom")
+        self.assertIs(tab._result, result)
+        self.assertTrue(tab.save_btn.isEnabled())
+        self.assertTrue(tab.run_btn.isEnabled())
+        self.assertIn("boom", tab.status_lbl.text())
 
 
 def _result(variants=("A0", "A1"), mults=(1.0,), **kw):
@@ -293,15 +351,17 @@ class TestResultScreen(unittest.TestCase):
         self.assertEqual(tab.variant_seg.current(), best.id)
         self.assertEqual(tab.cost_seg.current(), "1")
         self.assertTrue(tab.selector_row.isVisibleTo(tab))
-        # The form stays open after a run (back to choosing, docs/ui.md 8.12).
-        self.assertTrue(tab.form_box.isVisibleTo(tab))
-        self.assertTrue(tab.edit_btn.isChecked())
+        self.assertTrue(tab.result_head.isVisibleTo(tab))
 
     def test_variant_pick_updates_cards_target_check_and_tabs(self):
         from ui.strategy_widgets import fmt_num, fmt_pct
         tab = self._tab()
-        tab.select_variant("BM1")                    # A0 is not the focus before the click
-        tab.variant_seg.buttons["A0"].click()
+        tab.select_variant("BM1")                    # A0 is not the focus before the pick
+        if "A0" not in tab._sel_ids:
+            tab.variant_seg.buttons["A0"].click()    # 비교 대상: added, the focus stays (8.17)
+        self.assertEqual(tab._sel_id, "BM1")
+        self.assertIn("A0", tab._sel_ids)
+        tab.focus_combo.activated.emit(tab.focus_combo.findData("A0"))   # 상세 기준
         a0 = next(r for r in self.result.runs_at(1.0) if r.id == "A0")
         cards = tab.kpi_row.cards
         self.assertEqual(cards["sharpe"].value.text(), fmt_num(a0.metrics["sharpe"]))
@@ -317,6 +377,59 @@ class TestResultScreen(unittest.TestCase):
             self.assertEqual(tab.trades_table.item(0, 3).text(), t.ticker)
             self.assertEqual(tab.trades_table.item(0, 2).text(), self.result.dataset_info["names"].get(t.ticker, ""))
         self.assertEqual(tab.ax.get_legend().get_texts()[-1].get_text(), "A0")
+
+    def test_result_basis_line_comes_from_the_result_not_the_form(self):
+        # docs/ui.md 8.16: what the shown result was computed with.
+        tab = self._tab()
+        text = tab.basis_lbl.text()
+        self.assertTrue(tab.basis_lbl.isVisibleTo(tab))
+        self.assertTrue(text.startswith("현재 결과 기준 · 추세추종 · KOSPI 상위 200 · "))
+        self.assertIn(str(self.result.dataset_info["eval_start"]), text)
+        self.assertIn("규칙 A0, A1", text)
+        self.assertIn("비용 1x", text)
+        self.assertIn(f"상세 기준 {tab._sel_id}", text)
+        import dataclasses
+        tab.set_conditions(dataclasses.replace(tab.conditions, universe_size=250, target_sharpe=2.5))
+        self.assertEqual(tab.basis_lbl.text(), text)
+        tab.select_variant("BM1")
+        self.assertIn("상세 기준 BM1", tab.basis_lbl.text())
+        # Saving belongs to the shown result: on the result head, right of the basis.
+        self.assertTrue(tab.result_head.isAncestorOf(tab.save_btn))
+        self.assertTrue(tab.save_btn.isEnabled())
+
+    def test_next_run_note_when_the_form_moves_on(self):
+        """'다음 실행에 적용' only while the form differs from the shown run."""
+        tab = TrendFollowingTab()
+        req = self.result.request
+        tab.set_variant_choice(req.variant_ids)
+        tab.start_edit.setDate(req.start)
+        tab.end_edit.setDate(req.end) if req.end else None
+        tab._on_research_finished(self.result, "")
+        if req.end is None:
+            self.assertFalse(tab.pending_lbl.isHidden())             # the form ends today, the run did not
+            return
+        import dataclasses
+        self.assertTrue(tab.pending_lbl.isHidden())
+        before = tab.conditions
+        tab.set_conditions(dataclasses.replace(before, max_positions=before.max_positions + 1))
+        self.assertFalse(tab.pending_lbl.isHidden())
+        tab.set_conditions(before)
+        self.assertTrue(tab.pending_lbl.isHidden())
+
+    def test_target_check_is_a_summary_line_with_expandable_detail(self):
+        # docs/ui.md 8.16: verdict badges on one line, the four rows on demand.
+        tab = self._tab()
+        card = tab.target_card
+        self.assertFalse(card.detail.isVisibleTo(tab))
+        self.assertTrue(card.robust_note.isVisibleTo(tab))
+        for key in ("sharpe", "mdd", "both"):
+            self.assertEqual(card.summary[key].objectName(), card.badges[key].objectName())
+        card.detail_btn.click()
+        self.assertTrue(card.detail.isVisibleTo(tab))
+        self.assertEqual(card.badges["robust"].text(), "앱에서 미실행")   # the not-run note stays in the detail
+        self.assertEqual(card.detail_btn.text(), "접기")
+        tab.select_variant("BM1")
+        self.assertEqual(card.summary["sharpe"].text(), "Sharpe 벤치마크")
 
     def test_benchmark_hides_the_badges(self):
         tab = self._tab()
@@ -369,15 +482,47 @@ class TestResultScreen(unittest.TestCase):
         self.assertEqual(headers, ["ID", "Cost"] + [h for h, _ in SUMMARY_COLUMNS[1:]])
         self.assertEqual(tab.table.rowCount(), len(self.result.runs))
 
-    def test_settings_chips_follow_the_form(self):
+    def test_toolbar_order_and_buttons(self):
+        """전략 · 시장 · 기간 · 조건 ... 중지 백테스트 실행 on one line when wide."""
         tab = TrendFollowingTab()
-        tab.universe_spin.setValue(120)
-        tab.cost_combo.setCurrentIndex(1)
-        texts = [c.text() for c in tab.chips if not c.isHidden()]
-        self.assertIn("KOSPI 상위 120", texts)
-        self.assertIn("비용 1x", texts)
-        tab.edit_btn.click()
-        self.assertFalse(tab.form_box.isVisibleTo(tab))
+        self.assertEqual(tab.strategy_combo.currentText(), "추세추종")
+        self.assertEqual(tab.run_btn.text(), "백테스트 실행")
+        self.assertEqual(tab.run_btn.objectName(), "primary")
+        self.assertEqual(tab.stop_btn.objectName(), "")
+        tab.show()
+        tab.resize(max(1200, tab.toolbar.one_line_width() + 80), 900)
+        for _ in range(4):
+            app.processEvents()
+        if tab.toolbar.width() >= tab.toolbar.one_line_width():
+            self.assertTrue(tab.toolbar.one_line)
+            xs = [w.mapTo(tab, w.rect().topLeft()).x() for w in
+                  (tab.strategy_combo, tab.market_btn, tab.start_edit, tab.end_edit, tab.conditions_btn,
+                   tab.stop_btn, tab.run_btn)]
+            self.assertEqual(xs, sorted(xs))
+            ys = {w.mapTo(tab, w.rect().center()).y() for w in (tab.strategy_combo, tab.start_edit, tab.run_btn)}
+            self.assertLessEqual(max(ys) - min(ys), 2)                       # one centre line
+        self.assertEqual(tab.start_edit.width(), tab.end_edit.width())
+        tab.hide()
+    def test_tab_order_follows_the_card(self):
+        tab = TrendFollowingTab()
+        chain, w = [], tab.strategy_combo
+        for _ in range(400):
+            chain.append(w)
+            w = w.nextInFocusChain()
+            if w is chain[0]:
+                break
+        def pos(x):
+            return chain.index(x)
+        order = [tab.strategy_combo, tab.market_btn, tab.start_edit, tab.end_edit, tab.conditions_btn, tab.run_btn]
+        self.assertEqual([pos(x) for x in order], sorted(pos(x) for x in order))
+    def test_benchmarks_are_a_separate_segment_group(self):
+        tab = TrendFollowingTab()
+        tab._on_research_finished(self.result, "")
+        lay = tab.variant_seg._layout
+        kinds = [("gap" if lay.itemAt(i).spacerItem() else lay.itemAt(i).widget().text())
+                 for i in range(lay.count())]
+        self.assertEqual(kinds.count("gap"), 1)
+        self.assertEqual(kinds[kinds.index("gap") + 1], "BM1")
 
     def test_empty_state(self):
         tab = TrendFollowingTab()
@@ -402,13 +547,33 @@ class TestWindowEndAndFormLayout(unittest.TestCase):
         self.assertEqual(req.end, date.today())
         self.assertTrue(req.allow_holdout)
         self.assertTrue(tab.holdout_lbl.isVisibleTo(tab))
-        chip = next(c for c in tab.chips if c.text() == "홀드아웃 포함")
-        self.assertTrue(chip.property("warn"))
+        self.assertTrue(tab.dev_only_btn.isVisibleTo(tab))
+        # the place on the status line stays reserved when hidden
+        self.assertTrue(tab.holdout_lbl.sizePolicy().retainSizeWhenHidden())
 
         tab.end_edit.setDate(QDate(DEV_END.year, DEV_END.month, DEV_END.day))
         self.assertFalse(tab.build_request().allow_holdout)
         self.assertFalse(tab.holdout_lbl.isVisibleTo(tab))
-        self.assertNotIn("홀드아웃 포함", [c.text() for c in tab.chips if not c.isHidden()])
+
+    def test_dev_only_moves_the_end_and_falls_back_to_the_default_window(self):
+        from PyQt6.QtCore import QDate
+        from strategy.trend_following import DEV_END
+        tab = TrendFollowingTab()
+        tab.set_variant_choice(["A0"])                     # no error to outrank the note
+        tab.start_edit.setDate(QDate(2022, 3, 2))
+        tab.dev_only_btn.click()
+        self.assertEqual(tab.end_edit.date().toPyDate(), DEV_END)
+        self.assertEqual(tab.start_edit.date().toPyDate(), date(2022, 3, 2))
+        self.assertNotIn("바꿨습니다", tab.status_summary_lbl.text())
+        # a start past DEV_END leaves no valid window: the development default
+        tab.end_edit.setDate(QDate.currentDate())
+        tab.start_edit.setDate(QDate(DEV_END.year + 1, 2, 1))
+        tab.dev_only_btn.click()
+        self.assertEqual((tab.start_edit.date().toPyDate(), tab.end_edit.date().toPyDate()),
+                         (date(2021, 1, 1), DEV_END))
+        self.assertIn("2021-01-01 ~ 2024-12-31", tab.status_summary_lbl.text())
+        tab.start_edit.setDate(QDate(2021, 2, 1))                            # the user edits: the note goes
+        self.assertNotIn("바꿨습니다", tab.status_summary_lbl.text())
 
     def test_holdout_result_is_marked_in_warnings_and_report(self):
         import dataclasses
@@ -437,88 +602,85 @@ class TestWindowEndAndFormLayout(unittest.TestCase):
     # The layout checks below are relative to the widgets' own size hints, never
     # a pixel constant: font metrics differ between the Windows platform, the
     # offscreen platform and the app theme (review_codex.md, the two UI failures).
-    @staticmethod
-    def _two_line_width(tab) -> int:
-        """A tab width at which the form is guaranteed to fit on two lines."""
-        flow = tab.form_flow
-        widths = [flow._width(flow.itemAt(i)) for i in range(flow.count())
-                  if not flow.itemAt(i).widget().isHidden()]
-        need = (sum(widths) + flow._h * len(widths) + flow._inset + max(widths)) // 2 + 60
-        return need + (tab.width() - tab.form_box.width())
-
     def _settle(self, tab, width):
         tab.resize(width, 900)
-        for _ in range(3):
+        for _ in range(6):
             app.processEvents()
 
-    def test_form_takes_the_chips_place_in_two_lines(self):
+    @staticmethod
+    def _top(tab, w) -> int:
+        return w.mapTo(tab, w.rect().topLeft()).y()
+
+    @staticmethod
+    def _mid(tab, w) -> int:
+        return w.mapTo(tab, w.rect().center()).y()
+
+    def test_two_fixed_lines_when_narrow(self):
+        """strategy_run_settings_ui.md 4: 전략 · 시장 · 조건 over 기간 · 중지 · 실행,
+        switched by width only."""
         tab = TrendFollowingTab()
+        tb = tab.toolbar
+        self.assertLess(tb.two_line_width(), tb.one_line_width())
         tab.show()
         self._settle(tab, 1440)
-        self._settle(tab, self._two_line_width(tab))
-        self.assertTrue(tab.form_box.isVisible())
-        self.assertFalse(tab.chips_box.isVisible())
-        lines = tab.form_flow.lines(tab.form_box.width())
-        self.assertLessEqual(len(lines), 2)
-        rows = {w.mapTo(tab, w.rect().center()).y() for w in
-                (tab.start_edit, tab.end_edit, tab.universe_spin, tab.liquidity_spin, tab.positions_spin,
-                 tab.weekday_combo, tab.cost_combo, tab.flows_cb, tab.event_cb, tab.variants_btn,
-                 *tab.market_buttons.values())}
-        self.assertLessEqual(len({y // 12 for y in rows}), 2)             # two lines of controls
-        # the summary label keeps at least its floor and takes the rest of its line
-        from ui.trend_following_tab import _VARIANTS_LBL_MIN_W
-        self.assertGreaterEqual(tab.variants_lbl.width(), _VARIANTS_LBL_MIN_W)
-        # the first line stops short of the buttons laid over the corner
-        first_right = max(i.widget().mapTo(tab, i.widget().rect().topRight()).x() for i in lines[0])
-        self.assertLess(first_right, tab.edit_btn.mapTo(tab, tab.edit_btn.rect().topLeft()).x())
-        tab.edit_btn.click()
-        self.assertFalse(tab.form_box.isVisible())
-        self.assertTrue(tab.chips_box.isVisible())
+        if tb.width() >= tb.one_line_width():
+            self.assertTrue(tb.one_line)
+        self._settle(tab, tab.minimumSizeHint().width())
+        if tb.width() < tb.one_line_width():
+            self.assertFalse(tb.one_line)
+            mid = self._mid(tab, tab.strategy_combo)
+            self.assertLessEqual(abs(self._mid(tab, tab.conditions_btn) - mid), 2)   # line one
+            self.assertGreater(self._top(tab, tab.start_edit), mid)                  # line two
+            self.assertGreater(self._top(tab, tab.run_btn), mid)
+            right = tb.mapTo(tab, tb.rect().topRight()).x()
+            self.assertLessEqual(tab.run_btn.mapTo(tab, tab.run_btn.rect().topRight()).x(), right)
         tab.hide()
 
-    def test_form_wraps_instead_of_widening_the_tab(self):
-        """At the tab's own minimum width the form takes more lines and every
-        control is still fully inside the card and clear of the buttons."""
+    def test_choices_never_move_a_control(self):
+        """Same width: strategy, market and rule choices leave every control
+        and the result area where they were (proposal 5)."""
         tab = TrendFollowingTab()
         tab.show()
-        self._settle(tab, 1440)
-        wide_lines = len(tab.form_flow.lines(tab.form_box.width()))
-        min_w = tab.minimumSizeHint().width()
-        self.assertLess(min_w, self._two_line_width(tab))                  # narrower than the two-line layout
-        self._settle(tab, min_w)
-        self.assertEqual(tab.width(), min_w)
-        lines = tab.form_flow.lines(tab.form_box.width())
-        self.assertGreater(len(lines), wide_lines)
-        card_right = tab.form_box.mapTo(tab, tab.form_box.rect().topRight()).x()
-        btn_left = tab.edit_btn.mapTo(tab, tab.edit_btn.rect().topLeft()).x()
-        btn_bottom = tab.edit_btn.mapTo(tab, tab.edit_btn.rect().bottomLeft()).y()
-        for g in tab.form_groups:
-            if g is tab.variants_lbl or g.isHidden():
-                continue
-            right = g.mapTo(tab, g.rect().topRight()).x()
-            top = g.mapTo(tab, g.rect().topLeft()).y()
-            self.assertLessEqual(right, card_right)                        # nothing cut at the card edge
-            if top < btn_bottom:
-                self.assertLess(right, btn_left)                           # nothing under the buttons
+        self._settle(tab, 1100)
+        watched = (tab.strategy_combo, tab.market_btn, tab.start_edit, tab.end_edit, tab.conditions_btn,
+                   tab.stop_btn, tab.run_btn, tab.kpi_row)
 
-    def test_form_minimum_width_is_one_group_not_a_row(self):
-        tab = TrendFollowingTab()
-        tab.show()
-        app.processEvents()
-        flow = tab.form_flow
-        widths = [flow._width(flow.itemAt(i)) for i in range(flow.count())
-                  if not flow.itemAt(i).widget().isHidden()]
-        self.assertEqual(tab.form_box.minimumSizeHint().width(), max(max(widths), widths[0] + flow._inset))
-        # a long variant summary does not change it
-        before = tab.minimumSizeHint().width()
-        tab.variants_lbl.setText("A0, A1, A2, A3, A4, A5, B, C1, C2, C3 " * 6)
-        app.processEvents()
-        self.assertEqual(tab.minimumSizeHint().width(), before)
-        # folded: the chip line does not set the width either
-        tab.edit_btn.click()
-        app.processEvents()
-        self.assertLessEqual(tab.minimumSizeHint().width(), before)
+        def geoms():
+            return [(w.mapTo(tab, w.rect().topLeft()), w.size()) for w in watched]
+        before = geoms()
+        tab.market_buttons["NASDAQ"].click()
+        tab.market_buttons["KOSDAQ"].click()
+        tab.set_variant_choice(["A0", "A3", "C1"])
+        self._settle(tab, 1100)
+        self.assertEqual(geoms(), before)
+        tab.set_variant_choice([])
+        self._settle(tab, 1100)
+        self.assertEqual(geoms(), before)
         tab.hide()
+
+    def test_inputs_lock_while_running(self):
+        tab = TrendFollowingTab()
+        tab.set_variant_choice(["A0"])
+        _FakeThread.instances.clear()
+        with patch("ui.trend_following_tab.TrendFollowingResearchThread", _FakeThread):
+            tab._on_run_clicked()
+        for w in (tab.market_btn, tab.start_edit, tab.end_edit, tab.conditions_btn):
+            self.assertFalse(w.isEnabled())
+        self.assertTrue(tab.strategy_combo.isEnabled())
+        self.assertTrue(tab.stop_btn.isEnabled())
+        _FakeThread.instances[0].finished.emit(None, "boom")
+        for w in (tab.market_btn, tab.start_edit, tab.end_edit, tab.conditions_btn):
+            self.assertTrue(w.isEnabled())
+    def test_checked_toggles_lose_the_accent_outline(self):
+        from ui.theme import app_qss, ACCENT, LINE_STRONG
+        qss = app_qss("")
+        checked = qss[qss.index("QPushButton:checked {"):]
+        checked = checked[:checked.index("}")]
+        self.assertIn(f"border-color: {LINE_STRONG}", checked)
+        self.assertNotIn(f"border-color: {ACCENT};", checked)
+        self.assertIn("QPushButton#link", qss)
+        self.assertIn("QLabel#fieldError", qss)
+        self.assertIn('QPushButton[invalid="true"]', qss)
 
 
 class TestFlowLayout(unittest.TestCase):
@@ -580,7 +742,13 @@ class TestMarketChoice(unittest.TestCase):
         tab.market_buttons["NASDAQ"].click()
         tab.market_buttons["KOSDAQ"].click()
         self.assertEqual(tab.build_request().markets, ("KOSPI", "KOSDAQ", "NASDAQ"))
-        self.assertIn("KOSPI+KOSDAQ+NASDAQ 상위 200", [c.text() for c in tab.chips])
+        self.assertEqual(tab.market_btn.text(), "KOSPI 외 2")
+        self.assertEqual(tab.market_btn.toolTip(), "KOSPI, KOSDAQ, NASDAQ")
+        self.assertIn("KOSPI+KOSDAQ+NASDAQ 원화 시총 합산", tab.status_summary())
+        tab.market_buttons["NASDAQ"].click()
+        tab.market_buttons["KOSDAQ"].click()
+        self.assertEqual(tab.market_btn.text(), "KOSPI")
+        self.assertNotIn("합산", tab.status_summary())
 
     def test_the_last_market_cannot_be_unticked(self):
         tab = TrendFollowingTab()
@@ -626,25 +794,33 @@ class TestMultiSelect(unittest.TestCase):
         self.assertEqual(set(tab.variant_seg.checked_keys()), {self._best(), "BM1"})
         self.assertTrue(tab.variant_seg.buttons[self._best()].property("segFocus"))
 
-    def test_segment_clicks_add_focus_and_remove(self):
+    def test_segments_pick_the_comparison_and_the_combo_the_detail(self):
+        # docs/ui.md 8.17: 비교 대상 (segments, many) and 상세 기준 (combo, one) are separate.
         tab = self._tab()
         other = self._other()
-        tab.variant_seg.buttons[other].click()            # unselected -> added and focused
+        tab.variant_seg.buttons[other].click()            # unselected -> added, focus unchanged
         tab.variant_seg.buttons["BM3"].click()
         self.assertEqual(tab._sel_ids, [self._best(), "BM1", other, "BM3"])
+        self.assertEqual(tab._sel_id, self._best())
+        self.assertEqual([tab.focus_combo.itemData(i) for i in range(tab.focus_combo.count())], tab._sel_ids)
+        tab.focus_combo.activated.emit(tab.focus_combo.findData("BM3"))
         self.assertEqual(tab._sel_id, "BM3")
         self.assertTrue(tab.kpi_row.cards["sharpe"].badge.isHidden())       # cards follow the focus (a BM)
+        self.assertTrue(tab.variant_seg.buttons["BM3"].property("segFocus"))
         colors = {sr[0]: sr[1] for sr in tab._chart_series}
-        tab.variant_seg.buttons[other].click()            # selected, not the focus -> focus
+        tab.focus_combo.activated.emit(tab.focus_combo.findData(other))
         self.assertEqual(tab._sel_id, other)
         self.assertEqual(tab._sel_ids, [self._best(), "BM1", other, "BM3"])     # order (and colours) kept
         self.assertEqual({sr[0]: sr[1] for sr in tab._chart_series}, colors)
-        self.assertTrue(tab.variant_seg.buttons[other].isChecked())
         self.assertIn(other, tab.target_card.subject.text())
+        tab.variant_seg.buttons["BM1"].click()            # selected, not the focus -> removed, focus stays
+        self.assertNotIn("BM1", tab._sel_ids)
+        self.assertEqual(tab._sel_id, other)
         tab.variant_seg.buttons[other].click()            # the focus -> removed, focus moves on
         self.assertNotIn(other, tab._sel_ids)
         self.assertFalse(tab.variant_seg.buttons[other].isChecked())
         self.assertEqual(tab._sel_id, "BM3")
+        self.assertEqual(tab.focus_combo.currentData(), "BM3")
 
     def test_the_last_run_cannot_be_removed(self):
         tab = self._tab()
@@ -692,6 +868,7 @@ class TestMultiSelect(unittest.TestCase):
     def test_cost_switch_keeps_the_selection(self):
         tab = self._tab()
         tab.variant_seg.buttons["BM2"].click()
+        tab.focus_combo.activated.emit(tab.focus_combo.findData("BM2"))
         before = list(tab._sel_ids)
         tab.cost_seg.buttons["2"].click()
         self.assertEqual(tab._sel_ids, before)
@@ -848,11 +1025,13 @@ class TestSharpeTarget(unittest.TestCase):
         cls.result = _result(("A0", "A1"), (1.0,))
 
     def _run_with(self, tab, target):
-        tab.target_spin.setValue(target)
+        import dataclasses
+        tab.set_conditions(dataclasses.replace(tab.conditions, variant_ids=("A0", "A1"), target_sharpe=target))
         _FakeThread.instances.clear()
         with patch("ui.trend_following_tab.TrendFollowingResearchThread", _FakeThread):
             tab._on_run_clicked()
-        tab.target_spin.setValue(2.5)                     # changed while running: not this result's target
+        # changed while running: not this result's target
+        tab.set_conditions(dataclasses.replace(tab.conditions, target_sharpe=2.5))
         _FakeThread.instances[0].finished.emit(self.result, "")
 
     def test_cost_switch_does_not_stack_segment_buttons(self):
@@ -865,12 +1044,12 @@ class TestSharpeTarget(unittest.TestCase):
                  if lay.itemAt(i).widget() is not None and not lay.itemAt(i).widget().isHidden()]
         self.assertEqual(len(shown), len(tab.variant_seg.buttons))
 
-    def test_default_is_one_and_shows_in_the_chips(self):
+    def test_default_is_one_and_shows_in_the_summary(self):
         tab = TrendFollowingTab()
-        self.assertEqual(tab.target_spin.value(), 1.0)
-        self.assertIn("목표 Sharpe ≥ 1.0", tab._chip_texts())
-        tab.target_spin.setValue(1.3)
-        self.assertIn("목표 Sharpe ≥ 1.3", [c.text() for c in tab.chips if not c.isHidden()])
+        import dataclasses
+        self.assertEqual(tab.conditions.target_sharpe, 1.0)
+        tab.set_conditions(dataclasses.replace(tab.conditions, variant_ids=("A0",), target_sharpe=1.3))
+        self.assertIn("목표 Sharpe ≥ 1.3", tab.status_summary_lbl.text())
 
     def test_run_judges_against_the_target_it_was_started_with(self):
         from ui.common import _BADGE_NAMES
@@ -945,7 +1124,7 @@ class TestVariantPickerDialog(unittest.TestCase):
     def test_lists_every_variant_and_shows_its_description(self):
         from strategy.trend_following import VARIANTS
         from ui.dialogs import VariantPickerDialog
-        dlg = VariantPickerDialog(["A0", "C1"], flows_on=True)
+        dlg = VariantPickerDialog(["A0", "C1"])
         self.assertEqual(set(dlg._items), set(VARIANTS))
         self.assertEqual(dlg.selected_ids(), ("A0", "C1"))
         self.assertIn("A0", dlg.detail.toPlainText())              # first row shown on open
@@ -955,31 +1134,33 @@ class TestVariantPickerDialog(unittest.TestCase):
         self.assertIn("변동성 정규화 없음", text)
         self.assertIn("10개 중 2개 선택", dlg.count_lbl.text())
 
-    def test_all_none_and_flow_rows_without_flows(self):
+    def test_all_none_and_flow_rows_are_tickable(self):
         from strategy.trend_following import VARIANTS
         from ui.dialogs import VariantPickerDialog
-        flow_ids = {vid for vid, v in VARIANTS.items() if v.needs_flows}
-        dlg = VariantPickerDialog(list(VARIANTS), flows_on=False)
-        self.assertFalse(flow_ids & set(dlg.selected_ids()))
+        dlg = VariantPickerDialog([])
+        self.assertEqual(dlg.windowTitle(), "전략 선택")
+        self.assertEqual(dlg.selected_ids(), ())
         a3 = dlg._items["A3"]
-        self.assertFalse(a3.flags() & Qt.ItemFlag.ItemIsUserCheckable)
-        self.assertIn("수급 필요", a3.text())
-        dlg.select("A3")                                              # still readable
+        self.assertTrue(a3.flags() & Qt.ItemFlag.ItemIsUserCheckable)
+        dlg.select("A3")
         self.assertIn("투자자 수급 데이터 필요", dlg.detail.toPlainText())
+        dlg._set_all(True)
+        self.assertEqual(dlg.selected_ids(), tuple(VARIANTS))                   # matrix order
         dlg._set_all(False)
         self.assertEqual(dlg.selected_ids(), ())
-        dlg._set_all(True)
-        self.assertEqual(set(dlg.selected_ids()), set(VARIANTS) - flow_ids)
-        self.assertEqual(list(dlg.selected_ids()), [v for v in VARIANTS if v not in flow_ids])   # matrix order
 
 
 class TestStrategyTab(unittest.TestCase):
     def test_has_the_trend_following_sub_tab_and_merges_threads(self):
         tab = StrategyTab()
-        self.assertEqual(tab.sub_tabs.count(), 1)
-        self.assertEqual(tab.sub_tabs.tabText(0), "Trend Following")
+        # no sub-tabs: the page's own selector lists the strategies
+        self.assertEqual(tab.stack.count(), 1)
+        page = tab.trend_following_tab
+        self.assertEqual([page.strategy_combo.itemText(i) for i in range(page.strategy_combo.count())], ["추세추종"])
+        self.assertEqual(tab.strategy_tabs, [page])
         self.assertEqual(tab.collect_threads_to_stop(), [])
         _FakeThread.instances.clear()
+        tab.trend_following_tab.set_variant_choice(["A0"])
         with patch("ui.trend_following_tab.TrendFollowingResearchThread", _FakeThread):
             tab.trend_following_tab._on_run_clicked()
         self.assertEqual(len(tab.collect_threads_to_stop()), 1)

@@ -17,12 +17,13 @@ from ui.common import (
     apply_matplotlib_font,
     FONT_FAMILY_CSS,
     FONT_TITLE,
+    FONT_HEADING,
     FONT_SMALL,
     cancel_thread,
     refresh_state,
     RefreshFailures,
 )
-from ui.theme import app_qss, TEXT_EMPTY
+from ui.theme import app_qss, app_palette, apply_matplotlib_theme, TEXT_EMPTY
 from ui.colors import OK, WARN, DANGER
 
 load_dotenv(ENV_FILE)
@@ -76,9 +77,16 @@ class MainWindow(QMainWindow):
 
         # Header
         header_layout = QHBoxLayout()
-        title_label = QLabel("Nexus Trading")
+        # App title + subtitle (docs/ui.md 8.16): the largest text on screen.
+        title_label = QLabel("NEXUS")
+        title_label.setObjectName("appTitle")
         title_label.setFont(create_font(FONT_TITLE, QFont.Weight.Bold))
         header_layout.addWidget(title_label)
+        subtitle_label = QLabel("Portfolio Management")
+        subtitle_label.setObjectName("appSubtitle")
+        subtitle_label.setFont(create_font(FONT_HEADING, style_name="Semilight"))
+        header_layout.addSpacing(8)
+        header_layout.addWidget(subtitle_label, 0, Qt.AlignmentFlag.AlignBottom)
         
         header_layout.addStretch()
 
@@ -302,6 +310,10 @@ if __name__ == "__main__":
     app_font = create_font(style_name="Semilight")
     app.setFont(app_font)
     apply_matplotlib_font()
+    apply_matplotlib_theme()
+    # Soft Slate (docs/ui.md 8.16): the palette covers what the QSS does not
+    # reach (menus, combo lists, check boxes, scroll bars, tooltips).
+    app.setPalette(app_palette())
     app.setStyleSheet(app_qss(FONT_FAMILY_CSS))
 
     window = MainWindow()
