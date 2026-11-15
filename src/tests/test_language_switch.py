@@ -4,8 +4,12 @@ without restarting the app, and what the user set up is carried over.
 
 The switch re-imports every ui/threads module, which would leave the other
 test modules holding stale classes, so the scenario runs in a child process.
-It uses a temp DB, temp JSON files and a temp QSettings store, and no worker
-thread starts (QThread.start is a no-op), so nothing real is read or written.
+It uses a temp DB, temp JSON files and a temp INI for every QSettings, and no
+worker thread starts (QThread.start is a no-op), so nothing real is read or
+written. QSettings(org, app) always goes to the Windows registry whatever
+setDefaultFormat/setPath say, so the class itself is swapped for one that
+writes the temp INI (an earlier version of this test wrote ui/language to the
+real registry on every run).
 """
 import os
 import subprocess
@@ -21,10 +25,17 @@ _SCRIPT = textwrap.dedent(r'''
     from datetime import date
     tmp = sys.argv[1]
     sys.path.insert(0, sys.argv[2])
+    import PyQt6.QtCore as QtCore
     from PyQt6.QtCore import QThread, QSettings
     QThread.start = lambda self, *a, **k: None
-    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
-    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, tmp)
+    _INI = os.path.join(tmp, "settings.ini")
+
+    class _TempSettings(QSettings):
+        """Every QSettings(...) in this process reads and writes the temp INI."""
+        def __init__(self, *_args, **_kwargs):
+            super().__init__(_INI, QSettings.Format.IniFormat)
+
+    QtCore.QSettings = _TempSettings       # before any app module imports it
     import paths, trade_db
     paths.UNIVERSE_CACHE_FILE = os.path.join(tmp, "universe_cache.json")
     paths.CUSTOM_SETTINGS_FILE = os.path.join(tmp, "custom_settings.json")
@@ -75,6 +86,7 @@ _SCRIPT = textwrap.dedent(r'''
     print("STATE_KEPT", state(new) == before)
     print("NO_HANGUL", not any(han.search(s) for s in texts(new)))
     print("SAVED_EN", i18n.saved_language() == "en")
+    print("TEMP_INI_USED", os.path.isfile(_INI) and "language=en" in open(_INI, encoding="utf-8").read())
     back = main.switch_language(new, "ko")
     for _ in range(3): app.processEvents()
     print("BACK_KO", any(s == "거래 추가" for s in texts(back)) and state(back) == before)
@@ -90,7 +102,7 @@ class TestLanguageSwitchWithoutRestart(unittest.TestCase):
             proc = subprocess.run([sys.executable, "-c", _SCRIPT, tmp, _SRC], cwd=_SRC, env=env,
                                   capture_output=True, text=True, encoding="utf-8", timeout=240)
         out = proc.stdout
-        for flag in ("RELOADED", "ONE_WINDOW", "STATE_KEPT", "NO_HANGUL", "SAVED_EN", "BACK_KO"):
+        for flag in ("RELOADED", "ONE_WINDOW", "STATE_KEPT", "NO_HANGUL", "SAVED_EN", "TEMP_INI_USED", "BACK_KO"):
             self.assertIn(f"{flag} True", out, f"{flag} failed\n--- stdout\n{out}\n--- stderr\n{proc.stderr[-3000:]}")
 
 
