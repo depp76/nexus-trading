@@ -138,7 +138,18 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         root.setSpacing(TAB_SPACING)
         root.setContentsMargins(*TAB_MARGINS)
 
-        # ---Header row: currency toggle + USD/KRW rate (docs/ui.md 4.1/4.3) ---
+        header_row = self._build_header_row()
+        root.addLayout(header_row)
+        self._build_inline_chart()
+        # Order (docs/ui.md 8.16): header (currency, rate, graph, export) ->
+        # live total + record input -> trend chart -> weekly table.
+        root.addLayout(self._build_controls_row(header_row))
+        self._build_table()
+        root.addWidget(self._build_chart_table_splitter(), 1)
+
+    def _build_header_row(self) -> QHBoxLayout:
+        """Header row: currency toggle + USD/KRW rate (docs/ui.md 4.1/4.3).
+        Graph/Export are appended later by _add_header_actions()."""
         header_row = QHBoxLayout()
         lbl_currency = QLabel(tr("통화:", "Currency:"))
         lbl_currency.setFont(create_font(FONT_BODY, style_name="Semilight"))
@@ -157,11 +168,12 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self._rate_lbl.setStyleSheet(f"color: {TEXT_MUTED};")
         header_row.addWidget(self._rate_lbl)
         header_row.addStretch()
-        root.addLayout(header_row)
+        return header_row
 
-        # ---Inline chart (docs/ui.md 4.4): always-visible weekly trend,
-        # asset vs KOSPI rebased to first week = 100. The _show_graph modal
-        # stays available for a zoomed/detailed view. ---
+    def _build_inline_chart(self):
+        """Inline chart (docs/ui.md 4.4): always-visible weekly trend,
+        asset vs KOSPI rebased to first week = 100. The _show_graph modal
+        stays available for a zoomed/detailed view."""
         self._chart_fig = Figure(figsize=(6, 2), constrained_layout=True)
         self._chart_ax = self._chart_fig.add_subplot(111)
         self._chart_canvas = FigureCanvas(self._chart_fig)
@@ -171,9 +183,9 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self._chart_canvas.setToolTip(tr("더블클릭하면 상세 주간 그래프가 열립니다", "Double-click for the detailed weekly graph"))
         self._chart_canvas.mpl_connect("button_press_event", self._on_chart_clicked)
 
-        # ---Controls bar ---
-        ctrl = QHBoxLayout()
-
+    def _build_entry_widgets(self):
+        """The record being entered: the Friday-date combo and the Total
+        Assets input."""
         self._date_combo = QComboBox()
         self._date_combo.setFont(create_font(FONT_BODY, style_name="Semilight"))
         self._date_combo.setFixedWidth(150)
@@ -190,18 +202,9 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self._asset_edit.textEdited.connect(self._fmt_asset_input)
         self._asset_edit.textEdited.connect(self._on_asset_edit_user_typed)
 
-        # Add Record is this tab's one primary action (docs/ui.md 1.6 / 8.1);
-        # This Week/Graph/Export are secondary utilities and stay neutral.
-        # Delete lives on the table's right-click menu and the Delete key, as
-        # in the other tabs -- never an always-visible button.
-        add_btn = make_button(tr("기록 추가", "Add Record"), "primary", self._add_record)
-        today_btn = make_button(tr("이번 주", "This Week"), on_click=self._select_latest_week)
-
-        lbl_date = QLabel(tr("날짜:", "Date:"))
-        lbl_date.setFont(create_font(FONT_BODY, style_name="Semilight"))
-        lbl_assets = QLabel(tr("총자산:", "Total Assets:"))
-        lbl_assets.setFont(create_font(FONT_BODY, style_name="Semilight"))
-
+    def _build_live_labels(self) -> tuple:
+        """The live (read-only) figures: returns their two caption labels;
+        the values are self.live_asset_lbl / self.live_diff_lbl."""
         # "실시간": the live estimate from Trading History, not a saved
         # weekly record (docs/ui.md 8.16).
         live_asset_title = QLabel(tr("현재 총자산(실시간):", "Current Total Assets (live):"))
@@ -225,6 +228,28 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self.live_diff_lbl.setFont(create_font(FONT_BODY, QFont.Weight.Bold))
         self.live_diff_lbl.setStyleSheet(f"color:{TEXT};")
         self.live_diff_lbl.setMinimumWidth(150)
+        return live_asset_title, live_diff_title
+
+    def _build_controls_row(self, header_row: QHBoxLayout) -> QHBoxLayout:
+        """Controls bar: record input, then the live figures, then Add Record.
+        Also puts Graph/Export on `header_row` (see _add_header_actions)."""
+        ctrl = QHBoxLayout()
+
+        self._build_entry_widgets()
+
+        # Add Record is this tab's one primary action (docs/ui.md 1.6 / 8.1);
+        # This Week/Graph/Export are secondary utilities and stay neutral.
+        # Delete lives on the table's right-click menu and the Delete key, as
+        # in the other tabs -- never an always-visible button.
+        add_btn = make_button(tr("기록 추가", "Add Record"), "primary", self._add_record)
+        today_btn = make_button(tr("이번 주", "This Week"), on_click=self._select_latest_week)
+
+        lbl_date = QLabel(tr("날짜:", "Date:"))
+        lbl_date.setFont(create_font(FONT_BODY, style_name="Semilight"))
+        lbl_assets = QLabel(tr("총자산:", "Total Assets:"))
+        lbl_assets.setFont(create_font(FONT_BODY, style_name="Semilight"))
+
+        live_asset_title, live_diff_title = self._build_live_labels()
 
         ctrl.setSpacing(6)
         ctrl.addWidget(lbl_date)
@@ -247,9 +272,17 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         ctrl.addWidget(live_diff_title)
         ctrl.addWidget(self.live_diff_lbl)
 
-        # Graph/Export sit on the header row, right-aligned above the chart
-        # they belong to: all on one controls row the tab needed ~1,540px
-        # and ran past the screen edge (user report 2026-10-15).
+        self._add_header_actions(header_row)
+
+        # Actions on the right, the primary last (docs/ui.md 8.4).
+        ctrl.addStretch()
+        ctrl.addWidget(add_btn)
+        return ctrl
+
+    def _add_header_actions(self, header_row: QHBoxLayout):
+        """Graph/Export sit on the header row, right-aligned above the chart
+        they belong to: all on one controls row the tab needed ~1,540px
+        and ran past the screen edge (user report 2026-10-15)."""
         graph_btn = make_button(tr("그래프", "Graph"), on_click=self._show_graph)
         header_row.addWidget(graph_btn)
 
@@ -257,15 +290,9 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
                                  tooltip=tr("총자산 기록 표를 Excel 또는 CSV로 내보냅니다", "Export the asset snapshot table to Excel or CSV"))
         header_row.addWidget(export_btn)
 
-        # Actions on the right, the primary last (docs/ui.md 8.4).
-        ctrl.addStretch()
-        ctrl.addWidget(add_btn)
-        # Order (docs/ui.md 8.16): header (currency, rate, graph, export) ->
-        # live total + record input -> trend chart -> weekly table.
-        root.addLayout(ctrl)
-
-        # ---Table (docs/ui.md 4.2/4.5: one spec -- label/min-width/weight --
-        # instead of a separate _COLS_SUB list and a flat widths=[...] list) ---
+    def _build_table(self):
+        """Table (docs/ui.md 4.2/4.5: one spec -- label/min-width/weight --
+        instead of a separate _COLS_SUB list and a flat widths=[...] list)."""
         self._table = _AssetsTable(self._stretch_columns)
         setup_table(self._table, empty_text=tr("주간 기록이 없습니다 -- 주를 고르고 기록 추가를 누르세요", "No weekly records yet -- pick a week and Add Record"))
         self._table.setColumnCount(len(self._COLUMNS))
@@ -295,6 +322,10 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self._delete_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self._table)
         self._delete_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
         self._delete_shortcut.activated.connect(self._delete_selected)
+
+    def _build_chart_table_splitter(self) -> QSplitter:
+        """The inline chart above the weekly table, in a vertical splitter
+        whose last sizes are remembered."""
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.setChildrenCollapsible(False)
         splitter.addWidget(self._chart_canvas)
@@ -306,7 +337,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         # last split is restored (docs/ui.md 8.17).
         remember_splitter(splitter, "assets_chart_table", [200, 600])
         self._splitter = splitter
-        root.addWidget(splitter, 1)
+        return splitter
 
     def _select_latest_week(self):
         self._date_combo.setCurrentIndex(self._date_combo.count() - 1)

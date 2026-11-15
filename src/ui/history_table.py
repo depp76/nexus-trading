@@ -128,6 +128,17 @@ def pi(val: float):
     return it
 
 
+def _signed_amount_item(val: float):
+    """An amount cell (ni) colored PROFIT/LOSS by its sign: realized P/L,
+    open-position P/L and the sold-today opportunity P/L."""
+    it = ni(val)
+    if val > 0:
+        it.setForeground(QC_PROFIT)
+    elif val < 0:
+        it.setForeground(QC_LOSS)
+    return it
+
+
 def wi(val: float):
     it = NumericItem(f"{val:.1f}%", float(val))
     it.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -191,7 +202,6 @@ def fill_table_rows(tbl, rows: list, *, hide_stale_closed: bool = True) -> list:
     if cur_rows != n_rows:
         tbl.setRowCount(n_rows)
 
-    L = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
     n_cols = tbl.columnCount()
 
     row_data = []
@@ -199,129 +209,151 @@ def fill_table_rows(tbl, rows: list, *, hide_stale_closed: bool = True) -> list:
         row_data.append((kind, rec))  # preserve reference for double-click editing
 
         if kind == "monthly":
-            tbl.setSpan(r, 0, 1, n_cols)
-            tbl.setItem(r, 0, QTableWidgetItem(""))  # keeps _row_data/row indexing simple; label does the drawing
-            tbl.setCellWidget(r, 0, _monthly_summary_label(rec))
+            _fill_monthly_row(tbl, r, rec, n_cols)
             continue
 
-        # A row that was a group header on a previous render and is a normal
-        # trade row now (row count/position can be reused, see setRowCount
-        # above) must drop its stale span/widget before being repopulated.
-        if tbl.columnSpan(r, 0) != 1:
-            tbl.setSpan(r, 0, 1, 1)
-        if tbl.cellWidget(r, 0) is not None:
-            tbl.removeCellWidget(r, 0)
-
-        is_closed = bool(rec.get("sell_date") or rec.get("sell_price"))
-
-        # ---Col 0-2: Company (+ Open/Closed state marker+badge, TradeStateDelegate) ---
-        company_item = si(rec["company"], L)
-        company_item.setData(Qt.ItemDataRole.UserRole, {"state": "Closed" if is_closed else "Open"})
-        tbl.setItem(r, 0, company_item)
-        tbl.setItem(r, 1, si(rec.get("market", ""), Qt.AlignmentFlag.AlignCenter))
-        tbl.setItem(r, 2, si(rec.get("ticker", ""), Qt.AlignmentFlag.AlignCenter))
-
-        # ---Col 3-6: Buy section ---
-        tbl.setItem(r, 3, si(rec["buy_date"]))
-        tbl.setItem(r, 4, ni(rec["buy_price"]))
-        tbl.setItem(r, 5, ni(rec["qty"]))
-        tbl.setItem(r, 6, ni(rec["buy_amount"]))
-
-        # ---Col 7-13: Sell section ---
-        if is_closed:
-            tbl.setItem(r, 7,  si(rec.get("sell_date", "")) if rec.get("sell_date") else dash())
-            tbl.setItem(r, 8,  ni(rec.get("days_held", 0)))
-            tbl.setItem(r, 9,  ni(rec.get("sell_price", 0.0)))
-            tbl.setItem(r, 10, ni(rec.get("sell_qty", 0.0)))
-            tbl.setItem(r, 11, ni(rec.get("sell_amount", 0.0)))
-            pl_it = ni(rec.get("pl", 0.0))
-            if rec.get("pl", 0.0) > 0:
-                pl_it.setForeground(QC_PROFIT)
-            elif rec.get("pl", 0.0) < 0:
-                pl_it.setForeground(QC_LOSS)
-            tbl.setItem(r, 12, pl_it)
-            tbl.setItem(r, 13, pi(rec.get("pl_pct", 0.0)))
-        else:
-            for c in range(7, 14):
-                tbl.setItem(r, c, dash())
-
-        # ---Col 14-17: Position section ---
-        is_open_row = (kind == "open")
-        curr_price  = rec.get("curr_price", 0)
-
-        # _refresh_summary already sets curr_days = (today - sell_date).days for closed rows
-        hide_past_info = hide_stale_closed and kind == "closed" and rec.get("curr_days", 0) > 30
-
-        if hide_past_info:
-            tbl.setItem(r, 14, dash())
-        else:
-            tbl.setItem(r, 14, ni(rec["curr_days"]) if rec["curr_days"] else dash())
-
-        if hide_past_info:
-            tbl.setItem(r, 15, dash())
-            tbl.setItem(r, 16, dash())
-            tbl.setItem(r, 17, dash())
-        elif curr_price > 0:
-            tbl.setItem(r, 15, ni(curr_price))
-            if is_open_row:
-                pl_cur = ni(rec.get("curr_pl", 0.0))
-                if rec.get("curr_pl", 0.0) > 0:
-                    pl_cur.setForeground(QC_PROFIT)
-                elif rec.get("curr_pl", 0.0) < 0:
-                    pl_cur.setForeground(QC_LOSS)
-                tbl.setItem(r, 16, pl_cur)
-                tbl.setItem(r, 17, pi(rec.get("curr_pl_pct", 0.0)))
-            else:
-                # closed row: Do not display P/L amount (col 16)
-                # EXCEPT if sold today, display P/L based on current price (user request)
-                if rec.get("curr_days") == 0:
-                    curr_price = rec.get("curr_price", 0.0)
-                    sell_price = rec.get("sell_price", 0.0)
-                    s_qty      = rec.get("sell_qty", 0.0)
-
-                    if curr_price > 0 and sell_price > 0:
-                        # Opportunity P/L for positions sold today: current price - sell price
-                        opp_pl = (curr_price - sell_price) * s_qty
-                        opp_pl_pct = (curr_price - sell_price) / sell_price * 100
-
-                        pl_cur = ni(opp_pl)
-                        if opp_pl > 0:
-                            pl_cur.setForeground(QC_PROFIT)
-                        elif opp_pl < 0:
-                            pl_cur.setForeground(QC_LOSS)
-                        tbl.setItem(r, 16, pl_cur)
-                        tbl.setItem(r, 17, pi(opp_pl_pct))
-                    else:
-                        tbl.setItem(r, 16, dash())
-                        tbl.setItem(r, 17, pi(rec.get("curr_pl_pct", 0.0)))
-                else:
-                    tbl.setItem(r, 16, dash())
-                    tbl.setItem(r, 17, pi(rec.get("curr_pl_pct", 0.0)))
-        elif is_open_row:
-            tbl.setItem(r, 15, loading_item())
-            tbl.setItem(r, 16, loading_item())
-            tbl.setItem(r, 17, loading_item())
-        else:
-            tbl.setItem(r, 15, dash())
-            tbl.setItem(r, 16, dash())
-            tbl.setItem(r, 17, dash())
-
-        # ---Col 18-20: Past section ---
-        if hide_past_info:
-            tbl.setItem(r, 18, dash())
-            tbl.setItem(r, 19, dash())
-            tbl.setItem(r, 20, dash())
-        else:
-            tbl.setItem(r, 18, pi(rec["wk1"])  if rec["wk1"]  else dash())
-            tbl.setItem(r, 19, pi(rec["wk2"])  if rec["wk2"]  else dash())
-            tbl.setItem(r, 20, pi(rec["mth1"]) if rec["mth1"] else dash())
-
-        # ---Row background: one zebra stripe (docs/ui.md 3.7/issue #5) --
-        # state used to be a second background channel (bg_open mint);
-        # that's the marker+badge's job now, so this is purely alternation.
-        bg = QColor(SURFACE if r % 2 == 0 else ZEBRA)
-        for c in range(n_cols):
-            it = tbl.item(r, c)
-            if it:
-                it.setBackground(bg)
+        _clear_group_header(tbl, r)
+        _fill_trade_row(tbl, r, kind, rec, hide_stale_closed)
+        _paint_zebra(tbl, r, n_cols)
     return row_data
+
+
+def _fill_monthly_row(tbl, r: int, rec: dict, n_cols: int) -> None:
+    """A month group-header row: one QLabel spanning every column."""
+    tbl.setSpan(r, 0, 1, n_cols)
+    tbl.setItem(r, 0, QTableWidgetItem(""))  # keeps _row_data/row indexing simple; label does the drawing
+    tbl.setCellWidget(r, 0, _monthly_summary_label(rec))
+
+
+def _clear_group_header(tbl, r: int) -> None:
+    """A row that was a group header on a previous render and is a normal
+    trade row now (row count/position can be reused, see fill_table_rows'
+    setRowCount) must drop its stale span/widget before being repopulated."""
+    if tbl.columnSpan(r, 0) != 1:
+        tbl.setSpan(r, 0, 1, 1)
+    if tbl.cellWidget(r, 0) is not None:
+        tbl.removeCellWidget(r, 0)
+
+
+def _fill_trade_row(tbl, r: int, kind: str, rec: dict, hide_stale_closed: bool) -> None:
+    """Every cell of one closed or open trade row, section by section."""
+    is_closed = bool(rec.get("sell_date") or rec.get("sell_price"))
+    _fill_trading_cells(tbl, r, rec, is_closed)
+    _fill_buy_cells(tbl, r, rec)
+    _fill_sell_cells(tbl, r, rec, is_closed)
+
+    # _refresh_summary already sets curr_days = (today - sell_date).days for closed rows
+    hide_past_info = hide_stale_closed and kind == "closed" and rec.get("curr_days", 0) > 30
+    _fill_position_cells(tbl, r, kind, rec, hide_past_info)
+    _fill_past_cells(tbl, r, rec, hide_past_info)
+
+
+def _fill_trading_cells(tbl, r: int, rec: dict, is_closed: bool) -> None:
+    """Col 0-2: Company (+ Open/Closed state marker+badge, TradeStateDelegate)."""
+    company_item = si(rec["company"], Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    company_item.setData(Qt.ItemDataRole.UserRole, {"state": "Closed" if is_closed else "Open"})
+    tbl.setItem(r, 0, company_item)
+    tbl.setItem(r, 1, si(rec.get("market", ""), Qt.AlignmentFlag.AlignCenter))
+    tbl.setItem(r, 2, si(rec.get("ticker", ""), Qt.AlignmentFlag.AlignCenter))
+
+
+def _fill_buy_cells(tbl, r: int, rec: dict) -> None:
+    """Col 3-6: Buy section."""
+    tbl.setItem(r, 3, si(rec["buy_date"]))
+    tbl.setItem(r, 4, ni(rec["buy_price"]))
+    tbl.setItem(r, 5, ni(rec["qty"]))
+    tbl.setItem(r, 6, ni(rec["buy_amount"]))
+
+
+def _fill_sell_cells(tbl, r: int, rec: dict, is_closed: bool) -> None:
+    """Col 7-13: Sell section (dashes for an open row)."""
+    if is_closed:
+        tbl.setItem(r, 7,  si(rec.get("sell_date", "")) if rec.get("sell_date") else dash())
+        tbl.setItem(r, 8,  ni(rec.get("days_held", 0)))
+        tbl.setItem(r, 9,  ni(rec.get("sell_price", 0.0)))
+        tbl.setItem(r, 10, ni(rec.get("sell_qty", 0.0)))
+        tbl.setItem(r, 11, ni(rec.get("sell_amount", 0.0)))
+        tbl.setItem(r, 12, _signed_amount_item(rec.get("pl", 0.0)))
+        tbl.setItem(r, 13, pi(rec.get("pl_pct", 0.0)))
+    else:
+        for c in range(7, 14):
+            tbl.setItem(r, c, dash())
+
+
+def _fill_position_cells(tbl, r: int, kind: str, rec: dict, hide_past_info: bool) -> None:
+    """Col 14-17: Position section (days, current price, P/L, P/L %)."""
+    is_open_row = (kind == "open")
+    curr_price  = rec.get("curr_price", 0)
+
+    if hide_past_info:
+        tbl.setItem(r, 14, dash())
+    else:
+        tbl.setItem(r, 14, ni(rec["curr_days"]) if rec["curr_days"] else dash())
+
+    if hide_past_info:
+        tbl.setItem(r, 15, dash())
+        tbl.setItem(r, 16, dash())
+        tbl.setItem(r, 17, dash())
+    elif curr_price > 0:
+        tbl.setItem(r, 15, ni(curr_price))
+        if is_open_row:
+            pl_item, pct_item = _open_position_pl_items(rec)
+        else:
+            pl_item, pct_item = _closed_position_pl_items(rec)
+        tbl.setItem(r, 16, pl_item)
+        tbl.setItem(r, 17, pct_item)
+    elif is_open_row:
+        tbl.setItem(r, 15, loading_item())
+        tbl.setItem(r, 16, loading_item())
+        tbl.setItem(r, 17, loading_item())
+    else:
+        tbl.setItem(r, 15, dash())
+        tbl.setItem(r, 16, dash())
+        tbl.setItem(r, 17, dash())
+
+
+def _open_position_pl_items(rec: dict) -> tuple:
+    """(P/L, P/L %) cells of an open position with a current price."""
+    return _signed_amount_item(rec.get("curr_pl", 0.0)), pi(rec.get("curr_pl_pct", 0.0))
+
+
+def _closed_position_pl_items(rec: dict) -> tuple:
+    """(P/L, P/L %) cells of a closed position with a current price.
+
+    The P/L amount (col 16) is not displayed for a closed row, EXCEPT if it
+    was sold today: then both cells show the P/L based on the current price
+    (user request)."""
+    if rec.get("curr_days") == 0:
+        curr_price = rec.get("curr_price", 0.0)
+        sell_price = rec.get("sell_price", 0.0)
+        s_qty      = rec.get("sell_qty", 0.0)
+
+        if curr_price > 0 and sell_price > 0:
+            # Opportunity P/L for positions sold today: current price - sell price
+            opp_pl = (curr_price - sell_price) * s_qty
+            opp_pl_pct = (curr_price - sell_price) / sell_price * 100
+            return _signed_amount_item(opp_pl), pi(opp_pl_pct)
+    return dash(), pi(rec.get("curr_pl_pct", 0.0))
+
+
+def _fill_past_cells(tbl, r: int, rec: dict, hide_past_info: bool) -> None:
+    """Col 18-20: Past section (5D / 10D / 20D returns)."""
+    if hide_past_info:
+        tbl.setItem(r, 18, dash())
+        tbl.setItem(r, 19, dash())
+        tbl.setItem(r, 20, dash())
+    else:
+        tbl.setItem(r, 18, pi(rec["wk1"])  if rec["wk1"]  else dash())
+        tbl.setItem(r, 19, pi(rec["wk2"])  if rec["wk2"]  else dash())
+        tbl.setItem(r, 20, pi(rec["mth1"]) if rec["mth1"] else dash())
+
+
+def _paint_zebra(tbl, r: int, n_cols: int) -> None:
+    """Row background: one zebra stripe (docs/ui.md 3.7/issue #5) -- state
+    used to be a second background channel (bg_open mint); that's the
+    marker+badge's job now, so this is purely alternation."""
+    bg = QColor(SURFACE if r % 2 == 0 else ZEBRA)
+    for c in range(n_cols):
+        it = tbl.item(r, c)
+        if it:
+            it.setBackground(bg)

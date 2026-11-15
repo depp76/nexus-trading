@@ -28,6 +28,36 @@ from ui.universe_columns import (
     _RANGE_FILTER_COLS, _MOMENTUM_COLS, _market_label, _fmt_change, _change_bg,
 )
 
+_RIGHT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+
+
+def _price_value_and_text(item, mode):
+    """(raw price, display text) for the Price cell: USD rows show their
+    dollar price, yields a percent level, index/level rows two decimals and
+    KRW equities whole won."""
+    is_index = bool(item.get('is_index'))
+    is_usd = (item.get('currency', '') == '$' and 'usd_price' in item)
+    price_raw = float(item.get('usd_price', 0) if is_usd else item.get('price', 0))
+    if mode == 'bp':
+        price_text = f"{price_raw:.2f}%"
+    elif is_usd:
+        price_text = f"${price_raw:,.2f}"
+    elif is_index or mode == 'abs':
+        price_text = f"{price_raw:,.2f}"
+    else:
+        price_text = f"{int(price_raw):,}"
+    return price_raw, price_text
+
+
+def _empty_numeric_item():
+    """A centred, muted "-" cell that sorts below every real value (a missing
+    cap, PER or MA divergence)."""
+    cell = NumericItem("-", float('-inf'))
+    cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+    cell.setForeground(QColor(TEXT_EMPTY))
+    return cell
+
+
 
 # ---------------------------------------------------------------------------
 # StockTable  — main universe table with filters and action buttons
@@ -560,27 +590,27 @@ class StockTable(QTableWidget):
         (docs/ui.md 2.2). Index/yield/commodity rows share the table with
         equities; change_mode picks the price/change formatting and the
         cap/PER cells show "-" where the concept does not apply."""
-        right = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        numeric_font = self._numeric_font
-
-        currency = item.get('currency', '')
-        ticker = item.get('ticker', '')
         mode = item.get('change_mode', 'pct')       # 'pct' | 'bp' (yields) | 'abs' (VIX/WTI levels)
-        is_index = bool(item.get('is_index'))
-        is_usd = (currency == '$' and 'usd_price' in item)
-        price_raw = float(item.get('usd_price', 0) if is_usd else item.get('price', 0))
-        if mode == 'bp':
-            price_text = f"{price_raw:.2f}%"
-        elif is_usd:
-            price_text = f"${price_raw:,.2f}"
-        elif is_index or mode == 'abs':
-            price_text = f"{price_raw:,.2f}"
-        else:
-            price_text = f"{int(price_raw):,}"
+        price_raw, price_text = _price_value_and_text(item, mode)
+        changes = item.get('changes', {})
 
-        # col 0: identity (name + "ticker · market" meta + status badge) --
-        # see IdentityDelegate. Sorts by name (DisplayRole), same as the old
-        # dedicated Name column did.
+        self._set_identity_cell(row, item, highlights, mode)
+        self._set_price_cells(row, price_text, price_raw, changes, mode)
+        self._set_cap_cell(row, item)
+        self._set_range_cell(row, price_raw, changes)
+        self._set_per_cells(row, item)
+        self._set_ma_div_cell(row, COL_MA20DIV, changes.get("ma20_div"))
+        # COL_MA50DIV: MA50 Div (re-added 2026-09-22 by user direction; same
+        # price/MA50*100 divergence ratio, mirrors the MA20 Div cell)
+        self._set_ma_div_cell(row, COL_MA50DIV, changes.get("ma50_div"))
+        trend_points = self._set_momentum_cells(row, changes, mode)
+        self._set_trend_cell(row, trend_points)
+
+    def _set_identity_cell(self, row, item, highlights, mode):
+        """col 0: identity (name + "ticker · market" meta + status badge) --
+        see IdentityDelegate. Sorts by name (DisplayRole), same as the old
+        dedicated Name column did."""
+        ticker = item.get('ticker', '')
         status = highlights.get(ticker, "-")
         identity_item = QTableWidgetItem(item.get('name', ticker))
         identity_item.setData(Qt.ItemDataRole.UserRole, {
@@ -596,48 +626,48 @@ class StockTable(QTableWidget):
         })
         self.setItem(row, COL_IDENTITY, identity_item)
 
+    def _set_price_cells(self, row, price_text, price_raw, changes, mode):
+        """COL_PRICE and COL_CHG."""
         # COL_PRICE: Price -- NumericItem (see its docstring: setData(EditRole)
         # + setText() alone would silently make this column sort as text).
         price_item = NumericItem(price_text, price_raw)
-        price_item.setTextAlignment(right)
-        price_item.setFont(numeric_font)
+        price_item.setTextAlignment(_RIGHT)
+        price_item.setFont(self._numeric_font)
         self.setItem(row, COL_PRICE, price_item)
-
-        changes = item.get('changes', {})
 
         # COL_CHG: Chg -- day-over-day change (data/cache.py's _TD_PERIODS has
         # a "1d" entry now, computed the same way as 3D/20D/60D/120D).
         chg = float(changes.get("1d", 0.0) or 0.0)
         chg_item = NumericItem(_fmt_change(chg, mode), chg)
-        chg_item.setTextAlignment(right)
-        chg_item.setFont(numeric_font)
+        chg_item.setTextAlignment(_RIGHT)
+        chg_item.setFont(self._numeric_font)
         chg_item.setForeground(fg_for(chg))
         bg = _change_bg(chg, COLUMNS[COL_CHG].scale, mode)
         if bg is not None:
             chg_item.setBackground(bg)
         self.setItem(row, COL_CHG, chg_item)
 
-        # COL_CAP: Cap (market_cap is in KRW; 100,000,000 = 100M KRW). Index,
-        # yield and commodity rows have no market cap.
+    def _set_cap_cell(self, row, item):
+        """COL_CAP: Cap (market_cap is in KRW; 100,000,000 = 100M KRW). Index,
+        yield and commodity rows have no market cap."""
         cap_eok = None
-        if not is_index:
+        if not item.get('is_index'):
             try:
                 cap_eok = int(item.get('market_cap', 0)) // 100_000_000
             except Exception:
                 cap_eok = 0
         if cap_eok is None:
-            cap_item = NumericItem("-", float('-inf'))
-            cap_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            cap_item.setForeground(QColor(TEXT_EMPTY))
+            cap_item = _empty_numeric_item()
         else:
             cap_item = NumericItem(f"{cap_eok:,}", cap_eok)
-            cap_item.setTextAlignment(right)
-        cap_item.setFont(numeric_font)
+            cap_item.setTextAlignment(_RIGHT)
+        cap_item.setFont(self._numeric_font)
         self.setItem(row, COL_CAP, cap_item)
 
-        # COL_RANGE52W: 52W Range bar (docs/ui.md 2.3) -- replaces the old separate
-        # 52W High/High Diff/Low/Low Diff columns. UserRole is left unset
-        # (RangeBarDelegate paints nothing) when there's no valid range yet.
+    def _set_range_cell(self, row, price_raw, changes):
+        """COL_RANGE52W: 52W Range bar (docs/ui.md 2.3) -- replaces the old separate
+        52W High/High Diff/Low/Low Diff columns. UserRole is left unset
+        (RangeBarDelegate paints nothing) when there's no valid range yet."""
         low = float(changes.get("52w_low", 0.0) or 0.0)
         high = float(changes.get("52w_high", 0.0) or 0.0)
         if high > low > 0:
@@ -652,77 +682,63 @@ class StockTable(QTableWidget):
             range_item = NumericItem("", -1.0)
         self.setItem(row, COL_RANGE52W, range_item)
 
-        # COL_TPER / COL_FPER: tPER / fPER. tPER's color is a cheap/expensive value
-        # judgment (docs/ui.md mockup: green <12x, warning-red >60x), a
-        # different axis from the PROFIT/LOSS up/down convention, so it
-        # intentionally does not reuse those two colors.
+    def _set_per_cells(self, row, item):
+        """COL_TPER / COL_FPER: tPER / fPER. tPER's color is a cheap/expensive value
+        judgment (docs/ui.md mockup: green <12x, warning-red >60x), a
+        different axis from the PROFIT/LOSS up/down convention, so it
+        intentionally does not reuse those two colors."""
         for col, key in ((COL_TPER, 'trailing_per'), (COL_FPER, 'forward_per')):
             val = item.get(key)
             if val is not None:
                 cell = NumericItem(f"{val:.1f}", float(val))
-                cell.setTextAlignment(right)
-                cell.setFont(numeric_font)
+                cell.setTextAlignment(_RIGHT)
+                cell.setFont(self._numeric_font)
                 if col == COL_TPER:
                     color = OK if val < 12 else WARN if val > 60 else TEXT
                     cell.setForeground(QColor(color))
             else:
-                cell = NumericItem("-", float('-inf'))
-                cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                cell.setForeground(QColor(TEXT_EMPTY))
+                cell = _empty_numeric_item()
             self.setItem(row, col, cell)
 
-        # COL_MA20DIV: MA20 Div
-        ma20_div = float(changes.get("ma20_div", 0.0) or 0.0)
-        if ma20_div != 0.0:
-            diff = ma20_div - 100.0
-            ma_item = NumericItem(f"{ma20_div:.1f}%", ma20_div)
-            ma_item.setTextAlignment(right)
-            ma_item.setFont(numeric_font)
+    def _set_ma_div_cell(self, row, col, raw):
+        """COL_MA20DIV / COL_MA50DIV: the price/MA*100 divergence ratio,
+        heatmapped around 100; a muted "-" when the ratio is missing (0)."""
+        div = float(raw or 0.0)
+        if div != 0.0:
+            diff = div - 100.0
+            ma_item = NumericItem(f"{div:.1f}%", div)
+            ma_item.setTextAlignment(_RIGHT)
+            ma_item.setFont(self._numeric_font)
             ma_item.setForeground(fg_for(diff))
-            bg = heatmap_bg(diff, COLUMNS[COL_MA20DIV].scale)
+            bg = heatmap_bg(diff, COLUMNS[col].scale)
             if bg is not None:
                 ma_item.setBackground(bg)
         else:
-            ma_item = NumericItem("-", float('-inf'))
-            ma_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            ma_item.setForeground(QColor(TEXT_EMPTY))
-        self.setItem(row, COL_MA20DIV, ma_item)
+            ma_item = _empty_numeric_item()
+        self.setItem(row, col, ma_item)
 
-        # COL_MA50DIV: MA50 Div (re-added 2026-09-22 by user direction; same
-        # price/MA50*100 divergence ratio, mirrors the MA20 Div cell above)
-        ma50_div = float(changes.get("ma50_div", 0.0) or 0.0)
-        if ma50_div != 0.0:
-            diff50 = ma50_div - 100.0
-            ma50_item = NumericItem(f"{ma50_div:.1f}%", ma50_div)
-            ma50_item.setTextAlignment(right)
-            ma50_item.setFont(numeric_font)
-            ma50_item.setForeground(fg_for(diff50))
-            bg = heatmap_bg(diff50, COLUMNS[COL_MA50DIV].scale)
-            if bg is not None:
-                ma50_item.setBackground(bg)
-        else:
-            ma50_item = NumericItem("-", float('-inf'))
-            ma50_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            ma50_item.setForeground(QColor(TEXT_EMPTY))
-        self.setItem(row, COL_MA50DIV, ma50_item)
-
-        # momentum: 3D / 10D / 20D / 60D / 120D (5D dropped)
+    def _set_momentum_cells(self, row, changes, mode) -> list:
+        """momentum: 3D / 10D / 20D / 60D / 120D (5D dropped). Returns the
+        readings in column order for the Trend sparkline."""
         trend_points = []
         for col, key in _MOMENTUM_COLS:
             val = float(changes.get(key, 0.0) or 0.0)
             trend_points.append(val)
             cell = NumericItem(_fmt_change(val, mode), val)
-            cell.setTextAlignment(right)
-            cell.setFont(numeric_font)
+            cell.setTextAlignment(_RIGHT)
+            cell.setFont(self._numeric_font)
             if val != 0:
                 cell.setForeground(fg_for(val))
                 bg = _change_bg(val, COLUMNS[col].scale, mode)
                 if bg is not None:
                     cell.setBackground(bg)
             self.setItem(row, col, cell)
+        return trend_points
 
-        # COL_TREND: Trend -- a small chart of the five momentum readings above (_MOMENTUM_COLS)
-        # (docs/ui.md's "1Y" sparkline, honestly relabeled: see TrendDelegate)
+    def _set_trend_cell(self, row, trend_points):
+        """COL_TREND: Trend -- a small chart of the five momentum readings
+        (_MOMENTUM_COLS) (docs/ui.md's "1Y" sparkline, honestly relabeled:
+        see TrendDelegate)."""
         trend_item = NumericItem("", trend_points[-1] if trend_points else 0.0)
         trend_item.setData(Qt.ItemDataRole.UserRole, {
             "points": trend_points,

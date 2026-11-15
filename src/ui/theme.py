@@ -122,17 +122,20 @@ def apply_matplotlib_theme() -> None:
     })
 
 
-def app_qss(font_css: str) -> str:
-    """The whole app's QSS, built from the tokens above (docs/ui.md
-    1.1-1.10, 8.16). Called once at startup from main.py, next to
-    app_palette() and apply_matplotlib_theme()."""
+def _qss_base() -> str:
+    """QSS rules for window background, text colours, tooltips, status bar."""
     return f"""
     QMainWindow, QDialog, QWidget#Page {{ background-color: {BG}; color: {TEXT}; }}
     QLabel, QCheckBox, QRadioButton, QGroupBox {{ color: {TEXT}; }}
     QCheckBox:disabled, QRadioButton:disabled, QLabel:disabled {{ color: {TEXT_EMPTY}; }}
     QToolTip {{ background: {HDR_BG}; color: {TEXT}; border: 1px solid {LINE}; padding: 4px 6px; }}
     QStatusBar {{ color: {TEXT_MUTED}; }}
+"""
 
+
+def _qss_buttons(font_css: str) -> str:
+    """QSS rules for push buttons (neutral / checked / primary / link / danger) and tool buttons."""
+    return f"""
     /* Buttons: neutral outline by default. Accent is opt-in via objectName,
        never picked per function (docs/ui.md 1.6: button color means
        primary/secondary/danger, never "which feature this is"). The tab's
@@ -175,7 +178,12 @@ def app_qss(font_css: str) -> str:
     QToolButton#langFlag {{ border: 1px solid transparent; border-radius: 4px; padding: 2px; background: transparent; }}
     QToolButton#langFlag:hover {{ border-color: {LINE_STRONG}; }}
     QToolButton#langFlag:checked {{ border-color: {ACCENT_TEXT}; background: {ACCENT_BG}; }}
+"""
 
+
+def _qss_tables(font_css: str) -> str:
+    """QSS rules for tables, lists and their headers."""
+    return f"""
     /* Tables (docs/ui.md 8.2 / 8.16): one frame line, a quiet cell grid
        (LINE_GRID, below the text in contrast) and the column-group dividers
        the tables paint themselves in LINE_GROUP. Row height / zebra /
@@ -200,7 +208,12 @@ def app_qss(font_css: str) -> str:
         border-right: 1px solid {LINE_GRID};
         padding: 5px 8px; font-weight: 600; {font_css}
     }}
+"""
 
+
+def _qss_tabs(font_css: str) -> str:
+    """QSS rules for tab widgets and tab bars."""
+    return f"""
     QTabWidget::pane {{ border: 1px solid {LINE}; background: {SURFACE}; border-radius: 8px; }}
     QTabBar::tab {{
         background: transparent; color: {TEXT_MUTED};
@@ -218,7 +231,12 @@ def app_qss(font_css: str) -> str:
     /* Strategy result tabs: the last one is "Warnings (n)", amber while n > 0
        (set through the "warn" property; docs/ui.md 8.10). */
     QTabWidget#ResultTabs[warn="true"] QTabBar::tab:last {{ color: {WARN}; }}
+"""
 
+
+def _qss_inputs(font_css: str) -> str:
+    """QSS rules for text, combo, date and number fields."""
+    return f"""
     /* Inputs: one look for text, combo, date and number fields (8.16). */
     QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox, QTextEdit, QPlainTextEdit {{
         background: {SURFACE}; color: {TEXT};
@@ -247,7 +265,12 @@ def app_qss(font_css: str) -> str:
         background: {SURFACE}; color: {TEXT}; border: 1px solid {LINE};
         selection-background-color: {ACCENT_BG}; selection-color: {TEXT}; outline: 0;
     }}
+"""
 
+
+def _qss_menus() -> str:
+    """QSS rules for context menus and splitter handles."""
+    return f"""
     QMenu {{ background: {SURFACE}; color: {TEXT}; border: 1px solid {LINE}; padding: 4px 0; }}
     QMenu::item {{ padding: 5px 18px; }}
     QMenu::item:selected {{ background: {ACCENT_BG}; color: {TEXT}; }}
@@ -256,7 +279,12 @@ def app_qss(font_css: str) -> str:
 
     QSplitter::handle {{ background: {BG}; }}
     QSplitter::handle:hover {{ background: {LINE}; }}
+"""
 
+
+def _qss_calendar(font_css: str) -> str:
+    """QSS rules for the QDateEdit calendar popup."""
+    return f"""
     /* QDateEdit's calendar popup: the generic table rules above would
        inflate its fixed-size day grid, so scope them back out. */
     QCalendarWidget QTableView {{
@@ -271,7 +299,12 @@ def app_qss(font_css: str) -> str:
     }}
     QCalendarWidget QToolButton:hover {{ background: {ACCENT_BG}; }}
     QCalendarWidget QToolButton::menu-indicator {{ image: none; }}
+"""
 
+
+def _qss_labels() -> str:
+    """QSS rules for dashboard cards, KPI labels and secondary / warning text."""
+    return f"""
     QFrame#DashboardCard {{
         background-color: {SURFACE}; border: 1px solid {LINE}; border-radius: 8px;
     }}
@@ -296,7 +329,12 @@ def app_qss(font_css: str) -> str:
     QPushButton[invalid="true"], QDateEdit[invalid="true"] {{ border-color: {DANGER_LINE}; }}
     /* What a Strategy result was computed with (8.16). */
     QLabel#resultBasis {{ color: {TEXT_MUTED}; }}
+"""
 
+
+def _qss_badges() -> str:
+    """QSS rules for status badges, KPI cards and settings chips."""
+    return f"""
     /* Status badges (docs/ui.md 8.3 / 8.10): a judgement, not a button, so
        a symbol in the text is allowed. ui.common.make_badge() sets these. */
     QLabel#badgeOk   {{ color: {OK_TEXT};   background: {OK_BG};   border-radius: 9px; padding: 1px 8px; font-weight: 600; font-size: 8pt; }}
@@ -311,3 +349,22 @@ def app_qss(font_css: str) -> str:
     QLabel#settingsChip {{ background: {HDR_BG}; color: {TEXT_SUB}; border-radius: 4px; padding: 2px 8px; }}
     QLabel#settingsChip[warn="true"] {{ color: {WARN}; font-weight: 600; }}   /* hold-out included (8.12) */
     """
+
+
+def app_qss(font_css: str) -> str:
+    """The whole app's QSS, built from the tokens above (docs/ui.md
+    1.1-1.10, 8.16). Called once at startup from main.py, next to
+    app_palette() and apply_matplotlib_theme()."""
+    # Each part starts with the blank line that separated it from the
+    # previous rule group, so the joined string is the original one.
+    return "".join((
+        _qss_base(),
+        _qss_buttons(font_css),
+        _qss_tables(font_css),
+        _qss_tabs(font_css),
+        _qss_inputs(font_css),
+        _qss_menus(),
+        _qss_calendar(font_css),
+        _qss_labels(),
+        _qss_badges(),
+    ))
