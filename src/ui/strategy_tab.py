@@ -12,13 +12,14 @@ from __future__ import annotations
 
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QStackedWidget
 
+from i18n import tr
 from ui.common import ThreadOwnerMixin
 from ui.trend_following_tab import TrendFollowingTab
 
 # (selector label, page class), in list order. A new strategy adds its page
 # here; the page needs a `strategy_combo` and `set_strategy_choices()`.
 STRATEGY_TABS = (
-    ("추세추종", TrendFollowingTab),
+    (tr("추세추종", "Trend Following"), TrendFollowingTab),
 )
 
 

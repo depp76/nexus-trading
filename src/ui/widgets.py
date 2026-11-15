@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QRect, QTimer, QSize
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPolygon, QKeySequence
 
+from i18n import tr
 from ui.common import create_font, FONT_SMALL, _EmptyHint, FONT_CAPTION, make_button, _set_field_error
 from ui.delegates import IdentityDelegate, RangeBarDelegate, TrendDelegate
 from ui.universe_views import RANGE_FIELDS, matches as view_matches
@@ -234,12 +235,12 @@ class FilterPopup(QFrame):
         # Search inside popup
         self._search = QLineEdit()
         self._search.setFont(create_font(FONT_SMALL, style_name="Semilight"))
-        self._search.setPlaceholderText("검색...")
+        self._search.setPlaceholderText(tr("검색...", "Search..."))
         self._search.textChanged.connect(self._on_search)
         layout.addWidget(self._search)
 
         # Select All
-        self._all_cb = QCheckBox("(전체 선택)")
+        self._all_cb = QCheckBox(tr("(전체 선택)", "(Select All)"))
         self._all_cb.setFont(create_font(FONT_SMALL, style_name="Semilight"))
         self._all_cb.setTristate(True)
         layout.addWidget(self._all_cb)
@@ -270,10 +271,10 @@ class FilterPopup(QFrame):
 
         # Buttons
         btn_layout = QHBoxLayout()
-        ok_btn = QPushButton("확인")
+        ok_btn = QPushButton(tr("확인", "OK"))
         ok_btn.setObjectName("primary")
         ok_btn.clicked.connect(self._apply)
-        clear_btn = QPushButton("지우기")
+        clear_btn = QPushButton(tr("지우기", "Clear"))
         clear_btn.clicked.connect(self._clear)
         btn_layout.addWidget(clear_btn)
         btn_layout.addWidget(ok_btn)
@@ -344,10 +345,11 @@ class RangeFilterPopup(QFrame):
         v = QVBoxLayout(self)
         v.setContentsMargins(12, 10, 12, 10)
         v.setSpacing(6)
-        title = QLabel("범위 필터")
+        title = QLabel(tr("범위 필터", "Range filters"))
         title.setFont(create_font(FONT_SMALL, QFont.Weight.Bold))
         v.addWidget(title)
-        hint = QLabel("빈 칸은 제한 없음. 필터를 건 열에 값이 없는 종목은 숨깁니다.")
+        hint = QLabel(tr("빈 칸은 제한 없음. 필터를 건 열에 값이 없는 종목은 숨깁니다.",
+                      "Blank = no limit. Rows with no value in a filtered column are hidden."))
         hint.setObjectName("muted")
         hint.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
         hint.setWordWrap(True)
@@ -363,7 +365,7 @@ class RangeFilterPopup(QFrame):
             unit = QLabel(f.unit)
             unit.setObjectName("faint")
             lo_e, hi_e = QLineEdit(), QLineEdit()
-            for e, val, ph in ((lo_e, lo, "최소"), (hi_e, hi, "최대")):
+            for e, val, ph in ((lo_e, lo, tr("최소", "min")), (hi_e, hi, tr("최대", "max"))):
                 e.setPlaceholderText(ph)
                 e.setFixedWidth(80)
                 e.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -381,8 +383,8 @@ class RangeFilterPopup(QFrame):
 
         btns = QHBoxLayout()
         btns.addStretch()
-        clear_btn = make_button("지우기", on_click=self._clear)
-        apply_btn = make_button("적용", "primary", self._apply)
+        clear_btn = make_button(tr("지우기", "Clear"), on_click=self._clear)
+        apply_btn = make_button(tr("적용", "Apply"), "primary", self._apply)
         btns.addWidget(clear_btn)
         btns.addWidget(apply_btn)
         v.addLayout(btns)
@@ -784,12 +786,13 @@ class StockTable(QTableWidget):
 
         menu = QMenu(self)
         status = data.get("status", "-")
-        toggle_label = {"On": "관심으로 표시", "Tg": "보유/관심 해제"}.get(status, "보유로 표시")
+        toggle_label = {"On": tr("관심으로 표시", "Set as Target"),
+                        "Tg": tr("보유/관심 해제", "Clear Held/Target")}.get(status, tr("보유로 표시", "Mark as Held"))
         toggle_action = menu.addAction(toggle_label)
-        ma_action = menu.addAction("이평 차트 보기")
-        report_action = menu.addAction("AI 종목 리포트")
+        ma_action = menu.addAction(tr("이평 차트 보기", "View MA Chart"))
+        report_action = menu.addAction(tr("AI 종목 리포트", "AI Stock Report"))
         menu.addSeparator()
-        delete_action = menu.addAction("유니버스에서 제거...")
+        delete_action = menu.addAction(tr("유니버스에서 제거...", "Remove from Universe..."))
 
         chosen = menu.exec(event.globalPos())
         if chosen is toggle_action:

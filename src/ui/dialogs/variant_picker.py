@@ -18,15 +18,16 @@ from PyQt6.QtWidgets import (
     QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QSplitter, QTextBrowser, QVBoxLayout,
 )
 
+from i18n import tr
 from strategy.trend_following import VARIANTS, StrategyParams, describe_variant
 from ui.common import make_button, button_row, fit_to_screen
 from ui.theme import TEXT, TEXT_MUTED, TEXT_SUB
 
 # List groups, in VARIANTS order within each (spec 6-2).
 _GROUPS = (
-    ("A 계열 — Donchian 돌파", lambda v: v.mode == "breakout"),
-    ("B — 52주 고가 보유", lambda v: v.mode == "high52"),
-    ("C 계열 — 추세 + 눌림 점수", lambda v: v.mode == "score"),
+    (tr("A 계열 — Donchian 돌파", "A series — Donchian breakout"), lambda v: v.mode == "breakout"),
+    (tr("B — 52주 고가 보유", "B — 52-week high hold"), lambda v: v.mode == "high52"),
+    (tr("C 계열 — 추세 + 눌림 점수", "C series — trend + pullback score"), lambda v: v.mode == "score"),
 )
 _VID_ROLE = Qt.ItemDataRole.UserRole
 
@@ -49,7 +50,7 @@ class VariantPickerDialog(QDialog):
 
     def __init__(self, selected, params: StrategyParams | None = None, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("전략 선택")
+        self.setWindowTitle(tr("전략 선택", "Strategy Variants"))
         fit_to_screen(self, 880, 540)
         self._params = params
 
@@ -59,8 +60,8 @@ class VariantPickerDialog(QDialog):
         # 취소 → 확인 (docs/ui.md 8.17).
         bulk = QHBoxLayout()
         bulk.setSpacing(6)
-        bulk.addWidget(make_button("전체 선택", on_click=lambda: self._set_all(True)))
-        bulk.addWidget(make_button("전체 해제", on_click=lambda: self._set_all(False)))
+        bulk.addWidget(make_button(tr("전체 선택", "Select All"), on_click=lambda: self._set_all(True)))
+        bulk.addWidget(make_button(tr("전체 해제", "Clear All"), on_click=lambda: self._set_all(False)))
         bulk.addStretch()
         root.addLayout(bulk)
         root.setSpacing(8)
@@ -100,8 +101,8 @@ class VariantPickerDialog(QDialog):
         self.count_lbl.setObjectName("muted")
         root.addWidget(self.count_lbl)
 
-        self.ok_btn = make_button("확인", "primary", self.accept)
-        root.addLayout(button_row(make_button("취소", on_click=self.reject), self.ok_btn))
+        self.ok_btn = make_button(tr("확인", "OK"), "primary", self.accept)
+        root.addLayout(button_row(make_button(tr("취소", "Cancel"), on_click=self.reject), self.ok_btn))
 
         self.list.currentItemChanged.connect(self._on_current_changed)
         self.list.itemChanged.connect(self._update_count)
@@ -130,7 +131,8 @@ class VariantPickerDialog(QDialog):
             self.detail.setHtml(description_html(vid, self._params))
 
     def _update_count(self, *_):
-        self.count_lbl.setText(f"{len(self._items)}개 중 {len(self.selected_ids())}개 선택")
+        self.count_lbl.setText(tr(f"{len(self._items)}개 중 {len(self.selected_ids())}개 선택",
+                                   f"{len(self.selected_ids())} of {len(self._items)} selected"))
 
     def select(self, vid: str):
         """Show `vid`'s description (as a click on its row would)."""

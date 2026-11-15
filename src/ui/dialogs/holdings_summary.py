@@ -1,5 +1,6 @@
 """ui/dialogs/holdings_summary.py — Per-company P/L summary popup for the Trading
 History tab (split out of TradingHistoryTab on 2026-09-17)."""
+from i18n import tr
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView,
     QLabel,
@@ -136,7 +137,7 @@ def build_holdings_summary(parent, closed_data: list, open_data: list):
     subtotal_lbl.setFont(create_font(FONT_SMALL, style_name="Semilight"))
     v.addWidget(subtotal_lbl)
 
-    v.addLayout(button_row(make_button("닫기", on_click=dlg.accept)))
+    v.addLayout(button_row(make_button(tr("닫기", "Close"), on_click=dlg.accept)))
     return dlg
 
 

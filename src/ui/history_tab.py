@@ -4,6 +4,7 @@ Split out from: main.py (2026-08-29 feat/3-1-modularize, Phase 4)
 Contains:
   TradingHistoryTab
 """
+from i18n import tr
 import logging
 import datetime as _dt
 
@@ -66,7 +67,7 @@ def _make_rw_edit(placeholder: str = "") -> QLineEdit:
 # Message boxes are titled with the tab name (docs/ui.md 8.5).
 _TITLE = "Trading History"
 # Period filter keys (1M/3M/YTD/All) -> button label; the keys stay what the filter code compares.
-_PERIOD_LABELS = {"All": "전체"}
+_PERIOD_LABELS = {"All": tr("전체", "All")}
 
 
 class TradingHistoryTab(ThreadOwnerMixin, QWidget):
@@ -227,7 +228,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         view_row.setContentsMargins(0, 0, 0, 0)
 
         self._open_stocks_combo = QComboBox()
-        self._open_stocks_combo.addItem("보유 종목...")
+        self._open_stocks_combo.addItem(tr("보유 종목...", "Current Holdings..."))
         self._open_stocks_combo.setFixedHeight(_BTN_H)
         self._open_stocks_combo.setMinimumWidth(150)
         self._open_stocks_combo.setMaximumWidth(250)
@@ -235,13 +236,13 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         row.addWidget(self._open_stocks_combo)
 
         self._search_stock_pl_edit = QLineEdit()
-        self._search_stock_pl_edit.setPlaceholderText("종목 검색")
+        self._search_stock_pl_edit.setPlaceholderText(tr("종목 검색", "Search company"))
         self._search_stock_pl_edit.setFixedHeight(_BTN_H)
         self._search_stock_pl_edit.setMinimumWidth(180)
         self._search_stock_pl_edit.setMaximumWidth(250)
         self._search_stock_pl_edit.returnPressed.connect(self._on_search_stock_pl)
         row.addWidget(self._search_stock_pl_edit)
-        row.addWidget(make_button("검색", on_click=self._on_search_stock_pl))
+        row.addWidget(make_button(tr("검색", "Search"), on_click=self._on_search_stock_pl))
 
         # Period filter (mockup "periods": 1M/3M/YTD/All), by buy date.
         self._period_filter = "All"
@@ -261,7 +262,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         # label named the other mode).
         self._sort_by_date = False
         self._group_buttons = {}
-        for key, label in (("status", "상태별"), ("month", "월별")):
+        for key, label in (("status", tr("상태별", "By Status")), ("month", tr("월별", "By Month"))):
             btn = make_button(label, width=84, checkable=True, checked=(key == "status"))
             btn.clicked.connect(lambda _c, k=key: self._on_grouping_changed(k))
             view_row.addWidget(btn)
@@ -273,7 +274,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         # way to know why.
         self._hide_stale_closed = True
         self._stale_toggle_btn = make_button(
-            "오래된 시세 숨김", tooltip="매도 후 30일이 지난 거래의 현재가를 숨깁니다",
+            tr("오래된 시세 숨김", "Hide stale prices"), tooltip=tr("매도 후 30일이 지난 거래의 현재가를 숨깁니다", "Hide the current price of trades closed more than 30 days ago"),
             checkable=True, checked=True)
         self._stale_toggle_btn.toggled.connect(self._on_stale_toggle_changed)
         view_row.addWidget(self._stale_toggle_btn)
@@ -282,11 +283,11 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         row.addStretch()
 
         # Actions; Add Trade is the tab's one primary (docs/ui.md 8.1).
-        row.addWidget(make_button("종목별 요약", on_click=self._show_holdings_summary))
-        self._fetch_dep_btn = make_button("예수금 조회", on_click=self._fetch_account_deposit)
+        row.addWidget(make_button(tr("종목별 요약", "Summary"), on_click=self._show_holdings_summary))
+        self._fetch_dep_btn = make_button(tr("예수금 조회", "Fetch Deposit"), on_click=self._fetch_account_deposit)
         row.addWidget(self._fetch_dep_btn)
-        row.addWidget(make_button("다시 읽기", on_click=self._reload_current))
-        row.addWidget(make_button("거래 추가", "primary", self._show_add_trade_dialog))
+        row.addWidget(make_button(tr("다시 읽기", "Reload"), on_click=self._reload_current))
+        row.addWidget(make_button(tr("거래 추가", "Add Trade"), "primary", self._show_add_trade_dialog))
         rows.addLayout(row)
         rows.addLayout(view_row)
         return rows
@@ -348,7 +349,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         if not self._selected_trade_records():
             return
         menu = QMenu(self._table)
-        delete_action = menu.addAction("거래 삭제...")
+        delete_action = menu.addAction(tr("거래 삭제...", "Delete Trade..."))
         if menu.exec(self._table.viewport().mapToGlobal(pos)) is delete_action:
             self._delete_selected_trades()
 
@@ -358,10 +359,10 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             return
         names = ", ".join(f"{rec.get('company', '')} ({rec.get('buy_date', '')})" for _, rec in targets[:3])
         if len(targets) > 3:
-            names += f" 외 {len(targets) - 3}건"
+            names += tr(f" 외 {len(targets) - 3}건", f" and {len(targets) - 3} more")
         reply = QMessageBox.question(
             self, _TITLE,
-            f"거래 {len(targets)}건을 삭제할까요?\n{names}\n\nportfolio.db에서 지워집니다.",
+            tr(f"거래 {len(targets)}건을 삭제할까요?\n{names}\n\nportfolio.db에서 지워집니다.", f"Delete {len(targets)} trade(s)?\n{names}\n\nThis removes them from portfolio.db."),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -376,7 +377,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
                     deleted_keys.add(key)
             except Exception as e:
                 logger.error("Failed to delete trade %s: %s", key, e, exc_info=True)
-                QMessageBox.warning(self, _TITLE, f"거래를 삭제하지 못했습니다:\n{e}")
+                QMessageBox.warning(self, _TITLE, tr(f"거래를 삭제하지 못했습니다:\n{e}", f"Failed to delete trade:\n{e}"))
                 break
         # Filter by orig_key rather than list.remove(rec): dict equality would
         # match a different row with identical field values (e.g. two same-day
@@ -447,7 +448,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             logger.error("Failed to save trade to DB: %s", e, exc_info=True)
             QMessageBox.critical(
                 self, _TITLE,
-                f"거래를 데이터베이스에 저장하지 못했습니다:\n{e}\n\n기록이 추가되지 않았습니다."
+                tr(f"거래를 데이터베이스에 저장하지 못했습니다:\n{e}\n\n기록이 추가되지 않았습니다.", f"Failed to save trade to database:\n{e}\n\nThe record was not added.")
             )
             return False
 
@@ -483,7 +484,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             logger.error("Failed to save overrides to DB: %s", e, exc_info=True)
             QMessageBox.warning(
                 self, _TITLE,
-                f"수정한 거래를 데이터베이스에 저장하지 못했습니다:\n{e}"
+                tr(f"수정한 거래를 데이터베이스에 저장하지 못했습니다:\n{e}", f"Failed to save modified trades to database:\n{e}")
             )
             return False
 
@@ -732,7 +733,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._fetch_dep_btn.setEnabled(True)
         if err:
             self.status_message.emit("Account deposit fetch failed")
-            QMessageBox.critical(self, _TITLE, f"계좌 예수금을 조회하지 못했습니다:\n{err}")
+            QMessageBox.critical(self, _TITLE, tr(f"계좌 예수금을 조회하지 못했습니다:\n{err}", f"Failed to fetch the account deposit:\n{err}"))
             return
         self._deposit_edit.setText(f"{int(val):,}")
         self._on_deposit_changed()
@@ -815,7 +816,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
     def _update_open_stocks_combo(self):
         self._open_stocks_combo.blockSignals(True)
         self._open_stocks_combo.clear()
-        self._open_stocks_combo.addItem("Current Holdings...")
+        self._open_stocks_combo.addItem(tr("보유 종목...", "Current Holdings..."))
         
         companies = []
         for item in self._open_data:
@@ -831,7 +832,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._open_stocks_combo.blockSignals(False)
 
     def _on_open_stock_combo_changed(self, text):
-        if not text or text == "Current Holdings...":
+        if not text or text == tr("보유 종목...", "Current Holdings..."):
             return
             
         query = text.strip().lower()

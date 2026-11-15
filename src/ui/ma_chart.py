@@ -9,6 +9,7 @@ now. Requires ui.common.ThreadOwnerMixin on the same class for _track_thread().
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QMessageBox
 
+from i18n import tr
 from threads.fetch_threads import StockMaThread
 from ui.dialogs import StockMaDialog
 
@@ -22,7 +23,8 @@ class StockMaLauncherMixin:
     def _show_stock_ma(self, ticker: str, name: str, market: str, change_mode: str = "pct"):
         if not ticker:
             return
-        self._on_stock_ma_status(f"Loading MA20 & MA50 for {name} ({ticker})...")
+        self._on_stock_ma_status(tr(f"{name} ({ticker}) 이평 차트를 불러오는 중...",
+                                    f"Loading MA20 & MA50 for {name} ({ticker})..."))
         # The thread echoes market/change_mode back in its finished signal,
         # so the slot gets this request's context even with several in flight.
         thread = self._track_thread(StockMaThread(ticker, name, market, change_mode))
@@ -30,9 +32,11 @@ class StockMaLauncherMixin:
         thread.start()
 
     def _on_stock_ma_loaded(self, ticker, name, df, error, investor_data, market, change_mode):
-        self._on_stock_ma_status(f"MA chart loaded for {name} ({ticker}).")
+        self._on_stock_ma_status(tr(f"{name} ({ticker}) 이평 차트를 불러왔습니다.",
+                                    f"MA chart loaded for {name} ({ticker})."))
         if error and df is None:
-            QMessageBox.warning(self, "Trading Universe", f"{ticker} 데이터를 불러오지 못했습니다:\n{error}")
+            QMessageBox.warning(self, "Trading Universe", tr(f"{ticker} 데이터를 불러오지 못했습니다:\n{error}",
+                                                             f"Failed to load data for {ticker}:\n{error}"))
             return
         dlg = StockMaDialog(ticker, name, market, df, investor_data=investor_data, parent=None, change_mode=change_mode,
                             trend_rec=getattr(self, "_last_recommendation", None))

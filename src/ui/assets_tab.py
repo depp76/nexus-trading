@@ -4,6 +4,7 @@ Split out from: main.py (2026-08-29 feat/3-1-modularize, Phase 4)
 Contains:
   TradingRecordTab
 """
+from i18n import tr
 import csv
 import logging
 import math
@@ -140,7 +141,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
 
         # ---Header row: currency toggle + USD/KRW rate (docs/ui.md 4.1/4.3) ---
         header_row = QHBoxLayout()
-        lbl_currency = QLabel("통화:")
+        lbl_currency = QLabel(tr("통화:", "Currency:"))
         lbl_currency.setFont(create_font(FONT_BODY, style_name="Semilight"))
         header_row.addWidget(lbl_currency)
 
@@ -183,7 +184,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
 
         self._asset_edit = QLineEdit()
         self._asset_edit.setFont(create_font(FONT_BODY, style_name="Semilight"))
-        self._asset_edit.setPlaceholderText("자동 입력")
+        self._asset_edit.setPlaceholderText(tr("자동 입력", "Total Assets (auto-filled)"))
         self._asset_edit.setMinimumWidth(160)
         self._asset_edit.setMaximumWidth(180)
         self._asset_edit.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -194,18 +195,18 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         # This Week/Graph/Export are secondary utilities and stay neutral.
         # Delete lives on the table's right-click menu and the Delete key, as
         # in the other tabs -- never an always-visible button.
-        add_btn = make_button("기록 추가", "primary", self._add_record)
-        today_btn = make_button("이번 주", on_click=self._select_latest_week)
+        add_btn = make_button(tr("기록 추가", "Add Record"), "primary", self._add_record)
+        today_btn = make_button(tr("이번 주", "This Week"), on_click=self._select_latest_week)
 
-        lbl_date = QLabel("날짜:")
+        lbl_date = QLabel(tr("날짜:", "Date:"))
         lbl_date.setFont(create_font(FONT_BODY, style_name="Semilight"))
-        lbl_assets = QLabel("총자산:")
+        lbl_assets = QLabel(tr("총자산:", "Total Assets:"))
         lbl_assets.setFont(create_font(FONT_BODY, style_name="Semilight"))
 
         # "실시간": the live estimate from Trading History, not a saved
         # weekly record (docs/ui.md 8.16).
-        live_asset_title = QLabel("현재 총자산(실시간):")
-        live_asset_title.setToolTip("계좌 평가액 + 누적 출금액 (Trading History 기준 실시간 추정, 저장된 주간 기록이 아님)")
+        live_asset_title = QLabel(tr("현재 총자산(실시간):", "Current Total Assets (live):"))
+        live_asset_title.setToolTip(tr("계좌 평가액 + 누적 출금액 (Trading History 기준 실시간 추정, 저장된 주간 기록이 아님)", "Account valuation + cumulative withdrawals (live estimate from Trading History, not a saved weekly record)"))
         live_asset_title.setFont(create_font(FONT_BODY, style_name="Semilight"))
 
         # docs/ui.md issue #7 (mockup): these were QLineEdit(readOnly), which
@@ -217,7 +218,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self.live_asset_lbl.setStyleSheet(f"color:{TEXT};")
         self.live_asset_lbl.setMinimumWidth(120)
 
-        live_diff_title = QLabel("주간 손익:")
+        live_diff_title = QLabel(tr("주간 손익:", "Weekly P/L:"))
         live_diff_title.setFont(create_font(FONT_BODY, style_name="Semilight"))
 
         self.live_diff_lbl = QLabel("-")
@@ -250,11 +251,11 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         # Graph/Export sit on the header row, right-aligned above the chart
         # they belong to: all on one controls row the tab needed ~1,540px
         # and ran past the screen edge (user report 2026-10-15).
-        graph_btn = make_button("그래프", on_click=self._show_graph)
+        graph_btn = make_button(tr("그래프", "Graph"), on_click=self._show_graph)
         header_row.addWidget(graph_btn)
 
-        export_btn = make_button("내보내기", on_click=self._on_export_clicked,
-                                 tooltip="총자산 기록 표를 Excel 또는 CSV로 내보냅니다")
+        export_btn = make_button(tr("내보내기", "Export"), on_click=self._on_export_clicked,
+                                 tooltip=tr("총자산 기록 표를 Excel 또는 CSV로 내보냅니다", "Export the asset snapshot table to Excel or CSV"))
         header_row.addWidget(export_btn)
 
         # Actions on the right, the primary last (docs/ui.md 8.4).
@@ -315,7 +316,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         if not self._table.selectedIndexes():
             return
         menu = QMenu(self._table)
-        delete_action = menu.addAction("기록 삭제...")
+        delete_action = menu.addAction(tr("기록 삭제...", "Delete Record..."))
         if menu.exec(self._table.viewport().mapToGlobal(pos)) is delete_action:
             self._delete_selected()
 
@@ -486,7 +487,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
             trade_db.save_asset_records(self._records)
         except Exception as e:
             logger.error("[TradingRecord] Save error: %s", e, exc_info=True)
-            QMessageBox.warning(self, _TITLE, f"총자산 기록을 저장하지 못했습니다:\n{e}")
+            QMessageBox.warning(self, _TITLE, tr(f"총자산 기록을 저장하지 못했습니다:\n{e}", f"Failed to save asset records:\n{e}"))
 
     # ---Background metrics warm-up (roadmap 2026-09-18, review.md 1-2) ---
     def _start_metrics_preload(self):
@@ -519,14 +520,14 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         date_str = self._selected_date()
         raw_amt  = self._asset_edit.text().replace(',', '').strip()
         if not date_str:
-            QMessageBox.warning(self, _TITLE, "금요일을 선택하세요.")
+            QMessageBox.warning(self, _TITLE, tr("금요일을 선택하세요.", "Select a Friday."))
             return
         try:
             total = float(raw_amt)
         except ValueError:
             total = math.nan
         if not math.isfinite(total):  # float() takes "nan"/"inf" (review_codex.md #6)
-            QMessageBox.warning(self, _TITLE, "총자산은 숫자로 입력하세요.")
+            QMessageBox.warning(self, _TITLE, tr("총자산은 숫자로 입력하세요.", "Total Assets must be a number."))
             return
 
         # docs/ui.md 4.5: the value was auto-filled from the live position
@@ -564,7 +565,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         if not dates_to_delete:
             return
         reply = QMessageBox.question(
-            self, _TITLE, f"기록 {len(dates_to_delete)}건을 삭제할까요?",
+            self, _TITLE, tr(f"기록 {len(dates_to_delete)}건을 삭제할까요?", f"Delete {len(dates_to_delete)} record(s)?"),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -675,7 +676,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self._report_start = first[:8] + "01"
         if self._graph_dlg is not None:
             self._graph_dlg.report_btn.setEnabled(False)
-            self._graph_dlg.report_btn.setText("불러오는 중...")
+            self._graph_dlg.report_btn.setText(tr("불러오는 중...", "Loading..."))
         thread = self._track_thread(AssetReportThread(self._report_start), '_report_thread')
         thread.finished.connect(self._on_report_fetched)
         thread.start()
@@ -684,16 +685,16 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         parent = self._graph_dlg or self
         if self._graph_dlg is not None:
             self._graph_dlg.report_btn.setEnabled(True)
-            self._graph_dlg.report_btn.setText("리포트")
+            self._graph_dlg.report_btn.setText(tr("리포트", "Report"))
         if error or not kospi:
-            QMessageBox.warning(parent, _TITLE, f"리포트 데이터를 불러오지 못했습니다.\n{error or 'KOSPI 시세가 없습니다.'}")
+            QMessageBox.warning(parent, _TITLE, tr(f"리포트 데이터를 불러오지 못했습니다.\n{error or 'KOSPI 시세가 없습니다.'}", f"Could not load the report data.\n{error or 'No KOSPI history.'}"))
             return
         settings = QSettings(*self._SETTINGS_SCOPE)
         end_cash = self._settings_amount(settings, "deposit") + self._settings_amount(settings, "withdrawal")
         points = report_dates([d for d, _ in kospi], self._report_start, datetime.now().strftime("%Y-%m-%d"))
         rows = build_report(trades, end_cash, points, closes, kospi, usd_krw)
         if not rows:
-            QMessageBox.information(parent, _TITLE, "기록된 기간에 거래일이 없습니다.")
+            QMessageBox.information(parent, _TITLE, tr("기록된 기간에 거래일이 없습니다.", "No trading days in the recorded period."))
             return
         AssetsReportDialog(rows, parent).exec()
 
@@ -776,7 +777,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
                 wb.save(path)
         except Exception as e:
             logger.warning("Total assets export failed: %s", e, exc_info=True)
-            QMessageBox.warning(self, _TITLE, f"내보내지 못했습니다:\n{e}")
+            QMessageBox.warning(self, _TITLE, tr(f"내보내지 못했습니다:\n{e}", f"Failed to export:\n{e}"))
             return
 
         self.status_message.emit(f"Exported {len(rows)} row(s) to {path}")
@@ -813,7 +814,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
                     self._save_records()
                     self._refresh_table()
                 except ValueError:
-                    QMessageBox.warning(self, _TITLE, "숫자 형식이 올바르지 않습니다.")
+                    QMessageBox.warning(self, _TITLE, tr("숫자 형식이 올바르지 않습니다.", "Invalid number format."))
 
     # ---Table rendering ---
     # docs/ui.md issue #9 (mockup): "정렬이 꺼져 있다" -- sorting is enabled
@@ -1070,8 +1071,8 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         if len(metrics) < 2:
             # An empty state, not an empty 0..1 axis (docs/ui.md 8.16).
             ax.set_axis_off()
-            msg = ("주간 기록을 추가하면 추이가 표시됩니다" if not metrics
-                   else "주간 기록이 2주 이상 쌓이면 추이가 표시됩니다")
+            msg = (tr("주간 기록을 추가하면 추이가 표시됩니다", "Add weekly records to see the trend") if not metrics
+                   else tr("주간 기록이 2주 이상 쌓이면 추이가 표시됩니다", "The trend appears once two or more weekly records exist"))
             ax.text(0.5, 0.5, msg, ha="center", va="center",
                      transform=ax.transAxes, color=TEXT_MUTED, fontsize=9)
             self._chart_canvas.draw()
@@ -1098,7 +1099,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         ax.legend(fontsize=8, loc="upper left")
         ax.set_ylabel("Index (first week = 100)", fontsize=8)
         # Same currency and period as the table under it (docs/ui.md 8.16).
-        ax.set_title(f"{metrics[0]['date']} ~ {metrics[-1]['date']} · {self._currency} · 저장된 주간 기록",
+        ax.set_title(tr(f"{metrics[0]['date']} ~ {metrics[-1]['date']} · {self._currency} · 저장된 주간 기록", f"{metrics[0]['date']} ~ {metrics[-1]['date']} · {self._currency} · saved weekly records"),
                      fontsize=8, loc="left", color=TEXT_MUTED)
 
         self._chart_canvas.draw()

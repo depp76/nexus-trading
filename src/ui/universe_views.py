@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from i18n import tr
+
 
 @dataclass(frozen=True)
 class RangeField:
@@ -29,7 +31,7 @@ class RangeField:
 
 # The numeric columns that take a range filter, in table order.
 RANGE_FIELDS = (
-    RangeField("cap", "Cap", "억원", 1.0, False),
+    RangeField("cap", "Cap", tr("억원", "100M KRW"), 1.0, False),
     RangeField("tper", "tPER", "x", 1.0, False),
     RangeField("fper", "fPER", "x", 1.0, False),
     RangeField("chg", "Chg", "%", 1.0, True),
@@ -62,6 +64,16 @@ BUILTIN_VIEWS = (
     {"name": "저PER", "market": "ALL", "status": "", "search": "", "ranges": {"tper": [0.0, 12.0]}},
     {"name": "52주 신고가 근접", "market": "ALL", "status": "", "search": "", "ranges": {"range52w": [90.0, None]}},
 )
+# English labels of the built-in views. A view's "name" is its key (combo item
+# data, the built-in-name check), so it stays Korean; only the label shown in
+# the Views list is translated. User-saved names are shown as typed.
+_BUILTIN_VIEW_EN = {"저PER": "Low tPER", "52주 신고가 근접": "Near 52W High"}
+
+
+def view_display_name(name: str) -> str:
+    """The Views-list label of a view: built-in names in the UI language."""
+    en = _BUILTIN_VIEW_EN.get(name)
+    return tr(name, en) if en else name
 
 
 def empty_state() -> dict:
@@ -137,7 +149,7 @@ def describe_view(state: dict) -> str:
     if s["market"] != "ALL":
         parts.append("+".join(MARKETS[m] for m in s["market"]))
     if s["status"]:
-        parts.append({"On": "보유", "Tg": "관심"}.get(s["status"], s["status"]))
+        parts.append({"On": tr("보유", "Held"), "Tg": tr("관심", "Target")}.get(s["status"], s["status"]))
     if s["search"]:
         parts.append(f'"{s["search"]}"')
     if s["ranges"]:

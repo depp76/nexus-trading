@@ -63,6 +63,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont, QFontMetrics
 
+from i18n import tr
 from ui.trend_score_section import TrendScoreSection
 from ui.common import create_font, setup_table, BTN_H, FONT_HEADING, FONT_BODY, FONT_SMALL, FONT_CAPTION, make_button, button_row, fit_to_screen
 from ui.colors import PROFIT, LOSS, MA_RAMP, MA_DIV_NEUTRAL_PCT
@@ -81,12 +82,15 @@ _TICK_PT = FONT_SMALL          # issue #12: nothing on the chart below 9pt
 _SEG_H = BTN_H
 
 _PERIODS = [("1M", 1), ("3M", 3), ("6M", 6), ("1Y", 12), ("3Y", 36), ("All", None)]
+# Visible period-button labels (docs/ui.md 8.11); the keys above stay internal.
+_PERIOD_LABELS = {"1M": tr("1개월", "1M"), "3M": tr("3개월", "3M"), "6M": tr("6개월", "6M"),
+                  "1Y": tr("1년", "1Y"), "3Y": tr("3년", "3Y"), "All": tr("전체", "All")}
 _DEFAULT_PERIOD = "1Y"
 # Independent series toggles (user direction 2026-10-15), key -> label.
 # Price-panel lines use their _lines key; "Div" is the divergence panel.
 _SERIES = {
-    "Close": "Close", "MA5": "MA5", "MA10": "MA10", "MA20": "MA20", "MA50": "MA50",
-    "Div": "Divergence", "EW": "Equal Weight",
+    "Close": tr("종가", "Close"), "MA5": "MA5", "MA10": "MA10", "MA20": "MA20", "MA50": "MA50",
+    "Div": tr("이격도", "Divergence"), "EW": tr("동일가중", "Equal Weight"),
 }
 _PRICE_SERIES = ("Close", "MA5", "MA10", "MA20", "MA50", "EW")
 # What the dialog opens with: close price plus the divergence panel, no moving
@@ -154,7 +158,7 @@ class StockMaDialog(QDialog):
         self._change_mode = change_mode
 
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint | Qt.WindowType.WindowMinimizeButtonHint)
-        self.setWindowTitle(f"{name} ({ticker}) — Moving Averages")
+        self.setWindowTitle(tr(f"{name} ({ticker}) — 이동평균", f"{name} ({ticker}) — Moving Averages"))
         fit_to_screen(self, 1200, 720)
         self.showMaximized()
 
@@ -207,7 +211,8 @@ class StockMaDialog(QDialog):
             self._plot()
         else:
             ax = self._fig.add_subplot(111)
-            ax.text(0.5, 0.5, "Failed to load detailed data.", ha="center", va="center",
+            ax.text(0.5, 0.5, tr("상세 데이터를 불러오지 못했습니다.", "Failed to load detailed data."),
+                    ha="center", va="center",
                     transform=ax.transAxes, color=TEXT_MUTED, fontsize=FONT_BODY)
             ax.set_axis_off()
 
@@ -217,7 +222,7 @@ class StockMaDialog(QDialog):
         if self.scrollbar is not None:
             chart_v.addWidget(self.scrollbar)
 
-        root.addLayout(button_row(make_button("닫기", on_click=self.accept)))
+        root.addLayout(button_row(make_button(tr("닫기", "Close"), on_click=self.accept)))
 
     # ------------------------------------------------------------- top rows
     def _build_header_row(self) -> QHBoxLayout:
@@ -249,14 +254,15 @@ class StockMaDialog(QDialog):
         self._period_group.setExclusive(True)
         self._period_buttons = {}
         for label, months in _PERIODS:
-            btn = _segment_button(label, self._period_group, checked=(label == _DEFAULT_PERIOD), width=44)
+            btn = _segment_button(_PERIOD_LABELS[label], self._period_group, checked=(label == _DEFAULT_PERIOD), width=52)
             btn.clicked.connect(lambda _c, m=months, lbl=label: self._on_period_clicked(lbl, m))
             row.addWidget(btn)
             self._period_buttons[label] = btn
 
         as_of = ""
         if self._has_data:
-            as_of = f"as of {pd.to_datetime(self._df.get_column('Date')[-1]).strftime('%Y-%m-%d')}"
+            last_day = pd.to_datetime(self._df.get_column('Date')[-1]).strftime('%Y-%m-%d')
+            as_of = tr(f"{last_day} 기준", f"as of {last_day}")
         as_of_lbl = QLabel(as_of)
         as_of_lbl.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
         as_of_lbl.setStyleSheet(f"color:{TEXT_FAINT};")
@@ -273,7 +279,7 @@ class StockMaDialog(QDialog):
         if self._has_data and "EqualWeight" in self._df.columns and not self._is_simple_chart:
             keys.append("EW")
         if keys:
-            cap = QLabel("Series")
+            cap = QLabel(tr("표시", "Series"))
             cap.setFont(create_font(FONT_CAPTION, QFont.Weight.Bold))
             cap.setStyleSheet(f"color:{TEXT_FAINT};")
             row.addWidget(cap)
@@ -287,7 +293,7 @@ class StockMaDialog(QDialog):
         # The divergence panel has no button here: the Divergence series
         # toggle drives it.
         self._panel_buttons = {}
-        for key, label in (("vol", "Volume"), ("rsi", "RSI")):
+        for key, label in (("vol", tr("거래량", "Volume")), ("rsi", "RSI")):
             btn = _segment_button(label)
             btn.clicked.connect(lambda checked, k=key: self._set_panel(k, checked))
             row.addWidget(btn)
@@ -310,14 +316,15 @@ class StockMaDialog(QDialog):
         inv = self._investor_data
         is_wti_futures = bool(inv) and self._ticker == "CL=F" and 'Contract' in inv[0]
         if is_wti_futures:
-            v.addWidget(self._section_label("Futures Price (Last 8 Months)"))
+            v.addWidget(self._section_label(tr("선물 가격 (최근 8개월)", "Futures Price (Last 8 Months)")))
             v.addWidget(self._build_futures_table(inv))
         elif inv:
-            v.addWidget(self._section_label(f"Investor Net Buying (Last {len(inv)} Days)"))
+            v.addWidget(self._section_label(tr(f"투자자별 순매수 (최근 {len(inv)}일)",
+                                                  f"Investor Net Buying (Last {len(inv)} Days)")))
             v.addWidget(self._build_investor_table(inv))
 
         if is_stock:
-            fin_btn = QPushButton("Company Info ↗")
+            fin_btn = QPushButton(tr("기업 정보", "Company Info"))
             fin_btn.clicked.connect(self._open_company_page)
             v.addSpacing(10)
             v.addWidget(fin_btn)
@@ -394,7 +401,7 @@ class StockMaDialog(QDialog):
 
     def _build_futures_table(self, rows: list) -> QTableWidget:
         right = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        table = self._new_side_table(["Name", "Code", "Price"])
+        table = self._new_side_table([tr("종목명", "Name"), tr("코드", "Code"), tr("가격", "Price")])
         table.setRowCount(len(rows))
         for i, row in enumerate(rows):
             table.setItem(i, 0, self._cell(row['Contract']))
@@ -406,10 +413,11 @@ class StockMaDialog(QDialog):
     def _build_investor_table(self, rows: list) -> QTableWidget:
         right = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         has_details = any(r.get('InvestmentTrust', 0) != 0 or r.get('PrivateEquity', 0) != 0 for r in rows)
-        headers = ["Date", "Close", "Foreigner", "Institution", "Retail"]
+        headers = [tr("날짜", "Date"), tr("종가", "Close"), tr("외국인", "Foreigner"),
+                   tr("기관", "Institution"), tr("개인", "Retail")]
         keys = ["Foreigner", "Institution", "Retail"]
         if has_details:
-            headers.extend(["Inv. Trust", "Private Eq."])
+            headers.extend([tr("투신", "Inv. Trust"), tr("사모", "Private Eq.")])
             keys.extend(["InvestmentTrust", "PrivateEquity"])
 
         table = self._new_side_table(headers)
@@ -435,8 +443,8 @@ class StockMaDialog(QDialog):
     def _build_y_zoom_row(self) -> QHBoxLayout:
         """'Zoom Y +/−' buttons (bond yields only; the X range is handled by scroll-zoom)."""
         row = QHBoxLayout()
-        zoom_in_btn = QPushButton("Zoom Y +")
-        zoom_out_btn = QPushButton("Zoom Y −")
+        zoom_in_btn = QPushButton(tr("Y 확대", "Zoom Y +"))
+        zoom_out_btn = QPushButton(tr("Y 축소", "Zoom Y −"))
         zoom_in_btn.setFixedSize(70, _SEG_H)
         zoom_out_btn.setFixedSize(70, _SEG_H)
         row.addStretch()
@@ -564,7 +572,7 @@ class StockMaDialog(QDialog):
                 rebased = ew * (close[first] / ew[first])
                 self._lines["EW"], = ax.plot(x, rebased, color=TEXT_MUTED, linewidth=1.2, linestyle="--",
                                              label="EW", zorder=3, visible=False)
-        ax.set_ylabel(f"Price{(' (' + self._unit_suffix + ')') if self._unit_suffix else ''}",
+        ax.set_ylabel(tr("가격", "Price") + (f" ({self._unit_suffix})" if self._unit_suffix else ""),
                       fontsize=_TICK_PT, color=TEXT_MUTED)
         ax.yaxis.set_major_formatter(lambda v, _pos: self._fmt_str.format(v))
         ax.tick_params(labelbottom=False)
@@ -582,7 +590,7 @@ class StockMaDialog(QDialog):
                 ax.add_collection(PolyCollection(
                     _make_bars(xs, [0] * part.height, part.get_column("Volume").to_numpy(), width),
                     facecolors=color, alpha=alpha, linewidths=0))
-        ax.set_ylabel("Volume", fontsize=_TICK_PT, color=TEXT_MUTED)
+        ax.set_ylabel(tr("거래량", "Volume"), fontsize=_TICK_PT, color=TEXT_MUTED)
         ax.yaxis.set_major_formatter(lambda v, _pos: _compact(v) if v else "0")
         ax.tick_params(labelbottom=False)
 
@@ -602,7 +610,7 @@ class StockMaDialog(QDialog):
             self._lines["Div(50)"], = ax.plot(self._x, self._col("MA50_Div"), color=MA_RAMP["MA20"], linewidth=1.4)
         if "MA20_Div" in self._df.columns:
             self._lines["Div(20)"], = ax.plot(self._x, self._col("MA20_Div"), color=MA_RAMP["MA5"], linewidth=1.4)
-        ax.set_ylabel("Div %", fontsize=_TICK_PT, color=TEXT_MUTED)
+        ax.set_ylabel(tr("이격도 %", "Div %"), fontsize=_TICK_PT, color=TEXT_MUTED)
         ax.tick_params(labelbottom=False)
 
     def _plot_rsi_panel(self) -> None:
@@ -711,7 +719,7 @@ class StockMaDialog(QDialog):
             if key == "Close":
                 text, bg, fg = self._fmt_str.format(y), TEXT, INK_ON_LIGHT
             elif key == "EW":
-                text, bg, fg = f"EW {_compact(y)}", TEXT_MUTED, INK_ON_LIGHT
+                text, bg, fg = tr(f"동일가중 {_compact(y)}", f"EW {_compact(y)}"), TEXT_MUTED, INK_ON_LIGHT
             else:
                 bg = MA_RAMP[key]
                 text, fg = f"{key} {_compact(y)}", INK_ON_LIGHT   # every MA_RAMP step is light
@@ -775,12 +783,12 @@ class StockMaDialog(QDialog):
 
     def _hover_text(self, key: str, v: float) -> str:
         if key in ("Div(20)", "Div(50)"):
-            return f"{key} {v:.1f}"
+            return tr(f"{key.replace('Div', '이격도')} {v:.1f}", f"{key} {v:.1f}")
         if key == "RSI":
             return f"RSI {v:.0f}"
         if key == "Vol":
-            return f"Vol {_compact(v)}"
-        prefix = "" if key == "Close" else f"{key} "
+            return tr(f"거래량 {_compact(v)}", f"Vol {_compact(v)}")
+        prefix = "" if key == "Close" else f"{_SERIES.get(key, key)} "
         return prefix + self._fmt_str.format(v)
 
     def _hover_series(self, idx: int) -> list:

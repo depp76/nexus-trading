@@ -33,6 +33,7 @@ from ui.colors import OK_TEXT, FAIL_TEXT, fg_for, heatmap_bg
 from ui.common import KpiCard, make_badge, make_button, set_badge
 from ui.delegates import CellDelegate
 from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_EMPTY, LINE_STRONG
+from i18n import tr
 
 # ---------------------------------------------------------------------------
 # Targets (user's performance bar, Nexus README "H"): Sharpe >= the target
@@ -42,7 +43,8 @@ from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_EMPTY, LINE_STRONG
 DEFAULT_TARGET_SHARPE = 1.0
 TARGET_SHARPE_RANGE = (0.1, 3.0)
 TARGET_MDD = 0.15
-TARGET_SOURCE = "사용자 성과 기준 (Nexus README, 기준 H)"
+TARGET_SOURCE = tr("사용자 성과 기준 (Nexus README, 기준 H)",
+                   "Target from the user's performance bar (Nexus README, criterion H)")
 
 _RIGHT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 _LEFT = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
@@ -72,8 +74,9 @@ def meets_targets(metrics: dict, target_sharpe: float = DEFAULT_TARGET_SHARPE) -
 def sharpe_badge(sharpe, target: float = DEFAULT_TARGET_SHARPE) -> tuple[str, str]:
     ok = sharpe_ok(sharpe, target)
     if ok is None:
-        return "na", "값 없음"
-    return ("ok", "✓ 목표 충족") if ok else ("fail", f"✕ {fmt_target(target)} 미만")
+        return "na", tr("값 없음", "No value")
+    return (("ok", tr("✓ 목표 충족", "✓ Target met")) if ok
+            else ("fail", tr(f"✕ {fmt_target(target)} 미만", f"✕ Below {fmt_target(target)}")))
 
 
 def fmt_target(target_sharpe: float) -> str:
@@ -89,9 +92,10 @@ def target_text(target_sharpe: float = DEFAULT_TARGET_SHARPE) -> str:
 def mdd_badge(mdd) -> tuple[str, str]:
     ok = mdd_ok(mdd)
     if ok is None:
-        return "na", "값 없음"
+        return "na", tr("값 없음", "No value")
     pct = f"{TARGET_MDD * 100:g}%"
-    return ("ok", f"✓ {pct} 이내") if ok else ("fail", f"✕ {pct} 초과")
+    return (("ok", tr(f"✓ {pct} 이내", f"✓ Within {pct}")) if ok
+            else ("fail", tr(f"✕ {pct} 초과", f"✕ Over {pct}")))
 
 
 def drawdown_series(nav, base: float = 1.0) -> np.ndarray:
@@ -230,13 +234,19 @@ class SegmentRow(QWidget):
 # ---------------------------------------------------------------------------
 # KPI cards
 # ---------------------------------------------------------------------------
+def _sharpe_help(target: float) -> str:
+    return tr(f"위험 1단위당 초과수익 · 목표 ≥ {fmt_target(target)}",
+              f"Excess return per unit of risk · target ≥ {fmt_target(target)}")
+
+
 KPI_CARDS = [
-    ("sharpe", "Sharpe", f"위험 1단위당 초과수익 · 목표 ≥ {fmt_target(DEFAULT_TARGET_SHARPE)}"),
-    ("mdd", "Max drawdown", f"고점 대비 최대 하락 · 목표 |MDD| ≤ {TARGET_MDD * 100:g}%"),
-    ("cagr", "CAGR", "연평균 수익률"),
-    ("excess", "vs BM1", "시장(KODEX 200TR) 대비 CAGR 차이"),
-    ("vol", "Volatility", "수익률 출렁임(연환산)"),
-    ("trades", "Trades", "기간 중 매매 횟수"),
+    ("sharpe", "Sharpe", _sharpe_help(DEFAULT_TARGET_SHARPE)),
+    ("mdd", "Max drawdown", tr(f"고점 대비 최대 하락 · 목표 |MDD| ≤ {TARGET_MDD * 100:g}%",
+                               f"Deepest fall from a peak · target |MDD| ≤ {TARGET_MDD * 100:g}%")),
+    ("cagr", "CAGR", tr("연평균 수익률", "Compound annual return")),
+    ("excess", "vs BM1", tr("시장(KODEX 200TR) 대비 CAGR 차이", "CAGR minus the market's (KODEX 200TR)")),
+    ("vol", "Volatility", tr("수익률 출렁임(연환산)", "Return volatility (annualised)")),
+    ("trades", "Trades", tr("기간 중 매매 횟수", "Number of trades in the period")),
 ]
 
 
@@ -259,7 +269,7 @@ class KpiRow(QWidget):
 
     def set_target_sharpe(self, target: float):
         self.target_sharpe = float(target)
-        text = f"위험 1단위당 초과수익 · 목표 ≥ {fmt_target(self.target_sharpe)}"
+        text = _sharpe_help(self.target_sharpe)
         self.cards["sharpe"].help.setText(text)
         self.cards["sharpe"].setToolTip(text)
 
@@ -302,6 +312,11 @@ class KpiRow(QWidget):
 # ---------------------------------------------------------------------------
 # Target check card
 # ---------------------------------------------------------------------------
+_BENCHMARK = tr("벤치마크", "Benchmark")
+_VALIDATION_TIP = tr("독립 검증은 Validation 리포트(NEX-59 등)에서 확인",
+                     "Independent checks are in the Validation reports (NEX-59 etc.)")
+
+
 class TargetCheckCard(QFrame):
     """The judgements the app can make itself for the selected run: Sharpe,
     MDD, both (criterion H). Robustness (E2) and the look-ahead check (A5)
@@ -317,9 +332,9 @@ class TargetCheckCard(QFrame):
 
     ROWS = [
         ("sharpe", f"Sharpe ≥ {fmt_target(DEFAULT_TARGET_SHARPE)}"),
-        ("mdd", f"|MDD| ≤ {TARGET_MDD * 100:g}% (전체 구간)"),
-        ("both", "두 목표 동시 충족 (H)"),
-        ("robust", "강건성 (E2) · 미래정보 (A5)"),
+        ("mdd", tr(f"|MDD| ≤ {TARGET_MDD * 100:g}% (전체 구간)", f"|MDD| ≤ {TARGET_MDD * 100:g}% (whole window)")),
+        ("both", tr("두 목표 동시 충족 (H)", "Both targets (H)")),
+        ("robust", tr("강건성 (E2) · 미래정보 (A5)", "Robustness (E2) · Look-ahead (A5)")),
     ]
 
     def __init__(self, parent=None):
@@ -331,7 +346,7 @@ class TargetCheckCard(QFrame):
 
         head = QHBoxLayout()
         head.setSpacing(8)
-        title = QLabel("목표 점검")
+        title = QLabel(tr("목표 점검", "Target check"))
         title.setObjectName("kpiLabel")
         head.addWidget(title)
         self.subject = QLabel("-")
@@ -344,13 +359,16 @@ class TargetCheckCard(QFrame):
             badge.setToolTip(TARGET_SOURCE)
             head.addWidget(badge)
             self.summary[key] = badge
-        self.robust_note = QLabel("E2·A5 앱에서 미실행")
+        self.robust_note = QLabel(tr("E2·A5 앱에서 미실행", "E2·A5 not run here"))
         self.robust_note.setObjectName("faint")
-        self.robust_note.setToolTip("독립 검증은 Validation 리포트(NEX-59 등)에서 확인")
+        self.robust_note.setToolTip(_VALIDATION_TIP)
         head.addSpacing(6)
         head.addWidget(self.robust_note)
         head.addStretch()
-        self.detail_btn = make_button("상세", tooltip="판정 기준과 미실행 검증 안내를 펼칩니다", checkable=True)
+        self.detail_btn = make_button(tr("상세", "Details"),
+                                      tooltip=tr("판정 기준과 미실행 검증 안내를 펼칩니다",
+                                                 "Show the criteria and the checks not run here"),
+                                      checkable=True)
         self.detail_btn.toggled.connect(self.set_expanded)
         head.addWidget(self.detail_btn)
         box.addLayout(head)
@@ -371,8 +389,8 @@ class TargetCheckCard(QFrame):
             detail.addLayout(row)
             self.badges[key] = badge
             self.labels[key] = lbl
-        set_badge(self.badges["robust"], "na", "앱에서 미실행")
-        self.badges["robust"].setToolTip("독립 검증은 Validation 리포트(NEX-59 등)에서 확인")
+        set_badge(self.badges["robust"], "na", tr("앱에서 미실행", "Not run here"))
+        self.badges["robust"].setToolTip(_VALIDATION_TIP)
         self.badges["sharpe"].setToolTip(TARGET_SOURCE)
         self.badges["mdd"].setToolTip(TARGET_SOURCE)
         box.addWidget(self.detail)
@@ -382,14 +400,14 @@ class TargetCheckCard(QFrame):
     def set_expanded(self, on: bool):
         """Show or hide the full judgement rows under the summary line."""
         self.detail.setVisible(on)
-        self.detail_btn.setText("접기" if on else "상세")
+        self.detail_btn.setText(tr("접기", "Hide") if on else tr("상세", "Details"))
         if self.detail_btn.isChecked() != on:
             self.detail_btn.setChecked(on)
 
     def _set(self, key: str, kind, text: str):
         """One judgement: the detail row's badge and its summary badge."""
         set_badge(self.badges[key], kind, text)
-        mark = {"ok": "✓", "fail": "✕"}.get(kind, text if text in ("-", "벤치마크") else "-")
+        mark = {"ok": "✓", "fail": "✕"}.get(kind, text if text in ("-", _BENCHMARK) else "-")
         set_badge(self.summary[key], kind, f"{self.SHORT[key]} {mark}")
 
     def set_target_sharpe(self, target: float):
@@ -402,19 +420,19 @@ class TargetCheckCard(QFrame):
             self._set(key, "na", "-")
 
     def show_run(self, run):
-        self.subject.setText(f"{run.id} · 비용 {run.cost_mult:g}x")
+        self.subject.setText(tr(f"{run.id} · 비용 {run.cost_mult:g}x", f"{run.id} · {run.cost_mult:g}x costs"))
         if run.kind != "strategy":
             for key in ("sharpe", "mdd", "both"):
-                self._set(key, "na", "벤치마크")
+                self._set(key, "na", _BENCHMARK)
             return
         m = run.metrics
         self._set("sharpe", *sharpe_badge(m.get("sharpe"), self.target_sharpe))
         self._set("mdd", *mdd_badge(m.get("mdd")))
         both = meets_targets(m, self.target_sharpe)
         if both is None:
-            self._set("both", "na", "값 없음")
+            self._set("both", "na", tr("값 없음", "No value"))
         else:
-            self._set("both", *(("ok", "✓ 충족") if both else ("fail", "✕ 미충족")))
+            self._set("both", *(("ok", tr("✓ 충족", "✓ Met")) if both else ("fail", tr("✕ 미충족", "✕ Not met"))))
 
 
 # ---------------------------------------------------------------------------
@@ -558,18 +576,18 @@ def fill_monthly(table: QTableWidget, run) -> None:
 # Exit reasons the engine and the policies record (backtest.py, scoring_policy.py,
 # benchmarks.py) -> the label the trade lists show; the code stays on the tooltip.
 EXIT_REASONS = {
-    "channel": "채널 이탈",
-    "stop": "손절",
-    "flow": "수급 이탈",
-    "rank_out": "순위 탈락",
-    "weight_trim": "비중 축소",
-    "year_end_trim": "연말 정산",
-    "ma50_exit": "MA50 이탈",
-    "score_rank_out": "점수 순위 탈락",
-    "delisted": "시세 없음(상장폐지)",
-    "below_ma": "MA 이탈",
-    "ineligible": "편입 제외",
-    "equal_weight": "동일 비중 조정",
+    "channel": tr("채널 이탈", "Channel exit"),
+    "stop": tr("손절", "Stop loss"),
+    "flow": tr("수급 이탈", "Flow exit"),
+    "rank_out": tr("순위 탈락", "Ranked out"),
+    "weight_trim": tr("비중 축소", "Weight trim"),
+    "year_end_trim": tr("연말 정산", "Year-end trim"),
+    "ma50_exit": tr("MA50 이탈", "Below MA50"),
+    "score_rank_out": tr("점수 순위 탈락", "Score ranked out"),
+    "delisted": tr("시세 없음(상장폐지)", "No price (delisted)"),
+    "below_ma": tr("MA 이탈", "Below MA"),
+    "ineligible": tr("편입 제외", "Ineligible"),
+    "equal_weight": tr("동일 비중 조정", "Equal-weight rebalance"),
 }
 
 
@@ -593,13 +611,17 @@ def trade_summary(trades) -> str:
     """One line: count, win rate, mean return, mean holding days, net P&L (KRW)."""
     real = [t for t in trades if t.reason not in ("year_end_trim", "weight_trim")]
     if not trades:
-        return "매매 없음"
+        return tr("매매 없음", "No trades")
     wins = sum(1 for t in real if t.pnl > 0)
     win = f"{wins / len(real):.0%}" if real else "-"
     mean_ret = sum(t.ret_pct for t in real) / len(real) if real else float("nan")
     mean_days = sum(t.holding_days for t in real) / len(real) if real else float("nan")
     pnl = sum(t.pnl for t in trades)
-    return (f"{len(trades)}건 (청산 {len(real)}건) · 승률 {win} · 평균 수익률 "
-            f"{mean_ret:+.1f}% · 평균 보유 {mean_days:.0f}일 · 손익 합계 {pnl:+,.0f}원"
-            if real else f"{len(trades)}건 (비중 축소·연말 정산만) · 손익 합계 {pnl:+,.0f}원")
+    if real:
+        return tr(f"{len(trades)}건 (청산 {len(real)}건) · 승률 {win} · 평균 수익률 "
+                  f"{mean_ret:+.1f}% · 평균 보유 {mean_days:.0f}일 · 손익 합계 {pnl:+,.0f}원",
+                  f"{len(trades)} trades ({len(real)} exits) · win rate {win} · mean return "
+                  f"{mean_ret:+.1f}% · mean holding {mean_days:.0f} days · net P&L {pnl:+,.0f} KRW")
+    return tr(f"{len(trades)}건 (비중 축소·연말 정산만) · 손익 합계 {pnl:+,.0f}원",
+              f"{len(trades)} trades (weight trims and year-end trims only) · net P&L {pnl:+,.0f} KRW")
 

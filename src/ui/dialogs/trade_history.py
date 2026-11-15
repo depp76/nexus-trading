@@ -1,6 +1,7 @@
 """ui/dialogs/trade_history.py — StockTradeHistoryDialog — detailed trade history for a single company.
 
 Split out of the former single ui/dialogs.py (2026-09-17)."""
+from i18n import tr
 import logging
 
 from PyQt6.QtWidgets import (
@@ -255,7 +256,7 @@ class StockTradeHistoryDialog(QDialog):
 
         layout.addWidget(tbl)
 
-        layout.addLayout(button_row(make_button("닫기", on_click=self.accept)))
+        layout.addLayout(button_row(make_button(tr("닫기", "Close"), on_click=self.accept)))
 
         # Resizable like every other dialog (docs/ui.md 8.5); it used to be
         # pinned at 1000x600 with the scroll bar switched on or off by a

@@ -243,7 +243,7 @@ class TestTrendScoreSection(unittest.TestCase):
         self.assertEqual(sec.cards["range52"].value.text(), f"{top.pct_range52:.2f}")
         self.assertIn(f"{top.week_avg:+.2f}", sec.total_lbl.text())
         self.assertIn("Top 1", sec.total_lbl.text())
-        self.assertEqual({b.text() for b in sec.gate_badges.values()}, {"Pass"})
+        self.assertEqual({b.text() for b in sec.gate_badges.values()}, {"통과"})
         d.close()
 
     def test_overheated_name_fails_that_gate(self):
