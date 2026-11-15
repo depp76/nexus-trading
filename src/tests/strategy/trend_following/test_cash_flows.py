@@ -6,7 +6,7 @@ from datetime import date
 
 import numpy as np
 
-from strategy.trend_following.backtest import Engine
+from strategy.trend_following.backtest import TRIM_REASON, Engine
 from strategy.trend_following.benchmarks import BuyAndHoldPolicy, _rescale_result
 from strategy.trend_following.config import StrategyParams
 from strategy.trend_following.costs import CostModel
@@ -90,12 +90,16 @@ class TestLedgerUpThenDown(unittest.TestCase):
         self.assertAlmostEqual(y[2023]["end_pre"], self.res.equity[-1], places=6)
         self.assertAlmostEqual(self.led["total_pnl"],
                                self.led["banked"] - self.led["topped_up"] + self.led["final_diff"], places=6)
-        # sum of the yearly P&L closes on total_pnl once the trim's fill-vs-close gap is added back
+        # spec 9-28: the sum of the yearly P&L is the total P&L exactly -- the
+        # trim's fill-vs-close difference is in the year's result, not a gap
         yearly_pnl = sum(v["end_pre"] - v["start"] for v in y.values())
-        gaps = sum(v["fill_gap"] for v in y.values())
-        self.assertAlmostEqual(yearly_pnl, self.led["total_pnl"] + gaps, places=4)
-        self.assertGreaterEqual(y[2021]["fill_gap"], 0)        # the trim sells at or below the close
-        self.assertLess(abs(gaps), SEED * 1e-3)
+        self.assertAlmostEqual(yearly_pnl, self.led["total_pnl"], places=4)
+        self.assertNotIn("fill_gap", y[2021])
+        # a reset year's end value is what the account held after the trim:
+        # the next year's start plus what was banked, minus what was topped up
+        for yr in (2021, 2022):
+            v = y[yr]
+            self.assertAlmostEqual(v["end_pre"], y[yr + 1]["start"] + v["banked"] - v["topped_up"], places=4)
 
     def test_yearly_returns_agree(self):
         yr = yearly_returns(self.res.nav, self.res.dates)
@@ -113,9 +117,29 @@ class TestLedgerUpThenDown(unittest.TestCase):
         dates = _calendar(date(2021, 1, 4), date(2022, 6, 30))
         res = _run(_year_path(dates, {2021: (10_000, 8_000), 2022: (8_000, 8_800)}), dates, mult=0.0)
         led = cash_flow_ledger(res)
-        self.assertEqual(led["years"][2021]["fill_gap"], 0.0)
         self.assertAlmostEqual(sum(v["end_pre"] - v["start"] for v in led["years"].values()), led["total_pnl"],
                                places=6)
+
+
+class TestTrimFillInTheYearResult(unittest.TestCase):
+    """Spec 9-28: a year-end close off the tick grid makes the trim fill below
+    the close the position was marked at. That difference must land in the
+    year's result (NAV chain and end_pre), so the yearly P&L adds up to the
+    total P&L exactly; it used to vanish between the bank and the NAV."""
+
+    def test_off_tick_close(self):
+        dates = _calendar(date(2021, 1, 4), date(2022, 6, 30))
+        res = _run(_year_path(dates, {2021: (10_000, 15_003), 2022: (15_000, 15_500)}), dates)
+        trims = [t for t in res.trades if t.reason == TRIM_REASON]
+        self.assertTrue(trims)
+        self.assertLess(trims[0].exit_price, 15_003)              # tick-rounded below the close
+        led = cash_flow_ledger(res)
+        y = led["years"]
+        self.assertAlmostEqual(sum(v["end_pre"] - v["start"] for v in y.values()), led["total_pnl"], places=4)
+        self.assertAlmostEqual(y[2021]["end_pre"], y[2022]["start"] + y[2021]["banked"] - y[2021]["topped_up"],
+                               places=4)
+        yr = yearly_returns(res.nav, res.dates)
+        self.assertAlmostEqual(y[2021]["end_pre"] / y[2021]["start"] - 1.0, yr[2021], places=12)
 
 
 class TestTwoYears(unittest.TestCase):
@@ -147,7 +171,6 @@ class TestIntegerShareLeftover(unittest.TestCase):
         self.assertGreater(y["residual"], 1_000_000)
         self.assertAlmostEqual(y["residual"], res.year_start_equity_by_year[2022] - SEED, places=6)
         self.assertAlmostEqual(led["years"][2022]["start"], SEED + y["residual"], places=6)
-        self.assertEqual(y["fill_gap"], 0.0)                  # nothing was trimmed
 
 
 class TestRecordingDoesNotChangeTheRun(unittest.TestCase):

@@ -105,9 +105,10 @@ class BacktestResult:
     # Year-end cash-flow ledger (spec 9-27). year_start_equity_by_year[y]: the
     # account value year y starts from (the seed for the first year, else the
     # value right after the previous year's reset, integer-share leftovers
-    # included). year_end_equity_by_year[y]: the value at y's last close just
-    # before the reset, net of the year-end trim's costs (the value the NAV
-    # chain uses). Only years that were reset have an end entry; the last year
+    # included). year_end_equity_by_year[y]: the value at y's last close after
+    # the year-end trim (its costs and fill-vs-close difference included) and
+    # before banking / topping up -- the value the NAV chain uses (spec 9-28).
+    # Only years that were reset have an end entry; the last year
     # of the data is never reset.
     year_start_equity_by_year: dict[int, float] = field(default_factory=dict)
     year_end_equity_by_year: dict[int, float] = field(default_factory=dict)
@@ -349,7 +350,13 @@ class Engine:
         seed = self.params.seed_krw
         year = b.dates[t].year
         equity = self.cash + self.positions_value()
-        trim_costs = 0.0
+        # The year's result is the account value after the year-end trim: the
+        # trim's commission and tax AND the gap between its tick-rounded,
+        # slipped fill and the close the positions were marked at. Until
+        # 2026-11-15 only commission and tax were taken off, so that gap
+        # (up to ~1,000 KRW a year) was in neither the bank nor the NAV chain
+        # (spec 9-28).
+        net_year_end = equity
         if equity > seed:
             frac = (equity - seed) / equity
             for pos in list(self.positions.values()):
@@ -357,10 +364,9 @@ class Engine:
                 if sell_qty <= 0:
                     continue
                 price = self.cm.fill_price(b.dates[t], b.market_of(pos.ticker), pos.last_close, "sell")
-                before = self.cash
                 self._execute_sell(t, pos, sell_qty, price, TRIM_REASON)
-                trim_costs += price * sell_qty - (self.cash - before)
             after = self.cash + self.positions_value()
+            net_year_end = after
             bank = min(after - seed, self.cash)
             if bank > 0:
                 self.cash -= bank
@@ -369,7 +375,6 @@ class Engine:
             topup = seed - equity
             self.cash += topup
             self.topup_by_year[year] = self.topup_by_year.get(year, 0.0) + topup
-        net_year_end = equity - trim_costs
         self.chain *= net_year_end / self.year_start_equity if self.year_start_equity > 0 else 1.0
         self.year_start_equity = self.cash + self.positions_value()
         # Reporting only (spec 9-27): nothing below feeds back into the run.
