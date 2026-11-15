@@ -66,7 +66,7 @@ from PyQt6.QtGui import QColor, QFont, QFontMetrics
 
 from i18n import tr
 from ui.trend_score_section import TrendScoreSection
-from ui.common import FlowLayout, create_font, setup_table, BTN_H, FONT_HEADING, FONT_BODY, FONT_SMALL, FONT_CAPTION, fit_to_screen
+from ui.common import FlowLayout, create_font, setup_table, BTN_H, FONT_HEADING, FONT_BODY, FONT_CAPTION, fit_to_screen
 from ui.colors import PROFIT, LOSS, MA_RAMP, MA_DIV_NEUTRAL_PCT
 from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_FAINT, LINE, SURFACE, INK_ON_LIGHT
 
@@ -76,7 +76,7 @@ _STOCK_MARKETS = ("KOSPI", "KOSDAQ", "NASDAQ 100", "S&P500")
 _TREND_SCORE_MARKETS = ("KOSPI", "KOSDAQ")     # what the Universe's Trend Score scores
 _SIMPLE_CHART_TICKERS = ("CL=F", "^VIX", "VKOSPI")
 _SCROLL_MAX = 10000
-_TICK_PT = FONT_SMALL          # issue #12: nothing on the chart below 9pt
+_TICK_PT = FONT_BODY          # issue #12: nothing on the chart below 9pt
 
 # Segment buttons share one look: a checkable neutral button; the checked one
 # takes the theme's QPushButton:checked accent.
@@ -141,7 +141,7 @@ def _segment_button(text: str, group: QButtonGroup = None, checked: bool = False
     btn.setCheckable(True)
     btn.setChecked(checked)
     btn.setFixedHeight(_SEG_H)
-    btn.setFont(create_font(FONT_SMALL, style_name="Semilight"))
+    btn.setFont(create_font(FONT_BODY, style_name="Semilight"))
     if width:
         btn.setFixedWidth(width)
     if group is not None:
@@ -276,7 +276,7 @@ class StockMaDialog(QDialog):
         row.addWidget(name_lbl)
 
         meta_lbl = QLabel(f"{self._ticker} · {self._market}")
-        meta_lbl.setFont(create_font(FONT_SMALL, style_name="Semilight"))
+        meta_lbl.setFont(create_font(FONT_BODY, style_name="Semilight"))
         meta_lbl.setStyleSheet(f"color:{TEXT_FAINT};")
         row.addWidget(meta_lbl)
 
@@ -478,7 +478,7 @@ class StockMaDialog(QDialog):
         # zebra; the frame and grid come from the theme. Read-only: no
         # selection.
         table = setup_table(QTableWidget())
-        table.horizontalHeader().setFont(create_font(FONT_SMALL, QFont.Weight.Bold))
+        table.horizontalHeader().setFont(create_font(FONT_BODY, QFont.Weight.Bold))
         table.setColumnCount(len(headers))
         table.setHorizontalHeaderLabels(headers)
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)

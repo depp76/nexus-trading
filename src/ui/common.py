@@ -44,8 +44,9 @@ FONT_FAMILIES = ["Malgun Gothic Semilight", "맑은 고딕 Semilight", "Malgun G
 FONT_TITLE = 17     # the app title in the window header
 FONT_KPI = 13       # KPI values
 FONT_HEADING = 12   # section headings, dialog titles
-FONT_BODY = 9       # default (QApplication font): body, inputs, buttons
-FONT_SMALL = 9      # table cells, status lines
+FONT_BODY = 9       # default (QApplication font): body, inputs, buttons, table cells, status lines
+# (FONT_BODY, also 9pt, was merged into FONT_BODY on 2026-11-15: two names
+# for one size only invited them to drift apart by accident.)
 FONT_CAPTION = 8    # KPI labels, sub-labels, footnotes
 
 
@@ -233,7 +234,7 @@ def make_footer_label(text: str = "") -> QLabel:
     word wrap rather than stretching the window."""
     lbl = QLabel(text)
     lbl.setObjectName("muted")
-    lbl.setFont(create_font(FONT_SMALL, style_name="Semilight"))
+    lbl.setFont(create_font(FONT_BODY, style_name="Semilight"))
     lbl.setWordWrap(True)
     return lbl
 
@@ -391,7 +392,7 @@ def setup_table(table: QTableWidget, *, zebra: bool = True, empty_text: str = ""
     """Apply the app-wide table defaults: hidden row numbers, fixed row
     height, whole-row selection, zebra rows (off for a table that paints its
     own stripes), the table font and an optional empty-state hint."""
-    table.setFont(create_font(FONT_SMALL, style_name="Semilight"))
+    table.setFont(create_font(FONT_BODY, style_name="Semilight"))
     vh = table.verticalHeader()
     vh.setVisible(False)
     vh.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
@@ -600,9 +601,14 @@ class KpiCard(QFrame):
     counterpart of KpiStrip's cells, for screens that show a few headline
     numbers with a judgement each (Strategy results, docs/ui.md 8.10)."""
 
-    def __init__(self, label: str, help_text: str = "", parent=None):
+    def __init__(self, label: str, help_text: str = "", parent=None, value_pt: int = None):
         super().__init__(parent)
         self.setObjectName("KpiCard")
+        # The value's point size lives in its inline sheet next to the color:
+        # the global QFrame#KpiCard QLabel#kpiValue rule would override a
+        # setFont, and set() rewrites the sheet (it used to drop anything but
+        # the color, review 2026-11-15 #8).
+        self._value_pt = value_pt or FONT_KPI
         grid = QGridLayout(self)
         grid.setContentsMargins(12, 6, 12, 6)
         grid.setHorizontalSpacing(6)
@@ -613,7 +619,9 @@ class KpiCard(QFrame):
         self.badge.hide()
         self.value = QLabel("-")
         self.value.setObjectName("kpiValue")
-        self.value.setFont(create_font(FONT_KPI, style_name="Semilight"))
+        self.value.setFont(create_font(self._value_pt, style_name="Semilight"))
+        self._value_color = TEXT
+        self._apply_value_style()
         self.help = QLabel(help_text)
         self.help.setObjectName("kpiHelp")
         self.help.setWordWrap(True)
@@ -624,13 +632,23 @@ class KpiCard(QFrame):
         grid.addWidget(self.help, 2, 0, 1, 2)
         grid.setColumnStretch(0, 1)
 
+    def set_value_size(self, pt: int) -> None:
+        """Point size of the value line (FONT_KPI unless the card asks for
+        another step, e.g. Trend Score's percentile cards)."""
+        self._value_pt = pt
+        self._apply_value_style()
+
+    def _apply_value_style(self) -> None:
+        self.value.setStyleSheet(f"color:{self._value_color}; font-size:{self._value_pt}pt;")
+
     def set(self, value: str, color: str | None = None,
             badge: tuple[BadgeKind, str] | None = None, help: str | None = None) -> None:
         """Show `value` (in `color`, default text color), an optional
         `(kind, text)` badge (None hides it) and, when given, a new
         explanation line."""
         self.value.setText(value)
-        self.value.setStyleSheet(f"color:{color or TEXT};")
+        self._value_color = color or TEXT
+        self._apply_value_style()
         if badge is None:
             self.badge.hide()
         else:

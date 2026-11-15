@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
-from ui.common import create_font, FONT_SMALL, TABLE_ROW_H, make_button, button_row, fit_to_screen
+from ui.common import create_font, FONT_BODY, TABLE_ROW_H, make_button, button_row, fit_to_screen
 from ui.colors import PROFIT, LOSS, QC_PROFIT, QC_LOSS, QC_FLAT
 from ui.widgets import NumericItem
 
@@ -82,7 +82,7 @@ def build_holdings_summary(parent, closed_data: list, open_data: list):
     tbl.setAlternatingRowColors(True)
     tbl.verticalHeader().setVisible(False)
     tbl.setShowGrid(True)   # table/header chrome comes from ui/theme.py's global QSS
-    tbl.setFont(create_font(FONT_SMALL, style_name="Semilight"))
+    tbl.setFont(create_font(FONT_BODY, style_name="Semilight"))
     tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
     for c in range(1, 5):
         tbl.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
@@ -135,7 +135,7 @@ def build_holdings_summary(parent, closed_data: list, open_data: list):
     subtotal_lbl = QLabel(subtotal_html)
     subtotal_lbl.setTextFormat(Qt.TextFormat.RichText)
     subtotal_lbl.setStyleSheet("padding:0px 4px 4px 4px;")
-    subtotal_lbl.setFont(create_font(FONT_SMALL, style_name="Semilight"))
+    subtotal_lbl.setFont(create_font(FONT_BODY, style_name="Semilight"))
     v.addWidget(subtotal_lbl)
 
     v.addLayout(button_row(make_button(tr("닫기", "Close"), on_click=dlg.accept)))

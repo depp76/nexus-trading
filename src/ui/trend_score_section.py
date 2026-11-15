@@ -118,13 +118,9 @@ class TrendScoreSection(QWidget):
                 ("ma50", "MA50Div", tr("추세 방향 +", "Trend direction +"), "pct_ma50"),
                 ("range52", "Range52", tr("추세 위치 +", "Trend position +"), "pct_range52"),
                 ("r3", "R3", tr("최근 3일 −", "Last 3 days −"), "pct_r3"))):
-            card = KpiCard(label, help_text)
+            card = KpiCard(label, help_text, value_pt=FONT_HEADING)   # one step below the weekly average
             v = getattr(s, attr) if s is not None else None
             card.set(f"{v:.2f}" if _finite(v) else "-")
-            # One step below the weekly average. Appended to the sheet set()
-            # just wrote (its color); setFont would lose to the global
-            # QFrame#KpiCard QLabel#kpiValue rule.
-            card.value.setStyleSheet(card.value.styleSheet() + f" font-size: {FONT_HEADING}pt;")
             cards.addWidget(card, 0, i)
             self.cards[key] = card
         box.addLayout(cards)

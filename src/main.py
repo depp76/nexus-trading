@@ -24,7 +24,7 @@ from ui.common import (
     FONT_FAMILY_CSS,
     FONT_TITLE,
     FONT_HEADING,
-    FONT_SMALL,
+    FONT_BODY,
     cancel_thread,
     refresh_state,
     RefreshFailures,
@@ -79,6 +79,11 @@ class MainWindow(QMainWindow):
         self.resize(1100, 850)
 
         central_widget = QWidget()
+        # A click on the header or any empty background takes focus, so a
+        # table's selection that clears on focus-out (Trading History,
+        # ui.common.clear_selection_on_outside_click) also clears there,
+        # not only inside its own tab (review 2026-11-15 #11).
+        central_widget.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
 
@@ -111,7 +116,7 @@ class MainWindow(QMainWindow):
         # Active failure per source, cleared by that source's next success.
         self._failures = RefreshFailures()
         self._refresh_dot = QLabel("●")
-        self._refresh_dot.setFont(create_font(FONT_SMALL))
+        self._refresh_dot.setFont(create_font(FONT_BODY))
         header_layout.addWidget(self._refresh_dot)
         self.auto_refresh_cb = QCheckBox(tr(f"자동 갱신 · {self.AUTO_REFRESH_MS // 1000}초",
                                                f"Auto-refresh · {self.AUTO_REFRESH_MS // 1000}s"))
@@ -119,7 +124,7 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.auto_refresh_cb)
         self.update_time_label = QLabel(tr("최근 갱신 -", "last -"))
         self.update_time_label.setObjectName("faint")
-        self.update_time_label.setFont(create_font(FONT_SMALL, style_name="Semilight"))
+        self.update_time_label.setFont(create_font(FONT_BODY, style_name="Semilight"))
         header_layout.addSpacing(6)
         header_layout.addWidget(self.update_time_label)
         header_layout.addSpacing(14)

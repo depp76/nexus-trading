@@ -55,7 +55,7 @@ from threads.strategy_threads import TrendFollowingResearchThread, CANCELLED_MES
 from ui.dialogs.trend_conditions import TrendConditions, TrendConditionsDialog
 from ui.common import (
     create_font, make_button, setup_table, make_footer_label, install_table_keys, ThreadOwnerMixin,
-    TAB_MARGINS, TAB_SPACING, FONT_SMALL, FONT_CAPTION, BTN_H, remember_splitter,
+    TAB_MARGINS, TAB_SPACING, FONT_BODY, FONT_CAPTION, BTN_H, remember_splitter,
 )
 from ui.colors import LOSS, WARN, SERIES_BENCH, SERIES_TARGET, DRAWDOWN_ALPHA, SERIES_PALETTE
 from ui.theme import TEXT, TEXT_MUTED, TEXT_FAINT, TEXT_EMPTY, LINE
@@ -326,7 +326,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
                            "KOSPI constituents (survivorship bias) and the cost assumptions of trend_following.md 4-1; "
                            "nothing here places orders."))
         notice.setWordWrap(True)
-        notice.setFont(create_font(FONT_SMALL))
+        notice.setFont(create_font(FONT_BODY))
         # Information, not an error: muted text on the card, not DANGER red (docs/ui.md 8.3).
         notice.setObjectName("muted")
         banner_layout.addWidget(notice)
@@ -650,7 +650,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.canvas.mpl_connect("figure_leave_event", self._on_chart_leave)
         # Values under the mouse (latest bar when the mouse is off the chart).
         self.readout_lbl = QLabel("")
-        self.readout_lbl.setFont(create_font(FONT_SMALL))
+        self.readout_lbl.setFont(create_font(FONT_BODY))
         self.readout_lbl.setTextFormat(Qt.TextFormat.RichText)
         self.readout_lbl.setWordWrap(True)
         self.show_all_cb = QCheckBox(tr("전체 표시", "Show all"))
@@ -758,7 +758,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.ax.text(0.5, 0.5, tr("백테스트를 실행하면 선택한 규칙의 NAV와 낙폭을 BM1과 함께 그립니다",
                                  "Run Backtest to plot the selected rule's NAV and drawdown against BM1"),
                      ha="center", va="center", transform=self.ax.transAxes, color=TEXT_FAINT,
-                     fontsize=FONT_SMALL)
+                     fontsize=FONT_BODY)
 
     # --------------------------------------------------------------- request
     def _selected_variants(self) -> tuple[str, ...]:
@@ -1206,15 +1206,15 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             dd_low = min(dd_low, float(np.nanmin(dd)))
         ax_dd.set_ylim(dd_low * 1.15, 1.0)
 
-        ax.set_title(tr(f"NAV (시작 = 100) · 비용 {self._mult:g}x", f"NAV rebased to 100 · {self._mult:g}x costs"), fontsize=FONT_SMALL, loc="left", color=TEXT)
-        ax.legend(fontsize=FONT_SMALL - 1, frameon=False, loc="upper left",
+        ax.set_title(tr(f"NAV (시작 = 100) · 비용 {self._mult:g}x", f"NAV rebased to 100 · {self._mult:g}x costs"), fontsize=FONT_BODY, loc="left", color=TEXT)
+        ax.legend(fontsize=FONT_BODY - 1, frameon=False, loc="upper left",
                   ncol=max(1, min(4, (len(chosen) + 3) // 4)))
         ax_dd.axhline(-TARGET_MDD * 100, color=SERIES_TARGET, linestyle="--", linewidth=1.0)
-        ax_dd.set_ylabel(tr("낙폭 %", "Drawdown %"), fontsize=FONT_SMALL - 1, color=TEXT_MUTED)
+        ax_dd.set_ylabel(tr("낙폭 %", "Drawdown %"), fontsize=FONT_BODY - 1, color=TEXT_MUTED)
 
         for a in (ax, ax_dd):
             a.grid(True, color=LINE, linewidth=0.6)
-            a.tick_params(labelsize=FONT_SMALL - 1, colors=TEXT_MUTED)
+            a.tick_params(labelsize=FONT_BODY - 1, colors=TEXT_MUTED)
             for spine in ("top", "right"):
                 a.spines[spine].set_visible(False)
             for spine in ("left", "bottom"):

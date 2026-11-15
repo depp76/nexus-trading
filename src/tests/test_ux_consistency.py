@@ -425,3 +425,58 @@ class TestClearSelectionOutside(unittest.TestCase):
         QTest.mouseClick(btn, Qt.MouseButton.LeftButton)
         self.assertTrue(self.table.selectionModel().hasSelection())
         dlg.close()
+
+
+class TestKpiCardValueSize(unittest.TestCase):
+    """Review 2026-11-15 #8: KpiCard.set() used to replace the value's whole
+    inline sheet with its color, dropping any other size the card was given."""
+
+    def test_default_and_custom_size_survive_set(self):
+        from ui.common import KpiCard, FONT_KPI, FONT_HEADING
+        card = KpiCard("Sharpe", "help")
+        card.set("1.20", color="#ff0000")
+        card.value.ensurePolished()
+        self.assertEqual(card.value.font().pointSize(), FONT_KPI)
+        small = KpiCard("R3", "", value_pt=FONT_HEADING)
+        small.set("0.60")
+        small.set("0.70", color="#00ff00")
+        small.value.ensurePolished()
+        self.assertEqual(small.value.font().pointSize(), FONT_HEADING)
+        self.assertIn("#00ff00", small.value.styleSheet())
+        small.set_value_size(FONT_KPI)
+        small.value.ensurePolished()
+        self.assertEqual(small.value.font().pointSize(), FONT_KPI)
+
+
+class TestClearSelectionOutsideTheTab(unittest.TestCase):
+    """Review 2026-11-15 #11: with the window's central widget taking click
+    focus (main.py), a click on the header outside the tab clears too."""
+
+    def test_click_on_a_label_outside_the_focus_root(self):
+        from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
+        from ui.common import clear_selection_on_outside_click
+        win = QWidget()
+        win.setFocusPolicy(Qt.FocusPolicy.ClickFocus)          # as MainWindow's central widget
+        outer = QVBoxLayout(win)
+        header = QLabel("NEXUS")
+        outer.addWidget(header)
+        tab = QWidget()
+        inner = QVBoxLayout(tab)
+        table = setup_table(QTableWidget(2, 2))
+        for r in range(2):
+            for c in range(2):
+                table.setItem(r, c, QTableWidgetItem(f"{r}{c}"))
+        inner.addWidget(table)
+        outer.addWidget(tab)
+        clear_selection_on_outside_click(table, focus_root=tab)
+        win.resize(300, 200)
+        win.show()
+        win.activateWindow()
+        QApplication.processEvents()
+        rect = table.visualRect(table.model().index(1, 0))
+        QTest.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
+        self.assertTrue(table.selectionModel().hasSelection())
+        QTest.mouseClick(header, Qt.MouseButton.LeftButton)
+        QApplication.processEvents()
+        self.assertFalse(table.selectionModel().hasSelection())
+        win.close()
