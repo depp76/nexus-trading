@@ -882,3 +882,30 @@ BM2·BM4와 개발 2구간(2021-22 / 2023-24)별 표, BM1 대비 알파·베타�
   파일을 쓰기 전에 `UnsupportedSnapshotError`로 거부한다. 이전에는 저장·해시·복원이 모두 "성공"하면서 시장별 지수와 벤치마크 구성이
   사라졌다. `load_snapshot`은 배열 열 수가 매니페스트의 티커 수와 다르면 `SnapshotIntegrityError`. 기존 KOSPI 스냅샷은 그대로 읽힌다.
 - 테스트: `tests/strategy/trend_following/test_review_fixes.py`(C1~C5 각 재현을 회귀 테스트로).
+
+### 9-27. 연말 인출·입금의 연도별 출력 (2026-11-15, `docs/yearly_flows_report_2026-11-15.md`)
+
+9-2의 운용 가정(매년 1,000만 원으로 시작, 연말 마지막 거래일 종가로 초과분 인출·부족분 입금)을 **연도별로** 리포트에 남긴다.
+계산·리셋 규칙·비용·체결은 바꾸지 않았다. `dev_2021_2024_nex23` 전체 매트릭스(42건)의 기존 지표(CAGR·Sharpe·MDD·변동성·Calmar·
+인출/입금 합계·매매 횟수·비용, 연도별 수익률)는 변경 전 코드와 **비트 단위로 같다**.
+
+- **엔진 기록**(`backtest.py`): `BacktestResult.year_start_equity_by_year[y]`(그해 시작 평가액: 첫해는 시드, 이후는 직전 리셋 직후
+  평가액)와 `year_end_equity_by_year[y]`(리셋 직전 평가액, 연말 트림의 수수료·세금 차감 후 = NAV 체인이 쓰는 값). 리셋한 해만 끝 값이
+  있고, 데이터의 마지막 해는 리셋하지 않는다. BM2의 원화 재환산(`_rescale_result`)에 포함.
+- **요약**(`metrics.cash_flow_ledger`, `summarize_run`의 `cash_flows_by_year`): 연도별 `start`, `end_pre`, `banked`, `topped_up`,
+  `net_flow`(= 인출 − 입금, 마지막 해는 없음), `residual`(리셋 직후 평가액 − 시드, 정수 주 잔여), `fill_gap`; 전체 `final_diff`
+  (마지막 평가액 − 시드), `total_pnl`(= 인출 합 − 입금 합 + final_diff). 기존 `banked`/`topped_up` 합계 키는 그대로.
+  `end_pre / start − 1`은 `yearly_returns`와 정확히 같다.
+- **`fill_gap`(구현 결정)**: 지시서 2장은 "4년 손익 = 연도별 손익(`end_pre − start`) 합"이라고 했으나, 엔진은 연말 트림의 비용을
+  수수료·세금(체결가 × 수량 − 현금 증가분)으로만 잡고, 트림 체결가(호가 내림·슬리피지)와 평가 종가의 차이는 인출액에도 NAV 체인에도
+  넣지 않는다. 그 차이를 해마다 `fill_gap = end_pre − (리셋 직후 평가액 + 인출 − 입금)`으로 기록해 `Σ(end_pre − start) = total_pnl +
+  Σ fill_gap`이 정확히 닫히게 했다. 실데이터 1× 최대 990원/년(A0 2021)으로 만 원 단위 표에는 보이지 않는다. 엔진 동작은 그대로 둔다
+  (체결 규칙 변경은 이번 범위 밖).
+- **리포트**: `research.render_markdown`의 "Yearly returns (1x)" 다음에 "## Yearly cash flows (1x, KRW 만 원)",
+  `robustness.py` 리포트의 성과표 끝에 "### 연도별 인출·입금 (비용 1×, 만 원)". 열: ID, 리셋한 해의 순인출(+)/입금(−), 마지막 해
+  평가 종료 차액, 인출 합, 입금 합, n년 손익, 마지막 리셋 직후 잔여. 전략과 BM1~BM3(BM4는 계좌가 없는 무위험 상수라 제외). 공용
+  함수 `research.cash_flow_table`. Strategy 탭 노출(지시서 3장 6번)은 하지 않았다.
+- **기대값(지시서 5장, 1×, 만 원)**: 같은 스냅샷 재실행 결과가 13행(A0~A5, B, C1~C3, BM1~BM3) 모두 만 원 단위로 일치 — 예: A1
+  +568 / −59 / +102 / 2024 말 +341, 인출 670, 입금 59, 4년 손익 +953, 2023 말 잔여 38; B −241 / −30 / +123 / +94, 123, 271, −54, 22.
+- 테스트: `tests/strategy/trend_following/test_cash_flows.py`(합성 3년 상승→하락→종료, 2년 상승→하락, 고가 종목 정수 주 잔여,
+  `yearly_returns` 일치, BM2 재환산, 두 리포트의 표; 스냅샷이 있으면 5장 값 회귀, 없으면 skip).

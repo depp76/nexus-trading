@@ -102,6 +102,15 @@ class BacktestResult:
     cost_multiplier: float
     notes: list[str] = field(default_factory=list)
     params: dict = field(default_factory=dict)
+    # Year-end cash-flow ledger (spec 9-27). year_start_equity_by_year[y]: the
+    # account value year y starts from (the seed for the first year, else the
+    # value right after the previous year's reset, integer-share leftovers
+    # included). year_end_equity_by_year[y]: the value at y's last close just
+    # before the reset, net of the year-end trim's costs (the value the NAV
+    # chain uses). Only years that were reset have an end entry; the last year
+    # of the data is never reset.
+    year_start_equity_by_year: dict[int, float] = field(default_factory=dict)
+    year_end_equity_by_year: dict[int, float] = field(default_factory=dict)
 
     @property
     def total_costs(self) -> TradeCost:
@@ -152,6 +161,8 @@ class Engine:
         self.traded_value_by_year: dict[int, float] = {}
         self.banked_by_year: dict[int, float] = {}
         self.topup_by_year: dict[int, float] = {}
+        self.year_start_equity_by_year: dict[int, float] = {}
+        self.year_end_equity_by_year: dict[int, float] = {}
         self.chain = 1.0
         self.year_start_equity = float(params.seed_krw)
         self.equity_now = float(params.seed_krw)
@@ -361,6 +372,9 @@ class Engine:
         net_year_end = equity - trim_costs
         self.chain *= net_year_end / self.year_start_equity if self.year_start_equity > 0 else 1.0
         self.year_start_equity = self.cash + self.positions_value()
+        # Reporting only (spec 9-27): nothing below feeds back into the run.
+        self.year_end_equity_by_year[year] = net_year_end
+        self.year_start_equity_by_year[b.dates[t + 1].year] = self.year_start_equity
 
     def _record(self, t: int) -> None:
         eq = self.cash + self.positions_value()
@@ -377,6 +391,8 @@ class Engine:
         T = b.T
         t0 = self.start_idx
         self.max_positions = int(getattr(policy, "max_positions", 10 ** 6))
+        if t0 < T:
+            self.year_start_equity_by_year[b.dates[t0].year] = self.year_start_equity
         self.pending = list(policy.initial_orders(self, t0))
         for t in range(t0, T):
             self._fill(t)
@@ -409,6 +425,8 @@ class Engine:
             topup_by_year=dict(self.topup_by_year), open_positions=open_positions,
             rf_period=self.rf_period[t0:].copy(), cost_multiplier=self.cm.cost_multiplier,
             notes=list(self.notes), params=self.params.as_dict(),
+            year_start_equity_by_year=dict(self.year_start_equity_by_year),
+            year_end_equity_by_year=dict(self.year_end_equity_by_year),
         )
 
 

@@ -193,6 +193,70 @@ def trade_stats(res: BacktestResult) -> dict:
     return {"n_trades": n, "win_rate": (wins / n) if n else 0.0, "avg_holding_days": avg_hold}
 
 
+def cash_flow_ledger(res: BacktestResult) -> dict:
+    """Year-end withdrawals and deposits per year (spec 9-2 operating rule,
+    reported per spec 9-27). Reporting only: reads the engine's ledger, changes
+    nothing. All amounts in KRW.
+
+    ``years[y]``: ``start`` (the value y starts from), ``end_pre`` (y's last
+    close before the reset, net of the trim's costs; the final value for the
+    last year), ``banked`` / ``topped_up`` (the engine's figures; the bank is
+    already net of the trim's costs), ``net_flow`` (banked - topped_up) and
+    ``residual`` (value right after the reset - seed, the integer-share
+    leftover). ``reset`` is False for the last year (never reset: the data
+    ends) and for every year of a run without annual reset; those years have
+    ``net_flow`` / ``residual`` None. ``final_diff`` = final value - seed and
+    ``total_pnl`` = sum banked - sum topped_up + final_diff.
+
+    ``end_pre / start - 1`` is ``yearly_returns`` exactly. ``fill_gap`` =
+    end_pre - (value after the reset + banked - topped_up): the trimmed shares
+    are sold at the tick-rounded, slipped fill price while the engine counts
+    only commission and tax as the trim's cost, so the fill-vs-close difference
+    (a few hundred to ~1,000 KRW a year on the real data) is in neither the
+    bank nor the NAV chain (spec 9-27). Sum of ``end_pre - start`` = total_pnl
+    + sum of fill_gap, exactly.
+    """
+    dates = list(res.dates)
+    seed = float((res.params or {}).get("seed_krw", 0.0)) or float(res.year_start_equity_by_year.get(
+        dates[0].year if dates else 0, 0.0))
+    eq = np.asarray(res.equity, dtype=float)
+    last_idx: dict[int, int] = {}
+    for i, d in enumerate(dates):
+        last_idx[d.year] = i
+    years: dict[int, dict] = {}
+    prev_end = seed
+    for y in sorted(last_idx):
+        start = res.year_start_equity_by_year.get(y, prev_end)
+        reset = y in res.year_end_equity_by_year
+        end_pre = float(res.year_end_equity_by_year[y]) if reset else float(eq[last_idx[y]])
+        banked = float(res.banked_by_year.get(y, 0.0))
+        topped = float(res.topup_by_year.get(y, 0.0))
+        nxt = res.year_start_equity_by_year.get(y + 1) if reset else None
+        if reset and nxt is None:       # a calendar gap: the next start sits under the next year present
+            nxt = next((res.year_start_equity_by_year[k] for k in sorted(res.year_start_equity_by_year) if k > y), None)
+        years[y] = {
+            "start": float(start), "end_pre": end_pre, "banked": banked, "topped_up": topped,
+            "net_flow": (banked - topped) if reset else None,
+            "residual": (float(nxt) - seed) if nxt is not None else None,
+            "fill_gap": (end_pre - float(nxt) - banked + topped) if nxt is not None else 0.0,
+            "reset": reset,
+        }
+        prev_end = float(nxt) if nxt is not None else end_pre
+    final = float(eq[-1]) if len(eq) else seed
+    total_banked = float(sum(res.banked_by_year.values()))
+    total_topped = float(sum(res.topup_by_year.values()))
+    final_diff = final - seed
+    return {
+        "seed": seed,
+        "years": years,
+        "final_year": max(last_idx) if last_idx else None,
+        "final_diff": final_diff,
+        "banked": total_banked,
+        "topped_up": total_topped,
+        "total_pnl": total_banked - total_topped + final_diff,
+    }
+
+
 def _years(dates: list[date]) -> float:
     if len(dates) < 2:
         return 0.0
@@ -232,6 +296,7 @@ def summarize_run(res: BacktestResult, bm1: BacktestResult | None = None,
         "avg_cash_weight": float(1.0 - np.nanmean(res.exposure)) if len(res.exposure) else 1.0,
         "banked": float(sum(res.banked_by_year.values())),
         "topped_up": float(sum(res.topup_by_year.values())),
+        "cash_flows_by_year": cash_flow_ledger(res),
         "open_positions": len(res.open_positions),
     }
     out.update(trade_stats(res))

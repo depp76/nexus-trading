@@ -193,6 +193,8 @@ def _rescale_result(res: BacktestResult, factor: float) -> BacktestResult:
     res.traded_value_by_year = {y: v / factor for y, v in res.traded_value_by_year.items()}
     res.banked_by_year = {y: v / factor for y, v in res.banked_by_year.items()}
     res.topup_by_year = {y: v / factor for y, v in res.topup_by_year.items()}
+    res.year_start_equity_by_year = {y: v / factor for y, v in res.year_start_equity_by_year.items()}
+    res.year_end_equity_by_year = {y: v / factor for y, v in res.year_end_equity_by_year.items()}
     for tr in res.trades:
         tr.pnl /= factor
         tr.cost = tr.cost.scaled(1.0 / factor)
