@@ -569,7 +569,7 @@ def _period_alpha_table(res: RobustnessResult) -> list[str]:
             if x.kind != "strategy":
                 continue
             row = [x.id, f"{mult:g}x"]
-            for lab, y0, y1 in PERIODS:
+            for _lab, y0, y1 in PERIODS:
                 years = np.array([d.year for d in x.dates])
                 idx = np.flatnonzero((years >= y0) & (years <= y1))
                 if idx.size < 4 or len(bm1.nav) != len(x.nav):

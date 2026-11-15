@@ -1,11 +1,20 @@
-# Lint config (roadmap 6-2c). Only the pyflakes rule set for now: unused
-# imports/variables, undefined names, etc. Run: .\.venv\Scripts\ruff.exe check src
+# Lint config (roadmap 6-2c; widened 2026-11-15, code review #7).
+# Run: .\.venv\Scripts\ruff.exe check src   (CI runs the same)
+#   F    pyflakes: unused imports/variables, undefined names
+#   E7   statements: one statement per line, no lambda assignments, ...
+#   E9   syntax / IO errors
+#   B    bugbear: likely bugs (unused loop variables, late-bound closures, ...)
+#   UP   pyupgrade: modern syntax for py311
+#   PIE  unnecessary code
 src = ["src"]
 line-length = 120
 target-version = "py311"
 
 [lint]
-select = ["F"]
+select = ["F", "E7", "E9", "B", "UP", "PIE"]
+# B905 (zip without strict=): adding strict=True would raise where lengths
+# differ, changing behaviour in data code; not worth a blanket rewrite.
+ignore = ["B905"]
 # F401 in the two re-export modules is intentional: they exist to re-export.
 [lint.per-file-ignores]
 "src/data_fetcher.py" = ["F401"]

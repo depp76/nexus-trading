@@ -105,7 +105,9 @@ class BuyEditDialog(QDialog):
         self.buy_price_edit.textChanged.connect(self._val_price)
         self.buy_qty_edit.textChanged.connect(self._val_qty)
         # Validate pre-filled values immediately so existing bad data is flagged on open.
-        self._val_date(); self._val_price(); self._val_qty()
+        self._val_date()
+        self._val_price()
+        self._val_qty()
 
         layout.addRow(btn_box)
 
@@ -118,8 +120,10 @@ class BuyEditDialog(QDialog):
             return
 
         def to_f(val):
-            try: return float(val.replace(',', '').replace('%', '').strip())
-            except Exception: return 0.0
+            try:
+                return float(val.replace(',', '').replace('%', '').strip())
+            except Exception:
+                return 0.0
 
         b_price = to_f(self.buy_price_edit.text())
         b_qty = to_f(self.buy_qty_edit.text())
@@ -212,7 +216,9 @@ class SellEditDialog(QDialog):
         self.sell_date_edit.textChanged.connect(self._val_sell_qty)
         self.sell_price_edit.textChanged.connect(self._val_sell_price)
         self.sell_qty_edit.textChanged.connect(self._val_sell_qty)
-        self._val_sell_date(); self._val_sell_price(); self._val_sell_qty()
+        self._val_sell_date()
+        self._val_sell_price()
+        self._val_sell_qty()
 
         layout.addRow(btn_box)
 
@@ -227,8 +233,10 @@ class SellEditDialog(QDialog):
         sell_date_str = _normalize_date_str(self.sell_date_edit.text())
 
         def to_f(val):
-            try: return float(val.replace(',', '').replace('%', '').strip())
-            except Exception: return 0.0
+            try:
+                return float(val.replace(',', '').replace('%', '').strip())
+            except Exception:
+                return 0.0
 
         s_price = to_f(self.sell_price_edit.text())
         s_qty = to_f(self.sell_qty_edit.text())
@@ -301,7 +309,9 @@ class TradeEntryDialog(QDialog):
         self.buy_date_edit.textChanged.connect(self._val_date)
         self.buy_price_edit.textChanged.connect(self._val_price)
         self.qty_edit.textChanged.connect(self._val_qty)
-        self._val_date(); self._val_price(); self._val_qty()
+        self._val_date()
+        self._val_price()
+        self._val_qty()
 
         # 취소 → 저장, right-aligned; no default button (docs/ui.md 8.17).
         self.save_btn = make_button(tr("저장", "Save"), "primary", self.on_save)
@@ -325,8 +335,10 @@ class TradeEntryDialog(QDialog):
             return
 
         def to_f(val):
-            try: return float(val.replace(',', '').replace('%', '').strip())
-            except Exception: return 0.0
+            try:
+                return float(val.replace(',', '').replace('%', '').strip())
+            except Exception:
+                return 0.0
 
         # Everything the record is built from is frozen here, and the inputs
         # are locked until the reply lands: the reply validates *this* market/

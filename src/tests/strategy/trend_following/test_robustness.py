@@ -65,7 +65,7 @@ class TestE2Constant(unittest.TestCase):
 
     def test_every_run_differs_from_the_base_in_one_field(self):
         base = StrategyParams()
-        for nid, f, v, vid in planned_e2_runs():
+        for nid, f, v, _vid in planned_e2_runs():
             diff = {k for k, val in asdict(neighbor_params(base, f, v)).items() if val != asdict(base)[k]}
             self.assertEqual(diff, {f}, nid)
             self.assertEqual(getattr(neighbor_params(base, f, v), f), v)

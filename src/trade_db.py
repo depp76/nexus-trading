@@ -146,7 +146,7 @@ def _migrate_asset_records_json(conn: sqlite3.Connection) -> None:
     if not os.path.exists(_ASSET_JSON):
         return
     try:
-        with open(_ASSET_JSON, "r", encoding="utf-8") as f:
+        with open(_ASSET_JSON, encoding="utf-8") as f:
             records = json.load(f)
     except Exception as e:
         logger.warning("[trade_db] Could not read %s: %s", _ASSET_JSON, e)
@@ -370,7 +370,7 @@ def upsert_trades(records: list[dict]) -> list[str]:
         with conn:
             if keyed_rows:
                 conn.executemany(_UPSERT_SQL, keyed_rows)
-            for i, record, co, buy_date, qty, values_tail in unkeyed_indices:
+            for i, _record, co, buy_date, qty, values_tail in unkeyed_indices:
                 keys[i] = _insert_with_generated_key(conn, f"{co}_{buy_date}_{qty}", values_tail)
         for i, record, *_ in unkeyed_indices:
             record["orig_key"] = keys[i]

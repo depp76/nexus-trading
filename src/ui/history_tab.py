@@ -376,7 +376,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         if reply != QMessageBox.StandardButton.Yes:
             return
         deleted_keys = set()
-        for kind, rec in targets:
+        for _kind, rec in targets:
             key = rec.get("orig_key")
             try:
                 if key:

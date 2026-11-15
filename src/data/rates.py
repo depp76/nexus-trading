@@ -44,7 +44,7 @@ def _load_cache() -> dict[str, float]:
     if not os.path.exists(CD91_CACHE_FILE):
         return {}
     try:
-        with open(CD91_CACHE_FILE, "r", encoding="utf-8") as f:
+        with open(CD91_CACHE_FILE, encoding="utf-8") as f:
             return {k: float(v) for k, v in json.load(f).items()}
     except Exception:
         logger.debug("CD91 cache unreadable, ignoring", exc_info=True)
@@ -93,7 +93,7 @@ def read_cd91_csv(path: str | None = None) -> dict[str, float]:
     out: dict[str, float] = {}
     if not os.path.exists(path):
         return out
-    with open(path, "r", encoding="utf-8-sig", newline="") as f:
+    with open(path, encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
             d = str(row.get("Date", "")).strip().replace(".", "-").replace("/", "-")[:10]
             try:

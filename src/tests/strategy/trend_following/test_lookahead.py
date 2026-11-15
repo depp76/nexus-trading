@@ -364,7 +364,7 @@ class TestFillsAreNextOpen(unittest.TestCase):
                     self.sb = compute_scores(b, v.apply(p)) if v.mode == "score" else None
                     self.assertTrue(any(f[0] == "buy" for f in fills), "no entries: the test would be vacuous")
                     kinds = set()
-                    for i, (side, t, tk, qty, price, reason) in enumerate(fills):
+                    for i, (side, t, tk, _qty, price, reason) in enumerate(fills):
                         j = b.col(tk)
                         d, market = b.dates[t], b.market_of(tk)
                         kinds.add((side, reason))

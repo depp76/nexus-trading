@@ -274,7 +274,7 @@ class TestCorrelation(unittest.TestCase):
         # R10 and R3 share their window; MA50Div and Range52 are both price levels: some pair may exceed 0.8
         self.assertEqual(res.corr_before.shape, (5, 5))
         np.testing.assert_allclose(res.corr_after, res.corr_after.T, equal_nan=True)
-        for a, b, _, r in res.flagged_pairs():
+        for _a, _b, _, r in res.flagged_pairs():
             self.assertGreater(abs(r), fic.CORR_FLAG)
         # range52 and ma50_div carry no normalisation: identical before and after
         i, k = fic.FACTORS.index("range52"), fic.FACTORS.index("ma50_div")

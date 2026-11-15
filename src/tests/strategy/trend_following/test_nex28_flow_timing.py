@@ -42,7 +42,8 @@ class TestFlowFillTiming(unittest.TestCase):
         ds.flow_fi[t + 1:, :] = -1e12
         alt = run_backtest(ds, compute_features(ds, p), p, VARIANTS["A5"], CostModel())
         cut = ds.dates[t]
-        early = lambda r: [(x.ticker, x.entry_date) for x in r.trades if x.entry_date <= cut]
+        def early(r):
+            return [(x.ticker, x.entry_date) for x in r.trades if x.entry_date <= cut]
         self.assertEqual(early(base), early(alt))
 
 

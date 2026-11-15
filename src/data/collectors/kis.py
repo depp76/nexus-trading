@@ -64,9 +64,9 @@ def _get_kis_keys():
     secret_path = os.path.join(key_dir, "kis_secretkey.txt")
     if not os.path.exists(appkey_path) or not os.path.exists(secret_path):
         raise FileNotFoundError(f"KIS API key files not found in {key_dir}")
-    with open(appkey_path, "r", encoding="utf-8") as f:
+    with open(appkey_path, encoding="utf-8") as f:
         appkey = f.read().strip()
-    with open(secret_path, "r", encoding="utf-8") as f:
+    with open(secret_path, encoding="utf-8") as f:
         appsecret = f.read().strip()
 
     _KIS_KEYS_CACHE["appkey"] = appkey
@@ -90,7 +90,7 @@ def _get_kis_account():
     account_path = os.path.join(key_dir, "kis_account.txt")
     if not os.path.exists(account_path):
         raise FileNotFoundError(f"KIS account number file not found: {account_path}")
-    with open(account_path, "r", encoding="utf-8") as f:
+    with open(account_path, encoding="utf-8") as f:
         acct = f.read().strip().replace("-", "").replace(" ", "")
     if len(acct) != 10 or not acct.isdigit():
         raise ValueError(
@@ -137,7 +137,7 @@ def _kis_oauth_post(path: str, json_payload: dict, max_attempts: int = 3):
 def _load_kis_token_cache() -> dict:
     if os.path.exists(_KIS_TOKEN_CACHE_PATH):
         try:
-            with open(_KIS_TOKEN_CACHE_PATH, "r", encoding="utf-8") as f:
+            with open(_KIS_TOKEN_CACHE_PATH, encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             logger.debug("Failed to load KIS token cache file, starting fresh", exc_info=True)
@@ -430,7 +430,7 @@ def fetch_investor_trend(ticker: str, days: int = 60) -> list:
         except ValueError:
             close_price = 0
 
-        def _signed(key):
+        def _signed(key, item=item):
             try:
                 return int(str(item.get(key, "0") or "0").replace(",", "").strip())
             except ValueError:
