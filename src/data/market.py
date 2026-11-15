@@ -212,134 +212,185 @@ def fetch_market_data(market, top_n, progress_callback=None):
     return fetch_us_market_data(market, top_n, progress_callback)
 
 
+def _match_krx_rows(ticker, search_term):
+    """Rows of the KRX listing for `ticker`: by code, then ISU_CD, then the exact and
+    finally the partial normalised name."""
+    df_krx = get_stock_listing('KRX')
+    row_krx = df_krx[df_krx['Code'] == ticker]
+    if row_krx.empty and 'ISU_CD' in df_krx.columns:
+        row_krx = df_krx[df_krx['ISU_CD'] == ticker]
+
+    if row_krx.empty:
+        df_krx_norm = _get_listing_with_norm('KRX')
+        row_exact = df_krx_norm[df_krx_norm['NameNorm'] == search_term]
+        row_krx = row_exact if not row_exact.empty else \
+                  df_krx_norm[df_krx_norm['NameNorm'].str.contains(search_term, na=False)]
+    return row_krx
+
+
+def _search_krx_and_etf(market, ticker):
+    """First KR lookup: the KRX listing, then the KR ETF listing. Returns
+    fetch_single_stock's (result, None) on a match, else None."""
+    search_term = re.sub(r'[\s_]+', '', ticker.upper())
+    row_krx = _match_krx_rows(ticker, search_term)
+
+    if row_krx.empty:
+        df_etf_norm = _get_listing_with_norm('ETF/KR')
+        row_etf = df_etf_norm[df_etf_norm['Symbol'] == ticker]
+        if row_etf.empty:
+            row_etf = df_etf_norm[df_etf_norm['NameNorm'].str.contains(search_term, na=False)]
+        if not row_etf.empty:
+            target = row_etf.iloc[0]
+            code = str(target.get('Symbol', ticker))
+            if code.isdigit():
+                code = code.zfill(6)
+            name = str(target.get('Name', ticker))
+            return _build_kr_stock_res(code, name, market, 0), None
+    else:
+        target = row_krx.iloc[0]
+        code = str(target.get('Code', ticker)).zfill(6)
+        name = str(target.get('Name', ticker))
+        marcap = safe_float(target.get('Marcap', 0))
+        return _build_kr_stock_res(code, name, market, marcap), None
+    return None
+
+
+def _fetch_single_kr(market, ticker):
+    """fetch_single_stock for KOSPI/KOSDAQ: KRX/ETF search, then a bare KR code, then
+    the market's own listing by code or name."""
+    try:
+        found = _search_krx_and_etf(market, ticker)
+        if found is not None:
+            return found
+    except Exception:
+        # boundary: best-effort first lookup over pandas listings and the network; any failure falls through to the lookups below.
+        logger.warning("KRX search error for ticker='%s'", ticker, exc_info=True)
+
+    if is_kr_code(ticker):
+        return _build_kr_stock_res(ticker, "", market, 0), None
+
+    df_listing = get_stock_listing(market)
+    row = df_listing[df_listing['Code'] == ticker]
+    if row.empty:
+        row = df_listing[df_listing['Name'].str.upper().str.contains(ticker.upper(), na=False)]
+    if not row.empty:
+        target = row.iloc[0]
+        code = str(target.get('Code', ticker)).zfill(6)
+        name = str(target.get('Name', ticker))
+        marcap = safe_float(target.get('Marcap', target.get('MarCap', 0)))
+        return _build_kr_stock_res(code, name, market, marcap), None
+
+    return None, f"Ticker/Name '{ticker}' not found in {market}"
+
+
+def _fetch_us_close(ticker):
+    """Daily history from FinanceDataReader and its last non-null close in USD
+    (0.0 when there is none)."""
+    df_p = pl.DataFrame()
+    usd_price = 0.0
+    try:
+        df_pd = fdr.DataReader(ticker, start_date())
+        df_p = _to_polars(df_pd)
+        if not df_p.is_empty():
+            close_s = df_p.get_column("Close").drop_nulls()
+            usd_price = float(close_s[-1]) if len(close_s) > 0 else 0.0
+    except Exception:
+        # kept broad: FinanceDataReader raises arbitrary third-party exception types.
+        logger.debug("fdr.DataReader failed for ticker=%s", ticker, exc_info=True)
+    return df_p, usd_price
+
+
+def _yf_name_and_marcap(ticker, yf_symbol):
+    """(name, USD market cap, info dict) from yfinance. On failure the name stays the
+    ticker, the cap 0, and info whatever yfinance returned before the failure."""
+    name = ticker
+    usd_marcap = 0
+    inf: dict = {}
+
+    try:
+        import yfinance as yf
+        yft = yf.Ticker(yf_symbol, session=_YF_SESSION)
+        inf = yft.info
+        usd_marcap = inf.get('marketCap') or inf.get('totalAssets') or 0
+        name = inf.get('longName') or inf.get('shortName') or ticker
+    except Exception:
+        # kept broad: yfinance raises arbitrary third-party exception types.
+        logger.debug("yfinance info failed for %s", yf_symbol, exc_info=True)
+    return name, usd_marcap, inf
+
+
+def _yq_name_and_marcap(ticker, yf_symbol, name, usd_marcap):
+    """yahooquery fallback for the name and USD market cap; whatever it cannot fill
+    is returned unchanged."""
+    try:
+        from yahooquery import Ticker as YQTicker
+        yq = YQTicker(yf_symbol)
+        detail = yq.summary_detail.get(yf_symbol, {})
+        qt = yq.quote_type.get(yf_symbol, {})
+        if isinstance(detail, dict):
+            usd_marcap = detail.get('marketCap') or detail.get('totalAssets', 0) or 0
+        if isinstance(qt, dict):
+            name = qt.get('longName') or qt.get('shortName') or ticker
+    except Exception:
+        # kept broad: yahooquery raises arbitrary third-party exception types.
+        logger.debug("yahooquery summary_detail failed for %s", yf_symbol, exc_info=True)
+    return name, usd_marcap
+
+
+def _per_from_info(inf, ticker):
+    """(trailing, forward) PER from a yfinance info dict, rounded to 0.1; None for a
+    missing, non-numeric or NaN value."""
+    trailing_per = None
+    forward_per = None
+    try:
+        tpe = inf.get('trailingPE') if isinstance(inf, dict) else None
+        fpe = inf.get('forwardPE') if isinstance(inf, dict) else None
+        if tpe is not None and isinstance(tpe, (int, float)) and tpe == tpe:
+            trailing_per = round(float(tpe), 1)
+        if fpe is not None and isinstance(fpe, (int, float)) and fpe == fpe:
+            forward_per = round(float(fpe), 1)
+    except (TypeError, ValueError):
+        logger.debug("PER extraction failed for %s", ticker, exc_info=True)
+    return trailing_per, forward_per
+
+
+def _fetch_single_us(market, ticker):
+    """fetch_single_stock for a US market: FDR price history, name and market cap
+    from yfinance (yahooquery when the cap is missing), changes and PER."""
+    fx_rate = get_usd_krw_rate()
+    yf_symbol = ticker.replace(".", "-")
+
+    df_p, usd_price = _fetch_us_close(ticker)
+    if usd_price == 0:
+        return None, f"Could not fetch price for '{ticker}'"
+
+    name, usd_marcap, inf = _yf_name_and_marcap(ticker, yf_symbol)
+    if usd_marcap == 0:
+        name, usd_marcap = _yq_name_and_marcap(ticker, yf_symbol, name, usd_marcap)
+
+    changes = fetch_historical_changes(yf_symbol, usd_price, df_p)
+    trailing_per, forward_per = _per_from_info(inf, ticker)
+
+    return {
+        "ticker": ticker,
+        "name": name,
+        "market": market,
+        "price": usd_price * fx_rate,
+        "market_cap": usd_marcap * fx_rate,
+        "usd_price": usd_price,
+        "currency": "$",
+        "changes": changes,
+        "trailing_per": trailing_per,
+        "forward_per": forward_per,
+    }, None
+
+
 def fetch_single_stock(market, ticker):
     """Fetches data for a single stock by market and ticker symbol."""
     try:
         if market in ("KOSPI", "KOSDAQ"):
-            try:
-                df_krx = get_stock_listing('KRX')
-                row_krx = df_krx[df_krx['Code'] == ticker]
-                if row_krx.empty and 'ISU_CD' in df_krx.columns:
-                    row_krx = df_krx[df_krx['ISU_CD'] == ticker]
-
-                search_term = re.sub(r'[\s_]+', '', ticker.upper())
-                if row_krx.empty:
-                    df_krx_norm = _get_listing_with_norm('KRX')
-                    row_exact = df_krx_norm[df_krx_norm['NameNorm'] == search_term]
-                    row_krx = row_exact if not row_exact.empty else \
-                              df_krx_norm[df_krx_norm['NameNorm'].str.contains(search_term, na=False)]
-
-                if row_krx.empty:
-                    df_etf_norm = _get_listing_with_norm('ETF/KR')
-                    row_etf = df_etf_norm[df_etf_norm['Symbol'] == ticker]
-                    if row_etf.empty:
-                        row_etf = df_etf_norm[df_etf_norm['NameNorm'].str.contains(search_term, na=False)]
-                    if not row_etf.empty:
-                        target = row_etf.iloc[0]
-                        code = str(target.get('Symbol', ticker))
-                        if code.isdigit():
-                            code = code.zfill(6)
-                        name = str(target.get('Name', ticker))
-                        return _build_kr_stock_res(code, name, market, 0), None
-                else:
-                    target = row_krx.iloc[0]
-                    code = str(target.get('Code', ticker)).zfill(6)
-                    name = str(target.get('Name', ticker))
-                    marcap = safe_float(target.get('Marcap', 0))
-                    return _build_kr_stock_res(code, name, market, marcap), None
-            except Exception:
-                # boundary: best-effort first lookup over pandas listings and the network; any failure falls through to the lookups below.
-                logger.warning("KRX search error for ticker='%s'", ticker, exc_info=True)
-
-            if is_kr_code(ticker):
-                return _build_kr_stock_res(ticker, "", market, 0), None
-
-            df_listing = get_stock_listing(market)
-            row = df_listing[df_listing['Code'] == ticker]
-            if row.empty:
-                row = df_listing[df_listing['Name'].str.upper().str.contains(ticker.upper(), na=False)]
-            if not row.empty:
-                target = row.iloc[0]
-                code = str(target.get('Code', ticker)).zfill(6)
-                name = str(target.get('Name', ticker))
-                marcap = safe_float(target.get('Marcap', target.get('MarCap', 0)))
-                return _build_kr_stock_res(code, name, market, marcap), None
-
-            return None, f"Ticker/Name '{ticker}' not found in {market}"
-
-        else:
-            fx_rate = get_usd_krw_rate()
-            yf_symbol = ticker.replace(".", "-")
-
-            df_p = pl.DataFrame()
-            usd_price = 0.0
-            try:
-                df_pd = fdr.DataReader(ticker, start_date())
-                df_p = _to_polars(df_pd)
-                if not df_p.is_empty():
-                    close_s = df_p.get_column("Close").drop_nulls()
-                    usd_price = float(close_s[-1]) if len(close_s) > 0 else 0.0
-            except Exception:
-                # kept broad: FinanceDataReader raises arbitrary third-party exception types.
-                logger.debug("fdr.DataReader failed for ticker=%s", ticker, exc_info=True)
-
-            if usd_price == 0:
-                return None, f"Could not fetch price for '{ticker}'"
-
-            name = ticker
-            usd_marcap = 0
-            inf: dict = {}
-
-            try:
-                import yfinance as yf
-                yft = yf.Ticker(yf_symbol, session=_YF_SESSION)
-                inf = yft.info
-                usd_marcap = inf.get('marketCap') or inf.get('totalAssets') or 0
-                name = inf.get('longName') or inf.get('shortName') or ticker
-            except Exception:
-                # kept broad: yfinance raises arbitrary third-party exception types.
-                logger.debug("yfinance info failed for %s", yf_symbol, exc_info=True)
-
-            if usd_marcap == 0:
-                try:
-                    from yahooquery import Ticker as YQTicker
-                    yq = YQTicker(yf_symbol)
-                    detail = yq.summary_detail.get(yf_symbol, {})
-                    qt = yq.quote_type.get(yf_symbol, {})
-                    if isinstance(detail, dict):
-                        usd_marcap = detail.get('marketCap') or detail.get('totalAssets', 0) or 0
-                    if isinstance(qt, dict):
-                        name = qt.get('longName') or qt.get('shortName') or ticker
-                except Exception:
-                    # kept broad: yahooquery raises arbitrary third-party exception types.
-                    logger.debug("yahooquery summary_detail failed for %s", yf_symbol, exc_info=True)
-
-            changes = fetch_historical_changes(yf_symbol, usd_price, df_p)
-            trailing_per = None
-            forward_per = None
-            try:
-                tpe = inf.get('trailingPE') if isinstance(inf, dict) else None
-                fpe = inf.get('forwardPE') if isinstance(inf, dict) else None
-                if tpe is not None and isinstance(tpe, (int, float)) and tpe == tpe:
-                    trailing_per = round(float(tpe), 1)
-                if fpe is not None and isinstance(fpe, (int, float)) and fpe == fpe:
-                    forward_per = round(float(fpe), 1)
-            except (TypeError, ValueError):
-                logger.debug("PER extraction failed for %s", ticker, exc_info=True)
-
-            return {
-                "ticker": ticker,
-                "name": name,
-                "market": market,
-                "price": usd_price * fx_rate,
-                "market_cap": usd_marcap * fx_rate,
-                "usd_price": usd_price,
-                "currency": "$",
-                "changes": changes,
-                "trailing_per": trailing_per,
-                "forward_per": forward_per,
-            }, None
-
+            return _fetch_single_kr(market, ticker)
+        return _fetch_single_us(market, ticker)
     except Exception as e:
         # boundary: contract is (None, message) on any failure; the caller shows the message.
         logger.warning("fetch_single_stock failed for market=%s ticker=%s", market, ticker, exc_info=True)

@@ -468,6 +468,86 @@ _KIS_WS_MIN_TICKERS = 4
 _KIS_WS_TIMEOUT = 3.0
 
 
+def _kis_ws_message(approval_key, code: str, tr_type: str) -> str:
+    """H0STCNT0 subscribe ("1") / unsubscribe ("2") request for one ticker."""
+    return json.dumps({
+        "header": {"approval_key": approval_key, "custtype": "P", "tr_type": tr_type, "content-type": "utf-8"},
+        "body": {"input": {"tr_id": "H0STCNT0", "tr_key": code}},
+    })
+
+
+def _kis_ws_answer_control(ws, websocket, frame: str) -> None:
+    """JSON control frame -- echo PINGPONG to keep the connection alive."""
+    try:
+        msg = json.loads(frame)
+        if msg.get("header", {}).get("tr_id") == "PINGPONG":
+            ws.send(frame)
+    except (ValueError, AttributeError, websocket.WebSocketException, OSError):
+        # AttributeError: a control frame that decodes to a non-dict.
+        logger.debug("[fetch_kis_realtime_prices] ignoring unparseable control frame", exc_info=True)
+
+
+def _kis_ws_tick_fields(frame):
+    """Fields of a pipe-delimited real-time data frame, or None when it is not a
+    usable H0STCNT0 frame.
+
+    Frame: "0|H0STCNT0|<count>|field^field^...". Field order per KIS docs: [0]=stock
+    code, [2]=current price (execution price). Only the first record's fields are read
+    here (data_count>1 frames are rare for a single subscribed ticker); confirmed
+    against a live capture before relying on this."""
+    parts = frame.split("|")
+    if len(parts) < 4 or parts[1] != "H0STCNT0":
+        return None
+    fields = parts[3].split("^")
+    if len(fields) < 3:
+        return None
+    return fields
+
+
+def _kis_ws_collect_ticks(ws, websocket, approval_key, tickers: list, timeout: float, prices: dict) -> None:
+    """Subscribes every ticker and records into `prices` the first tick price seen per
+    ticker until all have one, the socket fails, or `timeout` seconds pass."""
+    for code in tickers:
+        ws.send(_kis_ws_message(approval_key, code, "1"))
+
+    deadline = time.time() + timeout
+    pending = set(tickers)
+    while pending and time.time() < deadline:
+        ws.settimeout(max(0.1, deadline - time.time()))
+        try:
+            frame = ws.recv()
+        except (websocket.WebSocketException, OSError):
+            break
+
+        if isinstance(frame, str) and frame.startswith("{"):
+            _kis_ws_answer_control(ws, websocket, frame)
+            continue
+
+        fields = _kis_ws_tick_fields(frame)
+        if fields is None:
+            continue
+        code = fields[0]
+        if code in pending:
+            try:
+                prices[code] = float(fields[2])
+                pending.discard(code)
+            except (ValueError, IndexError):
+                continue
+
+
+def _kis_ws_close(ws, websocket, approval_key, tickers: list) -> None:
+    """Unsubscribes every ticker and closes the socket, logging (not raising) failures."""
+    try:
+        for code in tickers:
+            ws.send(_kis_ws_message(approval_key, code, "2"))
+    except (websocket.WebSocketException, OSError):
+        logger.debug("[fetch_kis_realtime_prices] unsubscribe failed (connection likely gone)", exc_info=True)
+    try:
+        ws.close()
+    except (websocket.WebSocketException, OSError):
+        logger.debug("[fetch_kis_realtime_prices] ws.close() failed", exc_info=True)
+
+
 def fetch_kis_realtime_prices(tickers: list, timeout: float = _KIS_WS_TIMEOUT) -> dict:
     """Opens a short-lived KIS WebSocket session, subscribes to real-time trade ticks
     (H0STCNT0) for each KR ticker, and collects the first tick price seen per ticker
@@ -506,64 +586,9 @@ def fetch_kis_realtime_prices(tickers: list, timeout: float = _KIS_WS_TIMEOUT) -
         return _kis_rest_price_fallback(tickers, {})
 
     try:
-        for code in tickers:
-            sub = {
-                "header": {"approval_key": approval_key, "custtype": "P", "tr_type": "1", "content-type": "utf-8"},
-                "body": {"input": {"tr_id": "H0STCNT0", "tr_key": code}},
-            }
-            ws.send(json.dumps(sub))
-
-        deadline = time.time() + timeout
-        pending = set(tickers)
-        while pending and time.time() < deadline:
-            ws.settimeout(max(0.1, deadline - time.time()))
-            try:
-                frame = ws.recv()
-            except (websocket.WebSocketException, OSError):
-                break
-
-            if isinstance(frame, str) and frame.startswith("{"):
-                # JSON control frame — echo PINGPONG to keep the connection alive.
-                try:
-                    msg = json.loads(frame)
-                    if msg.get("header", {}).get("tr_id") == "PINGPONG":
-                        ws.send(frame)
-                except (ValueError, AttributeError, websocket.WebSocketException, OSError):
-                    # AttributeError: a control frame that decodes to a non-dict.
-                    logger.debug("[fetch_kis_realtime_prices] ignoring unparseable control frame", exc_info=True)
-                continue
-
-            # Pipe-delimited real-time data frame: "0|H0STCNT0|<count>|field^field^..."
-            # Field order per KIS docs: [0]=stock code, [2]=current price (execution price). Only the first
-            # record's fields are read here (data_count>1 frames are rare for a single
-            # subscribed ticker); confirmed against a live capture before relying on this.
-            parts = frame.split("|")
-            if len(parts) < 4 or parts[1] != "H0STCNT0":
-                continue
-            fields = parts[3].split("^")
-            if len(fields) < 3:
-                continue
-            code = fields[0]
-            if code in pending:
-                try:
-                    prices[code] = float(fields[2])
-                    pending.discard(code)
-                except (ValueError, IndexError):
-                    continue
+        _kis_ws_collect_ticks(ws, websocket, approval_key, tickers, timeout, prices)
     finally:
-        try:
-            for code in tickers:
-                unsub = {
-                    "header": {"approval_key": approval_key, "custtype": "P", "tr_type": "2", "content-type": "utf-8"},
-                    "body": {"input": {"tr_id": "H0STCNT0", "tr_key": code}},
-                }
-                ws.send(json.dumps(unsub))
-        except (websocket.WebSocketException, OSError):
-            logger.debug("[fetch_kis_realtime_prices] unsubscribe failed (connection likely gone)", exc_info=True)
-        try:
-            ws.close()
-        except (websocket.WebSocketException, OSError):
-            logger.debug("[fetch_kis_realtime_prices] ws.close() failed", exc_info=True)
+        _kis_ws_close(ws, websocket, approval_key, tickers)
 
     missing = [t for t in tickers if t not in prices]
     if missing:

@@ -160,7 +160,19 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
 
-        # Header
+        main_layout.addLayout(self._build_header())
+        self._build_tabs(main_layout)
+        self._wire_tabs()
+
+        if initial_refresh:
+            self.universe_tab.refresh_data()
+
+        self._install_tab_shortcuts()
+        self._start_auto_backup(run_backup)
+
+    def _build_header(self) -> QHBoxLayout:
+        """App title, refresh status and language flags; also creates the
+        auto-refresh and indicator timers and turns auto-refresh on."""
         header_layout = QHBoxLayout()
         # App title + subtitle (docs/ui.md 8.16): the largest text on screen.
         title_label = QLabel("NEXUS")
@@ -172,7 +184,7 @@ class MainWindow(QMainWindow):
         subtitle_label.setFont(create_font(FONT_HEADING, style_name="Semilight"))
         header_layout.addSpacing(8)
         header_layout.addWidget(subtitle_label, 0, Qt.AlignmentFlag.AlignBottom)
-        
+
         header_layout.addStretch()
 
         # Global Auto Timer
@@ -180,6 +192,23 @@ class MainWindow(QMainWindow):
         self.global_auto_timer.setInterval(self.AUTO_REFRESH_MS)
         self.global_auto_timer.timeout.connect(self._on_global_auto_timer)
 
+        self._build_refresh_status(header_layout)
+        header_layout.addSpacing(14)
+        # UI language flags (docs/ui.md 8.20).
+        self.language_switch = LanguageSwitch()
+        self.language_switch.language_requested.connect(self._on_language_requested)
+        header_layout.addWidget(self.language_switch)
+        # Re-evaluates "late" between updates.
+        self._indicator_timer = QTimer(self)
+        self._indicator_timer.setInterval(15000)
+        self._indicator_timer.timeout.connect(self._update_refresh_indicator)
+        self._indicator_timer.start()
+
+        # Check by default (this will trigger the toggled signal and start the timer)
+        self.auto_refresh_cb.setChecked(True)
+        return header_layout
+
+    def _build_refresh_status(self, header_layout: QHBoxLayout) -> None:
         # Refresh status, all in one place on the header (docs/ui.md 1.10 /
         # 8.4): state dot . toggle with its interval . last update time. The
         # dot is OK while updates arrive, WARN once the last one is older than
@@ -200,22 +229,8 @@ class MainWindow(QMainWindow):
         self.update_time_label.setFont(create_font(FONT_BODY, style_name="Semilight"))
         header_layout.addSpacing(6)
         header_layout.addWidget(self.update_time_label)
-        header_layout.addSpacing(14)
-        # UI language flags (docs/ui.md 8.20).
-        self.language_switch = LanguageSwitch()
-        self.language_switch.language_requested.connect(self._on_language_requested)
-        header_layout.addWidget(self.language_switch)
-        # Re-evaluates "late" between updates.
-        self._indicator_timer = QTimer(self)
-        self._indicator_timer.setInterval(15000)
-        self._indicator_timer.timeout.connect(self._update_refresh_indicator)
-        self._indicator_timer.start()
 
-        # Check by default (this will trigger the toggled signal and start the timer)
-        self.auto_refresh_cb.setChecked(True)
-
-        main_layout.addLayout(header_layout)
-
+    def _build_tabs(self, main_layout: QVBoxLayout) -> None:
         # Tab System
         self.tabs = QTabWidget()
         self.tabs.setObjectName("MainTabs")
@@ -242,6 +257,9 @@ class MainWindow(QMainWindow):
         self.strategy_tab = StrategyTab()
         self.tabs.addTab(self.strategy_tab, "Strategy")
 
+    def _wire_tabs(self) -> None:
+        """Cross-tab and tab -> window signals, with the status bar's first
+        message and the first history load between them (original order)."""
         self.trading_history_tab.total_asset_updated.connect(self.trading_record_tab.update_live_asset)
         self.trading_history_tab.status_message.connect(self._on_thread_status_message)
         self.trading_record_tab.status_message.connect(self._on_thread_status_message)
@@ -264,9 +282,7 @@ class MainWindow(QMainWindow):
         self.universe_tab.refresh_started.connect(self.trading_history_tab._reload_current)
         self.universe_tab.auto_lightweight_tick.connect(self.trading_history_tab._start_realtime_price_update)
 
-        if initial_refresh:
-            self.universe_tab.refresh_data()
-
+    def _install_tab_shortcuts(self) -> None:
         # ---Tab movement shortcuts (Ctrl+Tab / Ctrl+Shift+Tab) ---
         # QShortcut(WindowShortcut) works across the entire window regardless of focus position
         sc_next = QShortcut(QKeySequence("Ctrl+Tab"), self)
@@ -277,6 +293,7 @@ class MainWindow(QMainWindow):
         sc_prev.setContext(Qt.ShortcutContext.WindowShortcut)
         sc_prev.activated.connect(self._tab_prev)
 
+    def _start_auto_backup(self, run_backup: bool) -> None:
         # Automatic backup of portfolio.db (trades + asset snapshots) + custom_settings.json (roadmap 2-4).
         # Runs in the background so it never blocks startup.
         self._auto_backup_thread = None

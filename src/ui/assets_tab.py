@@ -70,6 +70,116 @@ from ui.common import (
 _TITLE = "Total Assets"
 
 
+# ---Pure maths behind TradingRecordTab._compute_records_metrics (docs/ui.md 4) ---
+def _safe_parse_date(d):
+    """YYYY-MM-DD -> date, or None for a malformed date."""
+    try:
+        return _dt.datetime.strptime(d, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def _change(curr, base):
+    """(curr - base, the same as a % of base or None when base is 0)."""
+    amt = curr - base
+    pct = amt / base * 100 if base else None
+    return amt, pct
+
+
+def _weekly_changes(i: int, records: list, parsed_dates: list, rate_cache: dict, total, usd_val) -> tuple:
+    """(is_weekly, weekly_amt, weekly_pct, weekly_usd_amt, weekly_usd_pct) of
+    record i against record i-1 when that one is within 7 calendar days.
+    Records are always sorted ascending by date, so i-1 is the only candidate
+    (O(N) total). A failure leaves whatever was computed before it."""
+    weekly_pct = None
+    weekly_amt = None
+    weekly_usd_amt = None
+    weekly_usd_pct = None
+    is_weekly = False
+    try:
+        if i > 0 and parsed_dates[i] is not None and parsed_dates[i - 1] is not None:
+            prev_rec = records[i - 1]
+            is_weekly = (parsed_dates[i] - parsed_dates[i - 1]).days <= 7
+            if is_weekly:
+                prev     = prev_rec["total"]
+                r_prev   = rate_cache.get(prev_rec["date"], 0)
+                prev_usd = prev / r_prev if r_prev > 0 else 0
+
+                weekly_amt = total - prev
+                if prev:
+                    weekly_pct = weekly_amt / prev * 100
+
+                weekly_usd_amt = usd_val - prev_usd
+                if prev_usd:
+                    weekly_usd_pct = weekly_usd_amt / prev_usd * 100
+    except Exception:
+        logger.debug("Weekly change calculation failed at row index=%d", i, exc_info=True)
+    return is_weekly, weekly_amt, weekly_pct, weekly_usd_amt, weekly_usd_pct
+
+
+def _kospi_changes(i: int, is_weekly: bool, records: list, kospi_cache: dict, k_val, first_kospi) -> tuple:
+    """(weekly %, cumulative %) of the KOSPI close; None where not computable."""
+    k_weekly_pct = None
+    if i > 0 and is_weekly:
+        prev_k = kospi_cache.get(records[i - 1]["date"], 0)
+        if prev_k > 0 and k_val > 0:
+            k_weekly_pct = (k_val - prev_k) / prev_k * 100
+    k_cum_pct = ((k_val - first_kospi) / first_kospi * 100) if first_kospi > 0 and k_val > 0 else None
+    return k_weekly_pct, k_cum_pct
+
+
+def _records_metrics(records: list, first_total, parsed_dates: list, rate_cache: dict, kospi_cache: dict) -> list:
+    """One metrics dict per record (see TradingRecordTab._compute_records_metrics)."""
+    r0 = rate_cache.get(records[0]["date"], 0)
+    first_usd_total = records[0]["total"] / r0 if r0 > 0 else 0
+    first_kospi = kospi_cache.get(records[0]["date"], 0)
+
+    out = []
+    for i, rec in enumerate(records):
+        date_str = rec["date"]
+        total    = rec["total"]
+
+        usd_rate = rate_cache.get(date_str, 0)
+        usd_val = total / usd_rate if usd_rate > 0 else 0
+
+        # Weekly: compare to the immediately preceding record if it is within 7 calendar days.
+        is_weekly, weekly_amt, weekly_pct, weekly_usd_amt, weekly_usd_pct = _weekly_changes(
+            i, records, parsed_dates, rate_cache, total, usd_val)
+
+        # Cumulative: relative to the very first record
+        cumulative_pct = None
+        cumulative_amt = None
+        cumulative_usd_pct = None
+        cumulative_usd_amt = None
+        if i > 0:
+            cumulative_amt, cumulative_pct = _change(total, first_total)
+            cumulative_usd_amt, cumulative_usd_pct = _change(usd_val, first_usd_total)
+
+        k_val = kospi_cache.get(date_str, 0.0)
+        k_weekly_pct, k_cum_pct = _kospi_changes(i, is_weekly, records, kospi_cache, k_val, first_kospi)
+
+        # docs/ui.md 4.2 "vs KOSPI": the asset's own cumulative return
+        # minus KOSPI's, per currency. None wherever either side is None
+        # (row 0, or KOSPI/rate data not warmed yet).
+        excess_krw = (cumulative_pct - k_cum_pct) if cumulative_pct is not None and k_cum_pct is not None else None
+        excess_usd = (cumulative_usd_pct - k_cum_pct) if cumulative_usd_pct is not None and k_cum_pct is not None else None
+
+        week_label = f"W{parsed_dates[i].isocalendar()[1]:02d}" if parsed_dates[i] is not None else ""
+
+        out.append({
+            "date": date_str, "week_label": week_label,
+            "kospi_close": k_val, "kospi_weekly_pct": k_weekly_pct, "kospi_cum_pct": k_cum_pct,
+            "total_krw": total, "weekly_amt_krw": weekly_amt, "weekly_pct_krw": weekly_pct,
+            "cum_amt_krw": cumulative_amt, "cum_pct_krw": cumulative_pct,
+            "usd_rate": usd_rate, "total_usd": usd_val,
+            "weekly_amt_usd": weekly_usd_amt, "weekly_pct_usd": weekly_usd_pct,
+            "cum_amt_usd": cumulative_usd_amt, "cum_pct_usd": cumulative_usd_pct,
+            "excess_pct_krw": excess_krw, "excess_pct_usd": excess_usd,
+            "manual": bool(rec.get("manual", False)),
+        })
+    return out
+
+
 class TradingRecordTab(ThreadOwnerMixin, QWidget):
     """Tab for recording periodic total-asset snapshots with weekly/cumulative return calculations."""
     status_message = pyqtSignal(str)   # -> MainWindow's status bar (docs/ui.md 8.5)
@@ -940,98 +1050,12 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
                 if d not in rate_cache:
                     rate_cache[d], kospi_cache[d] = self._rate_kospi_for_date(d)
 
-        r0 = rate_cache.get(records[0]["date"], 0)
-        first_usd_total = records[0]["total"] / r0 if r0 > 0 else 0
-        first_kospi = kospi_cache.get(records[0]["date"], 0)
-
         # Pre-parse each record's date once (was parsed separately for the
         # weekly KRW/USD block and again for the weekly KOSPI block below).
         # A malformed date yields None so that record is simply treated as
         # non-weekly rather than aborting the whole refresh.
-        def _safe_parse_date(d):
-            try:
-                return _dt.datetime.strptime(d, "%Y-%m-%d").date()
-            except Exception:
-                return None
         parsed_dates = [_safe_parse_date(rec["date"]) for rec in records]
-
-        out = []
-        for i, rec in enumerate(records):
-            date_str = rec["date"]
-            total    = rec["total"]
-
-            usd_rate = rate_cache.get(date_str, 0)
-            usd_val = total / usd_rate if usd_rate > 0 else 0
-
-            # Weekly: compare to the immediately preceding record if it is within 7 calendar days.
-            # Records are always sorted ascending by date, so i-1 is the only candidate (O(N) total).
-            weekly_pct = None
-            weekly_amt = None
-            weekly_usd_amt = None
-            weekly_usd_pct = None
-            is_weekly = False
-            try:
-                if i > 0 and parsed_dates[i] is not None and parsed_dates[i - 1] is not None:
-                    prev_rec = records[i - 1]
-                    is_weekly = (parsed_dates[i] - parsed_dates[i - 1]).days <= 7
-                    if is_weekly:
-                        prev     = prev_rec["total"]
-                        r_prev   = rate_cache.get(prev_rec["date"], 0)
-                        prev_usd = prev / r_prev if r_prev > 0 else 0
-
-                        weekly_amt = total - prev
-                        if prev:
-                            weekly_pct = weekly_amt / prev * 100
-
-                        weekly_usd_amt = usd_val - prev_usd
-                        if prev_usd:
-                            weekly_usd_pct = weekly_usd_amt / prev_usd * 100
-            except Exception:
-                logger.debug("Weekly change calculation failed at row index=%d", i, exc_info=True)
-
-            # Cumulative: relative to the very first record
-            cumulative_pct = None
-            cumulative_amt = None
-            if i > 0:
-                cumulative_amt = total - first_total
-                if first_total:
-                    cumulative_pct = cumulative_amt / first_total * 100
-
-            cumulative_usd_pct = None
-            cumulative_usd_amt = None
-            if i > 0:
-                cumulative_usd_amt = usd_val - first_usd_total
-                if first_usd_total:
-                    cumulative_usd_pct = cumulative_usd_amt / first_usd_total * 100
-
-            k_val = kospi_cache.get(date_str, 0.0)
-            k_weekly_pct = None
-            if i > 0 and is_weekly:
-                prev_k = kospi_cache.get(records[i - 1]["date"], 0)
-                if prev_k > 0 and k_val > 0:
-                    k_weekly_pct = (k_val - prev_k) / prev_k * 100
-            k_cum_pct = ((k_val - first_kospi) / first_kospi * 100) if first_kospi > 0 and k_val > 0 else None
-
-            # docs/ui.md 4.2 "vs KOSPI": the asset's own cumulative return
-            # minus KOSPI's, per currency. None wherever either side is None
-            # (row 0, or KOSPI/rate data not warmed yet).
-            excess_krw = (cumulative_pct - k_cum_pct) if cumulative_pct is not None and k_cum_pct is not None else None
-            excess_usd = (cumulative_usd_pct - k_cum_pct) if cumulative_usd_pct is not None and k_cum_pct is not None else None
-
-            week_label = f"W{parsed_dates[i].isocalendar()[1]:02d}" if parsed_dates[i] is not None else ""
-
-            out.append({
-                "date": date_str, "week_label": week_label,
-                "kospi_close": k_val, "kospi_weekly_pct": k_weekly_pct, "kospi_cum_pct": k_cum_pct,
-                "total_krw": total, "weekly_amt_krw": weekly_amt, "weekly_pct_krw": weekly_pct,
-                "cum_amt_krw": cumulative_amt, "cum_pct_krw": cumulative_pct,
-                "usd_rate": usd_rate, "total_usd": usd_val,
-                "weekly_amt_usd": weekly_usd_amt, "weekly_pct_usd": weekly_usd_pct,
-                "cum_amt_usd": cumulative_usd_amt, "cum_pct_usd": cumulative_usd_pct,
-                "excess_pct_krw": excess_krw, "excess_pct_usd": excess_usd,
-                "manual": bool(rec.get("manual", False)),
-            })
-        return out
+        return _records_metrics(records, first_total, parsed_dates, rate_cache, kospi_cache)
 
     def _refresh_table_impl(self):
         metrics = self._compute_records_metrics()

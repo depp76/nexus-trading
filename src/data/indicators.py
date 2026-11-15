@@ -73,6 +73,69 @@ def _current_session_index(last_date, last_close, current_price, n, now) -> int:
     return n
 
 
+def _change_vs(current_price, ref, mode):
+    """Change of `current_price` against `ref`: bp -> difference x 100, abs -> level
+    difference in the instrument's own unit (VIX points, $ for WTI), else percent."""
+    if mode == 'bp':
+        return (current_price - ref) * 100
+    if mode == 'abs':
+        return current_price - ref
+    return (current_price - ref) / ref * 100
+
+
+def _fill_52w(changes, df, current_price, mode, today):
+    """52-week high/low (closing prices) and the current price's distance from each."""
+    cutoff_52w = (today - timedelta(days=365)).date()
+    df_52w = df.filter(pl.col("Date") >= cutoff_52w)
+    if df_52w.is_empty():
+        df_52w = df
+    high_val = df_52w.select(pl.col("Close").max()).item()
+    low_val  = df_52w.select(pl.col("Close").min()).item()
+    high_52w = float(high_val) if high_val is not None else 0.0
+    low_52w  = float(low_val)  if low_val  is not None else 0.0
+    changes["52w_high"] = high_52w
+    changes["52w_low"]  = low_52w
+
+    if high_52w > 0:
+        changes["52w_high_diff"] = _change_vs(current_price, high_52w, mode)
+    if low_52w > 0:
+        changes["52w_low_diff"] = _change_vs(current_price, low_52w, mode)
+
+
+def _fill_period_changes(changes, closes, current_i, current_price, mode):
+    """The _TD_PERIODS changes against the close N sessions before `current_i`."""
+    n = len(closes)
+    for label, td in _TD_PERIODS.items():
+        idx = current_i - td
+        if 0 <= idx < n:
+            old_price = float(closes[idx])
+            if old_price > 0:
+                changes[label] = _change_vs(current_price, old_price, mode)
+
+
+def _fill_ma_ratios(changes, closes, current_price):
+    """MA20/MA50 divergence ratios (base = 100%) and the MA20 1-week rate of change
+    (pct mode only)."""
+    n = len(closes)
+    if n >= 20:
+        ma20 = float(np.mean(closes[-20:]))
+        if ma20 > 0:
+            changes["ma20_div"] = current_price / ma20 * 100
+
+    if n >= 50:
+        ma50 = float(np.mean(closes[-50:]))
+        if ma50 > 0:
+            changes["ma50_div"] = current_price / ma50 * 100
+
+    # Slope of the MA20 line itself, not price. n >= 25 implies n >= 20, so the
+    # divergence block above has already computed ma20 -- reuse it instead of
+    # taking the same mean twice.
+    if n >= 25:
+        ma20_5d_ago = float(np.mean(closes[-25:-5]))
+        if ma20_5d_ago > 0:
+            changes["ma20_roc_1w"] = (ma20 / ma20_5d_ago - 1) * 100
+
+
 def fetch_historical_changes(ticker, current_price, df_pd=None, mode='pct'):
     """Calculates historical changes (single-pass numpy, no redundant I/O).
 
@@ -97,35 +160,9 @@ def fetch_historical_changes(ticker, current_price, df_pd=None, mode='pct'):
             return changes
 
         today = datetime.now()
+        _fill_52w(changes, df, current_price, mode, today)
 
-        # ── 52-week high/low (based on closing price at market close) ────────────────
-        cutoff_52w = (today - timedelta(days=365)).date()
-        df_52w = df.filter(pl.col("Date") >= cutoff_52w)
-        if df_52w.is_empty():
-            df_52w = df
-        high_val = df_52w.select(pl.col("Close").max()).item()
-        low_val  = df_52w.select(pl.col("Close").min()).item()
-        high_52w = float(high_val) if high_val is not None else 0.0
-        low_52w  = float(low_val)  if low_val  is not None else 0.0
-        changes["52w_high"] = high_52w
-        changes["52w_low"]  = low_52w
-
-        if high_52w > 0:
-            if mode == 'bp':
-                changes["52w_high_diff"] = (current_price - high_52w) * 100
-            elif mode == 'abs':
-                changes["52w_high_diff"] = current_price - high_52w
-            else:
-                changes["52w_high_diff"] = (current_price - high_52w) / high_52w * 100
-        if low_52w > 0:
-            if mode == 'bp':
-                changes["52w_low_diff"] = (current_price - low_52w) * 100
-            elif mode == 'abs':
-                changes["52w_low_diff"] = current_price - low_52w
-            else:
-                changes["52w_low_diff"] = (current_price - low_52w) / low_52w * 100
-
-        # ── Period changes (single numpy array pass) ───────────────────
+        # Period changes (single numpy array pass)
         hist = df.filter(pl.col("Close").is_not_null()).sort("Date")
         closes = hist.get_column("Close").to_numpy()
         n = len(closes)
@@ -134,40 +171,10 @@ def fetch_historical_changes(ticker, current_price, df_pd=None, mode='pct'):
 
         last_date = hist.get_column("Date").cast(pl.Date)[-1]
         current_i = _current_session_index(last_date, float(closes[-1]), current_price, n, today)
-        for label, td in _TD_PERIODS.items():
-            idx = current_i - td
-            if 0 <= idx < n:
-                old_price = float(closes[idx])
-                if old_price > 0:
-                    if mode == 'bp':
-                        changes[label] = (current_price - old_price) * 100
-                    elif mode == 'abs':
-                        # Level change in the instrument's own unit (VIX
-                        # points, $ for WTI) -- used to store the old level
-                        # itself, which no consumer could show as a change.
-                        changes[label] = current_price - old_price
-                    else:
-                        changes[label] = (current_price - old_price) / old_price * 100
+        _fill_period_changes(changes, closes, current_i, current_price, mode)
 
-        # ── MA20 divergence ratio (pct mode only, base = 100%) ───────────
-        if mode == 'pct' and n >= 20:
-            ma20 = float(np.mean(closes[-20:]))
-            if ma20 > 0:
-                changes["ma20_div"] = current_price / ma20 * 100
-
-        # ── MA50 divergence ratio (pct mode only, base = 100%) ───────────
-        if mode == 'pct' and n >= 50:
-            ma50 = float(np.mean(closes[-50:]))
-            if ma50 > 0:
-                changes["ma50_div"] = current_price / ma50 * 100
-
-        # ── MA20 1-week rate of change (slope of the MA20 line itself, not price) ──
-        # n >= 25 implies n >= 20, so the "MA20 divergence" block above has
-        # already computed ma20 -- reuse it instead of taking the same mean twice.
-        if mode == 'pct' and n >= 25:
-            ma20_5d_ago = float(np.mean(closes[-25:-5]))
-            if ma20_5d_ago > 0:
-                changes["ma20_roc_1w"] = (ma20 / ma20_5d_ago - 1) * 100
+        if mode == 'pct':
+            _fill_ma_ratios(changes, closes, current_price)
 
     except Exception:
         # boundary: contract is the zero-filled changes dict on any failure (history fetch + numeric work for one ticker).

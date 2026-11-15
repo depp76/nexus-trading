@@ -1007,128 +1007,145 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         # pre-edit state (review_codex.md C11; the sell edit below did this
         # already).
         if col == 0:
-            curr_val = rec.get("company", "")
-            new_str, ok = QInputDialog.getText(self, tr("수정", "Edit"), tr("종목명:", "Company Name:"), text=str(curr_val))
-            if ok and new_str.strip():
-                edited = dict(rec, company=new_str.strip(), is_overridden=True)
-                if not self._save_overrides([edited]):
-                    return
-                rec.update(edited)
-                self._refresh_summary()
-                self._apply_filter()
-            return
+            self._edit_company_cell(rec)
+        elif col == 2:
+            self._edit_ticker_cell(rec)
+        elif col in self._BUY_EDIT_COLS:
+            self._edit_buy_fields(rec)
+        elif col in self._SELL_EDIT_COLS:
+            self._edit_sell_fields(kind, rec)
 
-        if col == 2:
-            curr_val = rec.get("ticker", "")
-            new_str, ok = QInputDialog.getText(self, tr("수정", "Edit"), tr("코드:", "Ticker:"), text=str(curr_val))
-            if ok and new_str.strip():
-                new_ticker = new_str.strip()
-                edited = dict(rec, ticker=new_ticker, is_overridden=True)
-                if not self._save_overrides([edited]):
-                    return            # no price or name lookup for an unsaved ticker
-                rec.update(edited)
+    def _edit_company_cell(self, rec: dict) -> None:
+        """Company-name cell: rename the position."""
+        curr_val = rec.get("company", "")
+        new_str, ok = QInputDialog.getText(self, tr("수정", "Edit"), tr("종목명:", "Company Name:"), text=str(curr_val))
+        if ok and new_str.strip():
+            edited = dict(rec, company=new_str.strip(), is_overridden=True)
+            if not self._save_overrides([edited]):
+                return
+            rec.update(edited)
+            self._refresh_summary()
+            self._apply_filter()
 
-                self._start_price_fetch()
-                self._refresh_summary()
-                self._apply_filter()
+    def _edit_ticker_cell(self, rec: dict) -> None:
+        """Ticker cell: change the code, refetch prices and resolve the name."""
+        curr_val = rec.get("ticker", "")
+        new_str, ok = QInputDialog.getText(self, tr("수정", "Edit"), tr("코드:", "Ticker:"), text=str(curr_val))
+        if ok and new_str.strip():
+            new_ticker = new_str.strip()
+            edited = dict(rec, ticker=new_ticker, is_overridden=True)
+            if not self._save_overrides([edited]):
+                return            # no price or name lookup for an unsaved ticker
+            rec.update(edited)
 
-                # Resolve the company name for the new ticker in the background
-                # (used to be a synchronous fetch_single_stock call on the UI
-                # thread, roadmap 6-1c). The record is updated again when it lands.
-                thread = self._track_thread(SingleStockFetchThread(rec.get("market", ""), new_ticker))
-                thread.finished.connect(self._on_ticker_name_resolved)
-                thread.start()
-            return
+            self._start_price_fetch()
+            self._refresh_summary()
+            self._apply_filter()
 
-        if col in self._BUY_EDIT_COLS:
-            dlg = BuyEditDialog(rec, self)
-            if dlg.exec() == QDialog.DialogCode.Accepted and dlg.result_data:
-                res = dlg.result_data
-                edited = dict(rec)
-                edited["buy_date"]   = res["buy_date"]
-                edited["buy_price"]  = res["buy_price"]
-                edited["qty"]        = res["qty"]
-                edited["buy_amount"] = res["buy_amount"]
-                edited["is_overridden"] = True
-                if not self._save_overrides([edited]):
-                    return
-                rec.update(edited)
-                self._compute_pl_fields(rec)
-                self._refresh_summary()
-                self._apply_filter()
-            return
+            # Resolve the company name for the new ticker in the background
+            # (used to be a synchronous fetch_single_stock call on the UI
+            # thread, roadmap 6-1c). The record is updated again when it lands.
+            thread = self._track_thread(SingleStockFetchThread(rec.get("market", ""), new_ticker))
+            thread.finished.connect(self._on_ticker_name_resolved)
+            thread.start()
 
-        if col in self._SELL_EDIT_COLS:
-            dlg = SellEditDialog(rec, self)
-            if dlg.exec() == QDialog.DialogCode.Accepted and dlg.result_data:
-                res = dlg.result_data
-                orig_qty = rec.get("qty", 0.0)
-                orig_buy_amount = rec.get("buy_amount", 0.0)
-                sell_qty = res["sell_qty"]
+    def _edit_buy_fields(self, rec: dict) -> None:
+        """Buy date/price/qty/amount cells: BuyEditDialog."""
+        dlg = BuyEditDialog(rec, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.result_data:
+            res = dlg.result_data
+            edited = dict(rec)
+            edited["buy_date"]   = res["buy_date"]
+            edited["buy_price"]  = res["buy_price"]
+            edited["qty"]        = res["qty"]
+            edited["buy_amount"] = res["buy_amount"]
+            edited["is_overridden"] = True
+            if not self._save_overrides([edited]):
+                return
+            rec.update(edited)
+            self._compute_pl_fields(rec)
+            self._refresh_summary()
+            self._apply_filter()
 
-                # Build the edited lot on a copy and only apply it to `rec`
-                # (and the open/closed lists) once the DB write succeeded, so a
-                # failed save leaves screen and DB on the pre-edit state.
-                edited = dict(rec)
-                edited["sell_date"]   = res["sell_date"]
-                edited["sell_price"]  = res["sell_price"]
-                edited["sell_qty"]    = sell_qty
-                edited["sell_amount"] = res["sell_amount"]  # dialog already fills price*qty when blank
-                edited["is_overridden"] = True
+    def _edit_sell_fields(self, kind: str, rec: dict) -> None:
+        """Sell date/price/qty/amount cells: SellEditDialog; a partial sell of
+        an open lot splits it (see _split_partial_sell)."""
+        dlg = SellEditDialog(rec, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.result_data:
+            res = dlg.result_data
+            orig_qty = rec.get("qty", 0.0)
+            orig_buy_amount = rec.get("buy_amount", 0.0)
+            sell_qty = res["sell_qty"]
 
-                is_now_closed = bool(edited.get("sell_date") or edited.get("sell_price"))
-                remainder = None
-                if kind == "open" and is_now_closed and 0 < sell_qty < orig_qty:
-                    # Partial sell: split the lot instead of moving the whole
-                    # record to closed, which used to make the untouched
-                    # remainder disappear from open holdings/valuation
-                    # entirely (review_agy.md #5). `rec` becomes the closed
-                    # sub-lot sized to what was actually sold; the remainder
-                    # keeps tracking as its own open position with its own
-                    # DB row (buy_amount split proportionally, no sell fields).
-                    remainder_qty = orig_qty - sell_qty
-                    edited["qty"] = sell_qty
-                    edited["buy_amount"] = orig_buy_amount * (sell_qty / orig_qty) if orig_qty else 0.0
-                    remainder = dict(edited)
-                    remainder["orig_key"] = None
-                    remainder["qty"] = remainder_qty
-                    remainder["buy_amount"] = orig_buy_amount - edited["buy_amount"]
-                    remainder["sell_date"] = ""
-                    remainder["sell_price"] = 0.0
-                    remainder["sell_qty"] = 0.0
-                    remainder["sell_amount"] = 0.0
-                    remainder["curr_price"] = 0.0
-                    remainder["curr_pl"] = 0.0
-                    remainder["curr_pl_pct"] = 0.0
-                    remainder["curr_pct_pl"] = 0.0
-                    remainder["position_w"] = 0.0
-                    self._compute_pl_fields(remainder)
+            # Build the edited lot on a copy and only apply it to `rec`
+            # (and the open/closed lists) once the DB write succeeded, so a
+            # failed save leaves screen and DB on the pre-edit state.
+            edited = dict(rec)
+            edited["sell_date"]   = res["sell_date"]
+            edited["sell_price"]  = res["sell_price"]
+            edited["sell_qty"]    = sell_qty
+            edited["sell_amount"] = res["sell_amount"]  # dialog already fills price*qty when blank
+            edited["is_overridden"] = True
 
-                # The closed sub-lot UPDATE and the remainder INSERT go through
-                # one upsert_trades() transaction: saved separately, a failure
-                # of either left the DB with the original unsold lot plus the
-                # remainder, or the closed sub-lot with no remainder (review_codex.md #1).
-                if not self._save_overrides([edited] if remainder is None else [edited, remainder]):
-                    return
+            is_now_closed = bool(edited.get("sell_date") or edited.get("sell_price"))
+            remainder = None
+            if kind == "open" and is_now_closed and 0 < sell_qty < orig_qty:
+                remainder = self._split_partial_sell(edited, orig_qty, orig_buy_amount, sell_qty)
 
-                rec.update(edited)
-                self._compute_pl_fields(rec)
+            # The closed sub-lot UPDATE and the remainder INSERT go through
+            # one upsert_trades() transaction: saved separately, a failure
+            # of either left the DB with the original unsold lot plus the
+            # remainder, or the closed sub-lot with no remainder (review_codex.md #1).
+            if not self._save_overrides([edited] if remainder is None else [edited, remainder]):
+                return
 
-                # Filter by orig_key rather than list.remove(rec): dict
-                # equality would risk matching a different row (review_agy.md #2).
-                if kind == "open" and is_now_closed:
-                    self._open_data[:] = [r for r in self._open_data if r.get("orig_key") != rec.get("orig_key")]
-                    self._closed_data.append(rec)
-                elif kind == "closed" and not is_now_closed:
-                    self._closed_data[:] = [r for r in self._closed_data if r.get("orig_key") != rec.get("orig_key")]
-                    self._open_data.append(rec)
-                if remainder is not None:
-                    self._open_data.append(remainder)
+            rec.update(edited)
+            self._compute_pl_fields(rec)
+            self._move_after_sell_edit(kind, rec, is_now_closed, remainder)
 
-                self._refresh_summary()
-                self._apply_filter()
-            return
+            self._refresh_summary()
+            self._apply_filter()
 
+    def _split_partial_sell(self, edited: dict, orig_qty: float, orig_buy_amount: float, sell_qty: float) -> dict:
+        """Partial sell: split the lot instead of moving the whole
+        record to closed, which used to make the untouched
+        remainder disappear from open holdings/valuation
+        entirely (review_agy.md #5). `edited` becomes the closed
+        sub-lot sized to what was actually sold (changed in place); the
+        returned remainder keeps tracking as its own open position with its own
+        DB row (buy_amount split proportionally, no sell fields)."""
+        remainder_qty = orig_qty - sell_qty
+        edited["qty"] = sell_qty
+        edited["buy_amount"] = orig_buy_amount * (sell_qty / orig_qty) if orig_qty else 0.0
+        remainder = dict(edited)
+        remainder["orig_key"] = None
+        remainder["qty"] = remainder_qty
+        remainder["buy_amount"] = orig_buy_amount - edited["buy_amount"]
+        remainder["sell_date"] = ""
+        remainder["sell_price"] = 0.0
+        remainder["sell_qty"] = 0.0
+        remainder["sell_amount"] = 0.0
+        remainder["curr_price"] = 0.0
+        remainder["curr_pl"] = 0.0
+        remainder["curr_pl_pct"] = 0.0
+        remainder["curr_pct_pl"] = 0.0
+        remainder["position_w"] = 0.0
+        self._compute_pl_fields(remainder)
+        return remainder
+
+    def _move_after_sell_edit(self, kind: str, rec: dict, is_now_closed: bool, remainder: dict | None) -> None:
+        """Move `rec` between the open and closed lists after a saved sell
+        edit, and add a partial sell's remainder to the open list."""
+        # Filter by orig_key rather than list.remove(rec): dict
+        # equality would risk matching a different row (review_agy.md #2).
+        if kind == "open" and is_now_closed:
+            self._open_data[:] = [r for r in self._open_data if r.get("orig_key") != rec.get("orig_key")]
+            self._closed_data.append(rec)
+        elif kind == "closed" and not is_now_closed:
+            self._closed_data[:] = [r for r in self._closed_data if r.get("orig_key") != rec.get("orig_key")]
+            self._open_data.append(rec)
+        if remainder is not None:
+            self._open_data.append(remainder)
     def _on_ticker_name_resolved(self, result, error: str, ticker: str):
         """SingleStockFetchThread.finished for the ticker-cell edit above: apply the
         resolved company name to every record now carrying that ticker."""
