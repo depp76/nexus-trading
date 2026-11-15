@@ -73,6 +73,16 @@ _TITLE = "Trading Universe"
 ADD_TICKER_MARKETS = ("KOSPI", "KOSDAQ", "NASDAQ", "NYSE")
 
 
+def _part_label(part: str) -> str:
+    """Display name of a fetch part / row market in status lines: the index
+    rows' "Indices"/"Index" key in the UI language, market names as-is."""
+    if part in ("Indices", "Index"):
+        return tr("지수", part)
+    if part == "Unknown":
+        return tr("기타", part)
+    return part
+
+
 class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     """Trading Universe tab: watchlist table + ticker add/search controls."""
 
@@ -121,7 +131,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             self.all_data = cached
             self._reload_table()
             self.filter_table()
-            self.update_total_status(prefix="Loaded cached universe. Refreshing data...")
+            self.update_total_status(prefix=tr("저장된 유니버스를 불러왔습니다. 데이터 갱신 중...",
+                                                    "Loaded cached universe. Refreshing data..."))
 
     def _build_ui(self):
         universe_layout = QVBoxLayout(self)
@@ -317,7 +328,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         if not missing:
             return
         for m in missing:
-            self.market_status[m] = "Waiting"
+            self.market_status[m] = tr("대기", "Waiting")
         thread = AllDataFetchThread(markets=missing, include_indices=False)
         self._track_thread(thread, "_market_fetch_thread")
         thread.market_progress.connect(self.on_market_progress)
@@ -326,8 +337,10 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         thread.start()
 
     def _on_market_fetch_failed(self, reason: str, parts: list):
-        self.status_text_changed.emit(f"Could not load {', '.join(parts)} ({reason}).")
-        self.refresh_failed.emit(f"market fetch: {reason}")
+        shown = ", ".join(_part_label(p) for p in parts)
+        self.status_text_changed.emit(tr(f"{shown}을(를) 불러오지 못했습니다 ({reason}).",
+                                         f"Could not load {', '.join(parts)} ({reason})."))
+        self.refresh_failed.emit(tr(f"시장 받기: {reason}", f"market fetch: {reason}"))
 
     def _added_tickers(self) -> set:
         return {x.get("ticker") for x in self.custom_settings.get("added", [])}
@@ -379,7 +392,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             self._reload_table()
             self.filter_table()
             self._save_universe_cache()
-            self.update_total_status(prefix=f"Loaded {len(new)} rows.")
+            self.update_total_status(prefix=tr(f"{len(new)}행을 불러왔습니다.", f"Loaded {len(new)} rows."))
         if self._markets_pending:
             self._markets_pending = False
             self._fetch_missing_markets()
@@ -450,7 +463,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.all_data = [x for x in self.all_data if x.get("ticker", "") != ticker]
         self._reload_table()
         self.filter_table()
-        self.update_total_status(prefix=f"Deleted '{ticker}'.")
+        self.update_total_status(prefix=tr(f"'{ticker}'을(를) 삭제했습니다.", f"Deleted '{ticker}'."))
 
     def toggle_stock(self, ticker):
         """Cycles a ticker's highlight state -/On/Tg (docs/ui.md 1.7: shown
@@ -488,7 +501,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
         existing = {d['ticker'] for d in self.all_data}
         if ticker in existing:
-            self.status_text_changed.emit(f"'{ticker}' is already in the table.")
+            self.status_text_changed.emit(tr(f"'{ticker}'은(는) 이미 표에 있습니다.",
+                                             f"'{ticker}' is already in the table."))
             return
 
         if ticker in self.custom_settings.get("deleted", []):
@@ -496,7 +510,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             self.save_custom_settings()
 
         self.add_ticker_btn.setEnabled(False)
-        self.status_text_changed.emit(f"Fetching '{ticker}' from {market}...")
+        self.status_text_changed.emit(tr(f"{market}에서 '{ticker}' 받는 중...",
+                                         f"Fetching '{ticker}' from {market}..."))
 
         thread = self._track_thread(SingleStockFetchThread(market, ticker), '_single_fetch_thread')
         thread.finished.connect(self.on_single_stock_loaded)
@@ -516,7 +531,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             self.add_ticker_btn.setEnabled(True)
         if error or result is None:
             if not is_startup:
-                self.status_text_changed.emit(f"Error: {error}" if error else "Stock not found.")
+                self.status_text_changed.emit(tr(f"오류: {error}", f"Error: {error}") if error
+                                              else tr("종목을 찾지 못했습니다.", "Stock not found."))
             else:
                 label = ticker_hint or (result.get('ticker', '') if result else '?')
                 logger.warning("[Startup] Added ticker '%s' failed to load: %s", label, error or "No data returned")
@@ -536,7 +552,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             return
         if any(x.get('ticker') == ticker for x in self.all_data):
             if not is_startup:
-                self.status_text_changed.emit(f"'{ticker}' is already in the table.")
+                self.status_text_changed.emit(tr(f"'{ticker}'은(는) 이미 표에 있습니다.",
+                                                 f"'{ticker}' is already in the table."))
             return
 
         target_market = result.get('market', '') or self.market_combo.currentText()
@@ -554,7 +571,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._reload_table()
         self.filter_table()  # restore filter state
         self.ticker_input.clear()
-        self.update_total_status(prefix=f"Added '{result.get('name', ticker)}' ({ticker}).")
+        self.update_total_status(prefix=tr(f"'{result.get('name', ticker)}' ({ticker})을(를) 추가했습니다.",
+                                                   f"Added '{result.get('name', ticker)}' ({ticker})."))
         self._save_universe_cache()
 
     def _render_startup_batch(self):
@@ -642,7 +660,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.filters_btn.setText(tr(f"필터 ({n})", f"Filters ({n})") if n else tr("필터", "Filters"))
         self.filters_btn.setChecked(bool(n))
         self.filters_btn.setToolTip(describe_ranges(self._ranges) if n else
-                                    "Numeric range filters: Cap, PER, change, 52W position, MA Div, momentum")
+                                    tr("숫자 범위 필터: 시총, PER, 등락, 52주 위치, MA Div, 모멘텀",
+                                       "Numeric range filters: Cap, PER, change, 52W position, MA Div, momentum"))
 
     def _open_range_filters(self):
         self._update_filters_button()          # undo the click's own toggle
@@ -736,7 +755,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         else:
             views[existing] = view
         self.save_custom_settings()
-        self.status_message.emit(f"Saved view '{name}'")
+        self.status_message.emit(tr(f"보기 '{name}' 저장함", f"Saved view '{name}'"))
 
     def _delete_view(self):
         names = [v["name"] for v in self._user_views()]
@@ -752,7 +771,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             return
         self.custom_settings["views"] = [v for v in self._user_views() if v["name"] != name]
         self.save_custom_settings()
-        self.status_message.emit(f"Deleted view '{name}'")
+        self.status_message.emit(tr(f"보기 '{name}' 삭제함", f"Deleted view '{name}'"))
 
     # ---Per-stock MA (20 + 60) ---
     def _on_ma_chart_requested(self, ticker: str):
@@ -776,17 +795,20 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
                                                  f"AI Stock Report: no data found for {ticker}."))
             return
         name = item.get('name', ticker)
-        self.status_text_changed.emit(f"Generating AI report for {name} ({ticker})...")
+        self.status_text_changed.emit(tr(f"{name} ({ticker}) AI 리포트 생성 중...",
+                                         f"Generating AI report for {name} ({ticker})..."))
         thread = self._track_thread(GeminiStockReportThread(item))
         thread.finished.connect(self._on_stock_report_ready)
         thread.start()
 
     def _on_stock_report_ready(self, ticker: str, name: str, result_text: str, error: str):
         if error:
-            self.status_text_changed.emit(f"AI report failed for {name} ({ticker}).")
+            self.status_text_changed.emit(tr(f"{name} ({ticker}) AI 리포트 생성 실패.",
+                                             f"AI report failed for {name} ({ticker})."))
             QMessageBox.warning(self, _TITLE, tr(f"AI 종목 리포트 생성 실패:\n{error}", f"AI Stock Report failed:\n{error}"))
             return
-        self.status_text_changed.emit(f"AI report ready for {name} ({ticker}).")
+        self.status_text_changed.emit(tr(f"{name} ({ticker}) AI 리포트 준비됨.",
+                                         f"AI report ready for {name} ({ticker})."))
         show_stock_report_result(self, ticker, name, result_text)
 
     # ---Trend + pullback score (trend_following.md 2-5) ---
@@ -809,17 +831,19 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.trend_score_btn.setChecked(False)   # the click toggled it on; checked means "pinned"
         items = self._trend_score_items()
         if not items:
-            self.status_text_changed.emit("Trend Score: no KOSPI/KOSDAQ rows to score -- Refresh the universe first")
+            self.status_text_changed.emit(tr("추세 점수: 채점할 KOSPI/KOSDAQ 종목이 없습니다 -- 먼저 유니버스를 새로고침하세요",
+                                             "Trend Score: no KOSPI/KOSDAQ rows to score -- Refresh the universe first"))
             return
         self.trend_score_btn.setEnabled(False)
-        self.status_text_changed.emit(f"Scoring {len(items)} names (trend + pullback)...")
+        self.status_text_changed.emit(tr(f"{len(items)}종목 채점 중 (추세 + 눌림)...",
+                                         f"Scoring {len(items)} names (trend + pullback)..."))
         thread = self._track_thread(TrendScoreThread(items, n_top=self.TREND_SCORE_TOP_N), "_trend_score_thread")
         thread.progress.connect(self._on_trend_score_progress)
         thread.finished.connect(self._on_trend_score_finished)
         thread.start()
 
     def _on_trend_score_progress(self, text: str):
-        self.status_text_changed.emit(f"Trend Score: {text}")
+        self.status_text_changed.emit(tr(f"추세 점수: {text}", f"Trend Score: {text}"))
 
     def _on_trend_score_finished(self, rec, error: str):
         self.trend_score_btn.setEnabled(True)
@@ -827,22 +851,26 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             self.trend_score_btn.setChecked(False)
             if error != CANCELLED_MESSAGE:
                 QMessageBox.warning(self, _TITLE, tr(f"추세 점수 계산 실패:\n{error}", f"Trend Score failed:\n{error}"))
-            self.status_text_changed.emit(f"Trend Score: {error}")
+            self.status_text_changed.emit(tr(f"추세 점수: {error}", f"Trend Score: {error}"))
             return
         order = {}
         for i, s in enumerate(rec.top, 1):
-            order[s.ticker] = (0, i, f"Top {i} ({s.week_avg:+.2f})")
+            order[s.ticker] = (0, i, tr(f"상위 {i} ({s.week_avg:+.2f})", f"Top {i} ({s.week_avg:+.2f})"))
         for i, s in enumerate(rec.bottom, 1):
-            order[s.ticker] = (1, i, f"Bottom {i} ({s.week_avg:+.2f})")
+            order[s.ticker] = (1, i, tr(f"하위 {i} ({s.week_avg:+.2f})", f"Bottom {i} ({s.week_avg:+.2f})"))
         self._trend_score_order = order
         self._last_recommendation = rec
         self.trend_score_btn.setChecked(True)
         self._apply_trend_score_order()
-        regime = {True: "Risk-on", False: "Risk-off"}.get(rec.regime_on, "n/a")
-        self.status_text_changed.emit(
+        regime = {True: tr("위험 선호", "Risk-on"), False: tr("위험 회피", "Risk-off")}.get(
+            rec.regime_on, tr("없음", "n/a"))
+        self.status_text_changed.emit(tr(
+            f"추세 점수 {rec.as_of:%Y-%m-%d} 기준 ({len(rec.week_dates)}거래일): 상위 {len(rec.top)} / "
+            f"하위 {len(rec.bottom)} 고정 (유니버스 {rec.n_universe}, 유동성 통과 {rec.n_liquid}, "
+            f"게이트 통과 {rec.n_gated}, KOSPI L1 {regime}). 추세 점수를 다시 누르면 원래 순서로 돌아갑니다.",
             f"Trend Score as of {rec.as_of:%Y-%m-%d} ({len(rec.week_dates)} sessions): {len(rec.top)} top / "
             f"{len(rec.bottom)} bottom pinned (universe {rec.n_universe}, liquid {rec.n_liquid}, "
-            f"gate {rec.n_gated}, KOSPI L1 {regime}). Click Trend Score again to restore the order.")
+            f"gate {rec.n_gated}, KOSPI L1 {regime}). Click Trend Score again to restore the order."))
 
     def _on_user_sorted(self):
         """A header click re-sorts the whole table, which would scatter the
@@ -856,13 +884,14 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._sort_all_data()      # strips the trend_rank tags, default data order
         self._reload_table()       # re-applies the user's sort
         self.filter_table()
-        self.status_text_changed.emit("Trend Score order cleared (column sort).")
+        self.status_text_changed.emit(tr("추세 점수 순서 해제 (열 정렬).", "Trend Score order cleared (column sort)."))
 
     def _clear_trend_score(self):
         self._trend_score_order = {}
         self.trend_score_btn.setChecked(False)
         self._apply_trend_score_order()
-        self.status_text_changed.emit("Trend Score order cleared; default order restored.")
+        self.status_text_changed.emit(tr("추세 점수 순서 해제, 기본 순서로 복원.",
+                                         "Trend Score order cleared; default order restored."))
 
     def _apply_trend_score_order(self):
         """Re-sort all_data (pinned rows first, if any), drop the user's
@@ -882,7 +911,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._full_failure = None
         self.all_data = []
         self._refresh_markets = set(self._markets)
-        self.market_status = {m: "Waiting" for m in ["Indices"] + self.selected_markets()}
+        self.market_status = {m: tr("대기", "Waiting") for m in ["Indices"] + self.selected_markets()}
         self.update_status_display()
 
         self._track_thread(AllDataFetchThread(markets=self.selected_markets()), 'fetch_thread')
@@ -929,7 +958,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             # Nothing new arrived: keep the table and the last good update
             # time, and say so (header dot turns red; docs/ui.md 8.7).
             self._lw_failure = ""
-            self.status_text_changed.emit(f"Auto-update failed: {reason}")
+            self.status_text_changed.emit(tr(f"자동 갱신 실패: {reason}", f"Auto-update failed: {reason}"))
             self.refresh_failed.emit(reason)
             return
         # UniverseLightweightFetchThread preserves all_data's order/length
@@ -965,35 +994,39 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         # Restore scroll position to prevent jumping
         self.table.verticalScrollBar().setValue(v_scroll)
 
-        self.update_total_status("Auto-updated prices.")
+        self.update_total_status(tr("가격을 자동 갱신했습니다.", "Auto-updated prices."))
         self.update_last_sync_time()
 
     def on_market_progress(self, market, current, total):
-        self.market_status[market] = f"Loading ({current}/{total})"
+        self.market_status[market] = tr(f"불러오는 중 ({current}/{total})", f"Loading ({current}/{total})")
         self.update_status_display()
-        self.status_message.emit(f"Fetching {market} quotes... ({current}/{total})")
+        self.status_message.emit(tr(f"{_part_label(market)} 시세 받는 중... ({current}/{total})",
+                                    f"Fetching {market} quotes... ({current}/{total})"))
 
     def update_status_display(self):
-        parts = " | ".join(f"{m}: {s}" for m, s in self.market_status.items())
-        self.status_text_changed.emit(f"Status: {parts}")
+        parts = " | ".join(f"{_part_label(m)}: {s}" for m, s in self.market_status.items())
+        self.status_text_changed.emit(tr(f"상태: {parts}", f"Status: {parts}"))
 
     def update_last_sync_time(self):
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.sync_time_changed.emit(f"Updated: {now_str}")
+        self.sync_time_changed.emit(tr(f"갱신: {now_str}", f"Updated: {now_str}"))
 
-    def update_total_status(self, prefix="Data Loaded."):
+    def update_total_status(self, prefix=None):
+        if prefix is None:
+            prefix = tr("데이터를 불러왔습니다.", "Data Loaded.")
         market_counts = Counter(item.get("market", "Unknown") for item in self.all_data)
         order = ["Index", *MARKETS]
         summary_parts = [
-            f"{m} {market_counts[m]}" for m in order if m in market_counts
+            f"{_part_label(m)} {market_counts[m]}" for m in order if m in market_counts
         ] + [
-            f"{m} {c}" for m, c in sorted(market_counts.items()) if m not in order
+            f"{_part_label(m)} {c}" for m, c in sorted(market_counts.items()) if m not in order
         ]
         summary = ", ".join(summary_parts)
-        self.status_text_changed.emit(f"{prefix} Total {len(self.all_data)} stocks ({summary})")
+        self.status_text_changed.emit(tr(f"{prefix} 전체 {len(self.all_data)}종목 ({summary})",
+                                         f"{prefix} Total {len(self.all_data)} stocks ({summary})"))
 
     def on_market_loaded(self, market, data):
-        self.market_status[market] = f"Done({len(data)})"
+        self.market_status[market] = tr(f"완료({len(data)})", f"Done({len(data)})")
         self.update_status_display()
         # Accumulate data incrementally so the table updates as each market finishes
         self.all_data.extend(data)
@@ -1035,9 +1068,11 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             self.filter_table(self.search_input.text())
             if failure:
                 reason, parts = failure
-                self.update_total_status(prefix=f"Refresh failed ({reason}); kept the previous rows for "
-                                                f"{', '.join(parts)}.")
-                self.refresh_failed.emit(f"full refresh: {reason}")
+                shown = ", ".join(_part_label(p) for p in parts)
+                self.update_total_status(prefix=tr(f"갱신 실패 ({reason}). {shown}은(는) 이전 행을 유지했습니다.",
+                                                   f"Refresh failed ({reason}); kept the previous rows for "
+                                                   f"{', '.join(parts)}."))
+                self.refresh_failed.emit(tr(f"전체 갱신: {reason}", f"full refresh: {reason}"))
             else:
                 self.update_total_status()
                 self.update_last_sync_time()
@@ -1056,7 +1091,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
         except Exception as e:
             logger.error("Data sort/load error in on_finished_all", exc_info=True)
-            self.status_text_changed.emit(f"Data sort/load error: {e}")
+            self.status_text_changed.emit(tr(f"데이터 정렬/불러오기 오류: {e}", f"Data sort/load error: {e}"))
         finally:
             self.refresh_btn.setEnabled(True)
             # a market switched on while the refresh ran

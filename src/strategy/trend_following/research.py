@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+from i18n import tr
+
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
@@ -100,7 +102,7 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
     warnings: list[str] = []
     if ds.dates:
         check_dev_window(ds.dates[-1], req.allow_holdout, "dataset last date")
-    _say(progress, "Computing signals...")
+    _say(progress, tr("신호 계산 중...", "Computing signals..."))
     feats = compute_features(ds, p)
 
     if not ds.info.get("bm_is_total_return", True):
@@ -134,7 +136,7 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
         for mult in req.cost_multipliers:
             cm = req.cost_model.scaled(mult)
             _check_stop(should_stop)
-            _say(progress, f"Benchmarks at {mult:g}x costs...")
+            _say(progress, tr(f"벤치마크 (비용 {mult:g}x)...", f"Benchmarks at {mult:g}x costs..."))
             bms = run_benchmarks(ds, feats, p, cm)
             bm1, bm3 = bms.get("BM1"), bms.get("BM3")
             for vid in req.variant_ids:
@@ -142,7 +144,7 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
                 if v.needs_flows and not feats.has_flows:
                     continue
                 _check_stop(should_stop)
-                _say(progress, f"Backtest {vid} at {mult:g}x costs...")
+                _say(progress, tr(f"백테스트 {vid} (비용 {mult:g}x)...", f"Backtest {vid} at {mult:g}x costs..."))
                 if v.mode == "score" and vid not in score_books:
                     score_books[vid] = compute_scores(ds.stocks, v.apply(p))
                 res: BacktestResult = run_backtest(ds, feats, p, v, cm, scores=score_books.get(vid))
@@ -155,7 +157,7 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
     events: list[dict] = []
     if req.run_event_study:
         _check_stop(should_stop)
-        _say(progress, "Event study...")
+        _say(progress, tr("이벤트 스터디...", "Event study..."))
         events = run_event_study(ds, feats, p)
 
     info = dict(ds.info)

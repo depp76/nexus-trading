@@ -50,7 +50,7 @@ class TestCellFactories(unittest.TestCase):
     def test_plain_items(self):
         self.assertEqual(si("abc").text(), "abc")
         self.assertEqual(dash().text(), DASH)
-        self.assertEqual(loading_item().text(), "Total")
+        self.assertEqual(loading_item().text(), "조회 중")
 
 
 class TestFillTableRows(unittest.TestCase):
@@ -69,7 +69,7 @@ class TestFillTableRows(unittest.TestCase):
         self.assertEqual(t[0], "X")
         self.assertEqual(t[3], "2026-01-10")
         self.assertEqual(t[7:14], [DASH] * 7)            # sell section empty
-        self.assertEqual(t[15:18], ["Total"] * 3)      # price not yet loaded
+        self.assertEqual(t[15:18], ["조회 중"] * 3)      # price not yet loaded
         self.assertEqual(t[18:21], [DASH] * 3)
 
     def test_open_row_identity_cell_carries_state_for_the_delegate(self):

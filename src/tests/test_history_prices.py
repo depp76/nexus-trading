@@ -230,12 +230,12 @@ class TestRealtimePartialFailure(unittest.TestCase):
 
     def test_kr_ok_us_empty(self):
         failures, fetched = self._run({"return_value": {"005930": 100.0}}, {"return_value": {}})
-        self.assertEqual(failures, ["no US quotes received (Yahoo)"])
+        self.assertEqual(failures, ["미국 시세를 받지 못함 (Yahoo)"])
         self.assertEqual(fetched, [({"005930": 100.0}, False)])
 
     def test_kr_empty_us_ok(self):
         failures, fetched = self._run({"return_value": {}}, {"return_value": {"AAPL": 2.0}})
-        self.assertEqual(failures, ["no KR quotes received (KIS)"])
+        self.assertEqual(failures, ["국내 시세를 받지 못함 (KIS)"])
         self.assertEqual(fetched, [({"AAPL": 2800.0}, False)])
 
     def test_both_ok_and_a_missing_name_is_not_a_failure(self):

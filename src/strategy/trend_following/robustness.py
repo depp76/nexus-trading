@@ -16,6 +16,8 @@ runner reads the neighbour list from the config constant and refuses anything el
 """
 from __future__ import annotations
 
+from i18n import tr
+
 import math
 from dataclasses import dataclass, field, replace
 from datetime import date
@@ -317,7 +319,7 @@ def run_robustness(ds, req: RobustnessRequest, progress=None, should_stop=None) 
             cache: dict = {}
             for vid in runnable:
                 _stop(should_stop)
-                _say(progress, f"E1: {vid} with check weekday {WEEKDAY_NAMES[w]}...")
+                _say(progress, tr(f"E1: {vid} 점검 요일 {WEEKDAY_NAMES[w]}...", f"E1: {vid} with check weekday {WEEKDAY_NAMES[w]}..."))
                 res = _run_variant(ds, featsw, pw, vid, cm1, cache)
                 counter.add(GROUP_E1)
                 weekday_runs.append(WeekdayRun(vid, w, stats_from_metrics(summarize_run(res)),
@@ -343,7 +345,7 @@ def run_robustness(ds, req: RobustnessRequest, progress=None, should_stop=None) 
             featsn = compute_features(ds, pn)
             for vid in wanted:
                 _stop(should_stop)
-                _say(progress, f"E2: {vid} with {f}={v} ({nid})...")
+                _say(progress, tr(f"E2: {vid} {f}={v} ({nid})...", f"E2: {vid} with {f}={v} ({nid})..."))
                 res = _run_variant(ds, featsn, pn, vid, cm1, {})
                 counter.add(GROUP_E2)
                 neighbor_runs.append(NeighborRun(
@@ -366,7 +368,7 @@ def run_robustness(ds, req: RobustnessRequest, progress=None, should_stop=None) 
                 if not VARIANTS[vid].needs_flows:
                     continue
                 _stop(should_stop)
-                _say(progress, f"A2: {vid} with flows {req.flow_contamination} session early (validation only)...")
+                _say(progress, tr(f"A2: {vid} 수급 {req.flow_contamination}세션 앞당김 (검증 전용)...", f"A2: {vid} with flows {req.flow_contamination} session early (validation only)..."))
                 res = _run_variant(ds, featsc, p, vid, cm1, {})
                 counter.add(GROUP_A2)
                 contam.append(ContaminationRow(vid, stats_from_metrics(base1[vid].metrics),

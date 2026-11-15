@@ -20,6 +20,10 @@ from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_FAINT, HDR_BG, LINE
 
 logger = logging.getLogger(__name__)
 
+# Legend / hover names of the two asset series.
+_LBL_ASSETS = tr("총자산", "Total Assets")
+_LBL_ASSETS_USD = tr("총자산 ($)", "Total Assets ($)")
+
 
 
 # ---------------------------------------------------------------------------
@@ -33,7 +37,7 @@ class TotalAssetsGraphDialog(QDialog):
         button is hidden when it is None."""
         super().__init__(parent)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint | Qt.WindowType.WindowMinimizeButtonHint)
-        self.setWindowTitle("Total Assets — Cumulative Return")
+        self.setWindowTitle(tr("총자산 — 누적 수익률", "Total Assets — Cumulative Return"))
         fit_to_screen(self, 900, 600)
         self.showMaximized()
 
@@ -49,8 +53,8 @@ class TotalAssetsGraphDialog(QDialog):
         # accent for its USD view, muted dashed for the benchmark (red/blue
         # stay reserved for gain/loss, docs/ui.md 1.1).
         line_kospi, = ax.plot(x_dates, kospi_returns, color=TEXT_MUTED, linewidth=1.6, linestyle="--", marker=".", markersize=4, label="KOSPI")
-        line_asset, = ax.plot(x_dates, asset_returns, color=TEXT, linewidth=2, linestyle="-", marker=".", markersize=4, label="Total Assets")
-        line_usd, = ax.plot(x_dates, usd_asset_returns, color=ACCENT, linewidth=2, linestyle="-", marker=".", markersize=4, label="Total Assets ($)")
+        line_asset, = ax.plot(x_dates, asset_returns, color=TEXT, linewidth=2, linestyle="-", marker=".", markersize=4, label=_LBL_ASSETS)
+        line_usd, = ax.plot(x_dates, usd_asset_returns, color=ACCENT, linewidth=2, linestyle="-", marker=".", markersize=4, label=_LBL_ASSETS_USD)
 
         ax.axhline(0, color=TEXT_FAINT, linestyle='--', linewidth=1)
 
@@ -61,8 +65,8 @@ class TotalAssetsGraphDialog(QDialog):
 
         ax.legend(fontsize=10)
         ax.grid(True, linestyle=":", alpha=0.5)
-        ax.set_ylabel("Cumulative Return (%)", fontsize=10)
-        ax.set_title("Total Assets vs KOSPI Cumulative Return", fontsize=12, fontweight="bold")
+        ax.set_ylabel(tr("누적 수익률 (%)", "Cumulative Return (%)"), fontsize=10)
+        ax.set_title(tr("총자산과 KOSPI 누적 수익률", "Total Assets vs KOSPI Cumulative Return"), fontsize=12, fontweight="bold")
 
         # Annotate actual values on the markers
         for i in range(len(dates)):
@@ -103,13 +107,13 @@ class TotalAssetsGraphDialog(QDialog):
                     lbl = "KOSPI"
                     val_str = f"{val:+.1f}%"
                 elif sel.artist == sc_asset:
-                    lbl = "Total Assets"
+                    lbl = _LBL_ASSETS
                     amt = totals[idx]
-                    val_str = f"{val:+.1f}%\nValue: {amt:,.0f} KRW"
+                    val_str = f"{val:+.1f}%\n" + tr(f"평가액: {amt:,.0f} KRW", f"Value: {amt:,.0f} KRW")
                 elif sel.artist == sc_usd:
-                    lbl = "Total Assets ($)"
+                    lbl = _LBL_ASSETS_USD
                     amt = usd_totals[idx]
-                    val_str = f"{val:+.1f}%\nValue: ${amt:,.0f}"
+                    val_str = f"{val:+.1f}%\n" + tr(f"평가액: ${amt:,.0f}", f"Value: ${amt:,.0f}")
                 else:
                     lbl = ""
                     val_str = f"{val:+.1f}%"
@@ -121,7 +125,7 @@ class TotalAssetsGraphDialog(QDialog):
         layout.addWidget(canvas)
 
         self.report_btn = make_button(tr("리포트", "Report"))
-        self.report_btn.setToolTip("Positions, cash and KOSPI at the start and middle of every month")
+        self.report_btn.setToolTip(tr("매월 초와 중순의 보유 평가액, 현금, KOSPI", "Positions, cash and KOSPI at the start and middle of every month"))
         if on_report is not None:
             self.report_btn.clicked.connect(on_report)
         else:

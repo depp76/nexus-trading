@@ -284,8 +284,8 @@ class TradeStateDelegate(CellDelegate):
     fill_table_rows(); paints plain text (via the base class) when absent."""
 
     _BADGE = {
-        "Open":   ("Open", ACCENT_TEXT, ACCENT, ACCENT_BG),
-        "Closed": ("Closed", TEXT_FAINT, LINE, "transparent"),
+        "Open":   (tr("보유", "Open"), ACCENT_TEXT, ACCENT, ACCENT_BG),
+        "Closed": (tr("청산", "Closed"), TEXT_FAINT, LINE, "transparent"),
     }
     _MARKER = {"Open": ACCENT, "Closed": LINE}
 

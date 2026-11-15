@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 class StockTradeHistoryDialog(QDialog):
     def __init__(self, company, matches, total_pl, total_buy, total_sell, parent=None, is_open_position=False):
         super().__init__(parent)
-        title = f"[{company}] Current Holdings" if is_open_position else f"[{company}] Detailed Trading History"
+        title = (tr(f"[{company}] 보유 현황", f"[{company}] Current Holdings") if is_open_position
+                 else tr(f"[{company}] 상세 거래 내역", f"[{company}] Detailed Trading History"))
         self.setWindowTitle(title)
         fit_to_screen(self, 1000, 600)
 
@@ -34,9 +35,13 @@ class StockTradeHistoryDialog(QDialog):
         # Table
         tbl = QTableWidget()
         if is_open_position:
-            cols = ["Buy Date", "Buy Price", "Buy Qty", "Buy Amount", "Status", "Current Price", "Current Qty", "Current Amount", "P/L", "P/L(%)"]
+            cols = [tr("매수일", "Buy Date"), tr("매수가", "Buy Price"), tr("매수 수량", "Buy Qty"), tr("매수 금액", "Buy Amount"),
+                    tr("상태", "Status"), tr("현재가", "Current Price"), tr("현재 수량", "Current Qty"),
+                    tr("평가 금액", "Current Amount"), tr("손익", "P/L"), tr("손익(%)", "P/L(%)")]
         else:
-            cols = ["Buy Date", "Buy Price", "Buy Qty", "Buy Amount", "Days", "Sell Date", "Sell Price", "Sell Qty", "Sell Amount", "P/L", "P/L(%)"]
+            cols = [tr("매수일", "Buy Date"), tr("매수가", "Buy Price"), tr("매수 수량", "Buy Qty"), tr("매수 금액", "Buy Amount"),
+                    tr("일수", "Days"), tr("매도일", "Sell Date"), tr("매도가", "Sell Price"), tr("매도 수량", "Sell Qty"),
+                    tr("매도 금액", "Sell Amount"), tr("손익", "P/L"), tr("손익(%)", "P/L(%)")]
         tbl.setColumnCount(len(cols))
         tbl.setHorizontalHeaderLabels(cols)
         # open: data rows + total row + weight row; closed: data rows + total row
@@ -67,7 +72,7 @@ class StockTradeHistoryDialog(QDialog):
 
             if is_open_position:
                 # Open: col4=Status, col5=CurrPrice, col6=CurrQty, col7=CurrAmt, col8=P/L, col9=P/L%
-                tbl.setItem(r, 4, _si("Open"))
+                tbl.setItem(r, 4, _si(tr("보유 중", "Open")))
                 curr_price = rec.get("curr_price", 0)
                 qty = rec.get("qty", 0)
                 tbl.setItem(r, 5, _ni(curr_price))
@@ -120,7 +125,7 @@ class StockTradeHistoryDialog(QDialog):
         if is_open_position:
             # Span cols 0-2 for "Total" label
             tbl.setSpan(total_row, 0, 1, 3)
-            tbl.setItem(total_row, 0, _bold_label("Total"))
+            tbl.setItem(total_row, 0, _bold_label(tr("합계", "Total")))
             # Buy Amount (col 3)
             tbl.setItem(total_row, 3, _bold_ni(total_buy))
             # Status col blank
@@ -149,7 +154,7 @@ class StockTradeHistoryDialog(QDialog):
         else:
             # Closed: 11 cols - span 0-3 for "Total", col4(Days) blank, col5-8 sell section, col9=P/L, col10=P/L%
             tbl.setSpan(total_row, 0, 1, 4)
-            tbl.setItem(total_row, 0, _bold_label("Total"))
+            tbl.setItem(total_row, 0, _bold_label(tr("합계", "Total")))
             tbl.setItem(total_row, 4, QTableWidgetItem(""))  # Days blank
             tbl.setSpan(total_row, 5, 1, 3)
             tbl.setItem(total_row, 5, QTableWidgetItem(""))

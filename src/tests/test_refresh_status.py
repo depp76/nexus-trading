@@ -32,7 +32,7 @@ class TestLightweightFailure(unittest.TestCase):
     def test_no_quotes_is_a_failure(self):
         with patch("data_fetcher.fetch_naver_realtime_prices", return_value={}):
             failures, finished = _run(UniverseLightweightFetchThread(_KR))
-        self.assertEqual(failures, ["no quotes received (Naver/Yahoo)"])
+        self.assertEqual(failures, ["시세를 받지 못함 (Naver/Yahoo)"])
         self.assertEqual(len(finished), 1)   # finished_all still fires (table keeps its data)
 
     def test_exception_is_a_failure(self):
@@ -61,7 +61,7 @@ class TestUniverseForwardsFailure(unittest.TestCase):
         tab._on_universe_lightweight_loaded(list(tab.all_data))
         self.assertEqual(reasons, ["no quotes received (Naver/Yahoo)"])
         self.assertEqual(syncs, [])                       # last good update time is kept
-        self.assertTrue(statuses and statuses[-1].startswith("Auto-update failed"))
+        self.assertTrue(statuses and statuses[-1].startswith("자동 갱신 실패"))
         # the next good tick clears it
         tab._on_universe_lightweight_loaded(list(tab.all_data))
         self.assertEqual(len(syncs), 1)
@@ -89,7 +89,7 @@ class TestRefreshState(unittest.TestCase):
 
     def test_failed_tooltip_has_time_and_reason(self):
         _, tip = refresh_state(True, None, (self.NOW, "boom"), self.NOW, 60000)
-        self.assertEqual(tip, "Update failed at 10:00:00: boom")
+        self.assertEqual(tip, "10:00:00 갱신 실패: boom")
 
 
 class TestHeatLegend(unittest.TestCase):
@@ -97,9 +97,9 @@ class TestHeatLegend(unittest.TestCase):
         from ui.widgets import HeatLegend, COLUMNS
         scale = {c.key: c.scale for c in COLUMNS}
         text = HeatLegend.scale_text()
-        self.assertIn(f"Chg ±{scale['chg']:g}%", text)
+        self.assertIn(f"등락 ±{scale['chg']:g}%", text)
         self.assertIn(f"±{scale['d3']:g}%", text)
-        self.assertIn(f"MA Div ±{scale['ma20div']:g} from 100", text)
+        self.assertIn(f"MA Div 100 ±{scale['ma20div']:g}", text)
 
     def test_universe_footer_shows_legend(self):
         from ui.universe_tab import UniverseTab
@@ -139,7 +139,7 @@ class TestRealtimePriceFailure(unittest.TestCase):
 
     def test_no_quotes(self):
         failures, fetched = self._run(return_value={})
-        self.assertEqual(failures, ["no quotes received (KIS/Yahoo)"])
+        self.assertEqual(failures, ["시세를 받지 못함 (KIS/Yahoo)"])
         self.assertEqual(fetched, [{}])
 
     def test_exception_no_longer_kills_the_thread_silently(self):
@@ -175,7 +175,7 @@ class TestFullRefreshFailure(unittest.TestCase):
             tab.on_finished_all([self._row("A2", "KOSPI"), self._row("^KS11", "Index")])
         tickers = {x["ticker"] for x in tab.all_data}
         self.assertEqual(tickers, {"A2", "^KS11", "B"})   # KOSDAQ's old row kept, KOSPI replaced
-        self.assertEqual(reasons, ["full refresh: no data for KOSDAQ"])
+        self.assertEqual(reasons, ["전체 갱신: no data for KOSDAQ"])
         self.assertEqual(syncs, [])
         save.assert_called_once()
 
@@ -195,7 +195,7 @@ class TestFullRefreshFailure(unittest.TestCase):
              patch("threads.fetch_threads.fetch_market_data",
                    side_effect=lambda m, n, cb: [{"ticker": "A"}] if m == "KOSPI" else []):
             t.run()
-        self.assertEqual(failures, [("no data for KOSDAQ", ["KOSDAQ"])])
+        self.assertEqual(failures, [("데이터 없음: KOSDAQ", ["KOSDAQ"])])
 
     def test_thread_fetches_only_the_given_markets_and_dedupes_us_names(self):
         """docs/ui.md 2.1: only switched-on markets are fetched; a name in

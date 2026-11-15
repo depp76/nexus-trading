@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from i18n import tr
 from paths import BASE_DIR, DB_FILE, CUSTOM_SETTINGS_FILE, ARCHIVE_DIR
 from data_fetcher import (
     fetch_market_data,
@@ -371,7 +372,7 @@ class AllDataFetchThread(QThread):
         finally:
             if failed_parts:
                 parts = list(dict.fromkeys(failed_parts))
-                self.failed.emit(f"no data for {', '.join(parts)}", parts)
+                self.failed.emit(tr(f"데이터 없음: {', '.join(parts)}", f"no data for {', '.join(parts)}"), parts)
             self.finished_all.emit(all_data)
 
 
@@ -425,15 +426,16 @@ class UniverseLightweightFetchThread(QThread):
 
             prices_dict = {}
             if kr_tickers:
-                self.status_message.emit(f"Fetching KR quotes... (Naver, {len(kr_tickers)} tickers)")
+                self.status_message.emit(tr(f"국내 시세 받는 중... (Naver, {len(kr_tickers)}종목)",
+                                             f"Fetching KR quotes... (Naver, {len(kr_tickers)} tickers)"))
                 prices_dict.update(fetch_naver_realtime_prices(kr_tickers))
             if kr_index_tickers:
                 prices_dict.update(fetch_naver_realtime_index_prices(kr_index_tickers))
             if us_yf_tickers:
-                self.status_message.emit("Waiting for Yahoo Finance response...")
+                self.status_message.emit(tr("Yahoo Finance 응답 기다리는 중...", "Waiting for Yahoo Finance response..."))
                 prices_dict.update(fetch_us_realtime_prices(us_yf_tickers))
             if (kr_tickers or kr_index_tickers or us_yf_tickers) and not prices_dict:
-                error = "no quotes received (Naver/Yahoo)"
+                error = tr("시세를 받지 못함 (Naver/Yahoo)", "no quotes received (Naver/Yahoo)")
 
             updated_count = 0
             for item in self.current_data:
@@ -504,7 +506,7 @@ class PositionPriceFetchThread(QThread):
 
         # ---Build name - KRX code mapping ---
         name_to_info: dict = {}
-        self.status_message.emit("Looking up ticker codes...")
+        self.status_message.emit(tr("종목 코드 찾는 중...", "Looking up ticker codes..."))
         try:
             # Use cached listings with pre-computed NameNorm (no extra .copy() or regex per call)
             df_krx = _get_listing_with_norm('KRX-DESC')
@@ -553,7 +555,8 @@ class PositionPriceFetchThread(QThread):
         unique_codes = list({v["code"] for v in name_to_info.values()})
         price_map: dict = {}
         if unique_codes:
-            self.status_message.emit(f"Fetching KR quotes... (Naver, {len(unique_codes)} tickers)")
+            self.status_message.emit(tr(f"국내 시세 받는 중... (Naver, {len(unique_codes)}종목)",
+                                         f"Fetching KR quotes... (Naver, {len(unique_codes)} tickers)"))
             try:
                 price_map = fetch_naver_realtime_prices(unique_codes)
             except Exception as e:
@@ -575,7 +578,7 @@ class PositionPriceFetchThread(QThread):
         us_price_map: dict = {}
         us_price_map_usd: dict = {}
         if us_names:
-            self.status_message.emit("Waiting for Yahoo Finance response...")
+            self.status_message.emit(tr("Yahoo Finance 응답 기다리는 중...", "Waiting for Yahoo Finance response..."))
             try:
                 from data_fetcher import yf_quote_batch
                 fx_rate = get_usd_krw_rate()
@@ -745,7 +748,7 @@ class AutoBackupThread(QThread):
             rel_dest = os.path.relpath(dest_dir, BASE_DIR)
             logger.info("Auto-backup completed: %s (%s)", rel_dest,
                         ", ".join(os.path.basename(f) for f in existing))
-            self.backup_done.emit(f"Auto-backup complete: {rel_dest}")
+            self.backup_done.emit(tr(f"자동 백업 완료: {rel_dest}", f"Auto-backup complete: {rel_dest}"))
         except Exception:
             logger.warning("Auto-backup failed", exc_info=True)
 

@@ -67,13 +67,13 @@ ColSpec = namedtuple("ColSpec", ["key", "label", "min_width", "weight", "group",
 _NARROW_W, _NARROW_WEIGHT = 58, 0.62
 
 COLUMNS = [
-    ColSpec("identity",  "Name / Ticker", 150, 2.4,  None,       None),
-    ColSpec("cap",       "Cap",            80, None, "price",    None),
+    ColSpec("identity",  tr("종목 / 코드", "Name / Ticker"), 150, 2.4,  None,       None),
+    ColSpec("cap",       tr("시총", "Cap"),    80, None, "price",    None),
     ColSpec("tper",      "tPER",           54, 0.55, "value",    None),
     ColSpec("fper",      "fPER",           54, 0.55, "value",    None),
-    ColSpec("price",     "Price",          80, None, "price",    None),
-    ColSpec("chg",       "Chg",            _NARROW_W, _NARROW_WEIGHT, "price",    5),
-    ColSpec("range52w",  "52W Range",     112, 1.5,  "price",    None),
+    ColSpec("price",     tr("가격", "Price"),  80, None, "price",    None),
+    ColSpec("chg",       tr("등락", "Chg"),    _NARROW_W, _NARROW_WEIGHT, "price",    5),
+    ColSpec("range52w",  tr("52주 범위", "52W Range"), 112, 1.5,  "price",    None),
     ColSpec("ma20div",   "MA20 Div",       _NARROW_W, _NARROW_WEIGHT, "momentum", 20),
     ColSpec("ma50div",   "MA50 Div",       _NARROW_W, _NARROW_WEIGHT, "momentum", 20),
     ColSpec("d3",        "3D",             _NARROW_W, _NARROW_WEIGHT, "momentum", 10),
@@ -81,7 +81,7 @@ COLUMNS = [
     ColSpec("d20",       "20D",            _NARROW_W, _NARROW_WEIGHT, "momentum", 10),
     ColSpec("d60",       "60D",            _NARROW_W, _NARROW_WEIGHT, "momentum", 10),
     ColSpec("d120",      "120D",           _NARROW_W, _NARROW_WEIGHT, "momentum", 10),
-    ColSpec("trend",     "Trend",          80, 1.0,  "momentum", None),
+    ColSpec("trend",     tr("추세", "Trend"),  80, 1.0,  "momentum", None),
 ]
 
 # Column indices as constants -- COLUMNS' own order is the single source of
@@ -130,15 +130,19 @@ class HeatLegend(QWidget):
         super().__init__(parent)
         self.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
         self.text = self.scale_text()
-        self.setToolTip("Cell tint grows with the size of the move and is full at these values; "
-                        "blue = up, red = down. Yields use +-25 bp.")
+        self.setToolTip(tr("셀 색은 변동이 클수록 짙어지고 아래 값에서 가장 짙습니다. "
+                           "파랑 = 상승, 빨강 = 하락. 금리는 ±25bp 기준.",
+                           "Cell tint grows with the size of the move and is full at these values; "
+                           "blue = up, red = down. Yields use +-25 bp."))
 
     @staticmethod
     def scale_text() -> str:
         def scale(key):
             return next(c.scale for c in COLUMNS if c.key == key)
-        return (f"full at  Chg \u00b1{scale('chg'):g}%  \u00b7  3D\u2013120D \u00b1{scale('d3'):g}%  "
-                f"\u00b7  MA Div \u00b1{scale('ma20div'):g} from 100")
+        return tr(f"\ucd5c\ub300 \uc0c9  \ub4f1\ub77d \u00b1{scale('chg'):g}%  \u00b7  3D\u2013120D \u00b1{scale('d3'):g}%  "
+                  f"\u00b7  MA Div 100 \u00b1{scale('ma20div'):g}",
+                  f"full at  Chg \u00b1{scale('chg'):g}%  \u00b7  3D\u2013120D \u00b1{scale('d3'):g}%  "
+                  f"\u00b7  MA Div \u00b1{scale('ma20div'):g} from 100")
 
     def sizeHint(self):
         fm = self.fontMetrics()
@@ -168,6 +172,12 @@ class HeatLegend(QWidget):
         x += fm.horizontalAdvance("+") + 10
         p.drawText(x, mid + fm.ascent() // 2 - 1, self.text)
         p.end()
+
+
+def _market_label(market: str) -> str:
+    """A row's market as shown in its identity meta: the index rows'
+    "Index" value in the UI language, market names as-is."""
+    return tr("지수", "Index") if market == "Index" else market
 
 
 def _fmt_change(v: float, mode: str) -> str:
@@ -400,7 +410,7 @@ class RangeFilterPopup(QFrame):
             if value != value or value in (float("inf"), float("-inf")):
                 raise ValueError
         except ValueError:
-            _set_field_error(edit, "Enter a number")
+            _set_field_error(edit, tr("숫자를 입력하세요", "Enter a number"))
             return None, False
         _set_field_error(edit, "")
         return value, True
@@ -558,7 +568,8 @@ class StockTable(QTableWidget):
         # because the last column's own grid line already sits on the
         # viewport's last pixel and a frame border there would make 2 px.
         self.setStyleSheet("QTableWidget { border-right: none; }")
-        self._empty_hint = _EmptyHint(self, "No stocks loaded yet -- Refresh fetches the universe")
+        self._empty_hint = _EmptyHint(self, tr("아직 불러온 종목이 없습니다 -- 새로고침으로 유니버스를 받습니다",
+                                                  "No stocks loaded yet -- Refresh fetches the universe"))
         self._identity_delegate = IdentityDelegate(self)
         self._range_delegate = RangeBarDelegate(self)
         self._trend_delegate = TrendDelegate(self)
@@ -1070,7 +1081,7 @@ class StockTable(QTableWidget):
             "market": item.get('market', ''),
             # The Universe's pinned Trend Score rows carry a "Top 3 (+0.79)" /
             # "Bottom 7 (-0.41)" tag after the market (universe_tab._sort_all_data).
-            "meta": f"{ticker} · {item.get('market', '')}"
+            "meta": f"{ticker} · {_market_label(item.get('market', ''))}"
                     + (f" · {item['trend_rank']}" if item.get('trend_rank') else ""),
             "status": status,
             "mode": mode,

@@ -281,8 +281,8 @@ class TestTrendScoreButton(unittest.TestCase):
              patch("ui.universe_tab.QMessageBox.information") as info:
             tab._on_trend_score_clicked()
         info.assert_not_called()
-        self.assertTrue(any("no KOSPI/KOSDAQ rows" in s for s in statuses), statuses)
-        self.assertIn("no KOSPI/KOSDAQ rows", tab.footer_lbl.text())
+        self.assertTrue(any("채점할 KOSPI/KOSDAQ 종목이 없습니다" in s for s in statuses), statuses)
+        self.assertIn("채점할 KOSPI/KOSDAQ 종목이 없습니다", tab.footer_lbl.text())
         self.assertEqual(_FakeScoreThread.instances, [])
         self.assertTrue(tab.trend_score_btn.isEnabled())
 
@@ -311,7 +311,7 @@ class TestTrendScoreButton(unittest.TestCase):
         self.assertFalse(tab.trend_score_btn.isChecked())
         worker = _FakeScoreThread.instances[0]
         worker.progress.emit("Daily history 25/40")
-        self.assertIn("Trend Score: Daily history 25/40", statuses[-1])
+        self.assertIn("추세 점수: Daily history 25/40", statuses[-1])
 
         rec = self._rec()
         top = [s.ticker for s in rec.top]
@@ -325,13 +325,13 @@ class TestTrendScoreButton(unittest.TestCase):
         self.assertTrue(tab.trend_score_btn.isChecked())
         # Top rows in rank order, then Bottom rows, then the rest in cap order.
         self.assertEqual([d["ticker"] for d in tab.all_data], top + bottom + ["AAA", "BBB", "THIN"])
-        self.assertTrue(tab.all_data[0]["trend_rank"].startswith("Top 1 ("))
-        self.assertTrue(tab.all_data[len(top)]["trend_rank"].startswith("Bottom 1 ("))
+        self.assertTrue(tab.all_data[0]["trend_rank"].startswith("상위 1 ("))
+        self.assertTrue(tab.all_data[len(top)]["trend_rank"].startswith("하위 1 ("))
         self.assertNotIn("trend_rank", tab.all_data[-1])
         meta = tab.table.item(0, 0).data(0x0100)["meta"]      # identity UserRole payload
-        self.assertIn(" · Top 1 (", meta)
+        self.assertIn(" · 상위 1 (", meta)
         self.assertEqual(tab.table.item(0, 0).text(), f"S{top[0]}")
-        self.assertIn("pinned", statuses[-1])
+        self.assertIn("고정", statuses[-1])
 
         # A full refresh keeps the pin (the labels are re-applied to the new dicts).
         fresh = [_stock(t, cap) for t, cap in (("BBB", 600), ("PULL", 400), ("UP", 800), ("BOUNCE", 500))]
@@ -340,7 +340,7 @@ class TestTrendScoreButton(unittest.TestCase):
             tab.on_finished_all(fresh)
         self.assertEqual([d["ticker"] for d in tab.all_data][:2], top)
         self.assertEqual(tab.all_data[2]["ticker"], "BOUNCE")
-        self.assertTrue(tab.all_data[0]["trend_rank"].startswith("Top 1"))
+        self.assertTrue(tab.all_data[0]["trend_rank"].startswith("상위 1"))
 
         # Clicking again unpins: default cap order, labels gone, button unchecked.
         tab._on_trend_score_clicked()
@@ -348,8 +348,8 @@ class TestTrendScoreButton(unittest.TestCase):
         self.assertEqual(tab._trend_score_order, {})
         self.assertEqual([d["ticker"] for d in tab.all_data], ["UP", "BBB", "BOUNCE", "PULL"])
         self.assertFalse(any("trend_rank" in d for d in tab.all_data))
-        self.assertNotIn("Top", tab.table.item(0, 0).data(0x0100)["meta"])
-        self.assertIn("restored", statuses[-1])
+        self.assertNotIn("상위", tab.table.item(0, 0).data(0x0100)["meta"])
+        self.assertIn("복원", statuses[-1])
 
     def test_failure_leaves_the_order_alone_and_unchecks(self):
         tab = self._score_tab()
@@ -389,7 +389,7 @@ class TestTrendScoreButton(unittest.TestCase):
         self.assertFalse(tab.trend_score_btn.isChecked())
         self.assertEqual(tab._trend_score_order, {})
         self.assertFalse(any("trend_rank" in d for d in tab.all_data))
-        self.assertNotIn("Top", tab.table.item(0, 0).data(0x0100)["meta"])
+        self.assertNotIn("상위", tab.table.item(0, 0).data(0x0100)["meta"])
         self.assertEqual(tab.table._sort_col, 1)                 # the user's sort stays
         with patch.object(tab, "load_custom_settings"):
             tab.custom_settings = {"added": [], "deleted": [], "highlights": {}}

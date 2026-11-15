@@ -65,7 +65,7 @@ def build_holdings_summary(parent, closed_data: list, open_data: list):
 
     # ---Build dialog ---
     dlg = QDialog(parent)
-    dlg.setWindowTitle("Holdings Summary - P/L by Company")
+    dlg.setWindowTitle(tr("종목별 요약 - 종목별 손익", "Holdings Summary - P/L by Company"))
     fit_to_screen(dlg, 800, min(100 + 28 * len(rows) + 130, 780))
 
     v = QVBoxLayout(dlg)
@@ -74,7 +74,8 @@ def build_holdings_summary(parent, closed_data: list, open_data: list):
 
     # 5 columns: Company | Buy Amount | Value (sell amount if closed, else current) | P/L | P/L(%)
     tbl = QTableWidget(len(rows), 5)
-    tbl.setHorizontalHeaderLabels(["Name", "Buy Amount", "Value", "P/L", "P/L(%)"])
+    tbl.setHorizontalHeaderLabels([tr("종목", "Name"), tr("매수 금액", "Buy Amount"), tr("평가액", "Value"),
+                                   tr("손익", "P/L"), tr("손익(%)", "P/L(%)")])
     tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
     tbl.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
     tbl.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -127,9 +128,9 @@ def build_holdings_summary(parent, closed_data: list, open_data: list):
         return f"<b style='color:{color}'>{sign}{val:,.0f} KRW</b>"
 
     subtotal_html = (
-        f"(+) Total Profit:  {_html_val(pos_pl, positive=True)}"
-        f"&nbsp;&nbsp;&nbsp;&nbsp;"
-        f"(-) Total Loss:  {_html_val(neg_pl, positive=False)}"
+        tr("(+) 총 이익:  ", "(+) Total Profit:  ") + _html_val(pos_pl, positive=True)
+        + "&nbsp;&nbsp;&nbsp;&nbsp;"
+        + tr("(-) 총 손실:  ", "(-) Total Loss:  ") + _html_val(neg_pl, positive=False)
     )
     subtotal_lbl = QLabel(subtotal_html)
     subtotal_lbl.setTextFormat(Qt.TextFormat.RichText)

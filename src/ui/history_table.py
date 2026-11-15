@@ -1,5 +1,6 @@
 """ui/history_table.py — Cell factories and row rendering for the Trading History
 table (split out of TradingHistoryTab on 2026-09-17)."""
+from i18n import tr
 from PyQt6.QtWidgets import QTableWidget, QTableWidgetItem, QLabel
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
@@ -34,28 +35,36 @@ _DASH_COLOR = TEXT_EMPTY
 # scale is unused here (no heatmap-background columns in this table).
 # ---------------------------------------------------------------------------
 
+# Column-group labels: display only (GroupedHeaderView paints them; nothing
+# compares them), so they are translated in place.
+_G_TRADING = tr("거래", "Trading")
+_G_BUY = tr("매수", "Buy")
+_G_SELL = tr("매도", "Sell")
+_G_POSITION = tr("보유", "Position")
+_G_PAST = tr("과거 수익률", "Past")
+
 COLUMNS = [
-    ColSpec("company",    "Company", 140, None, "Trading",  None),  # flex-absorbing, see _fit_columns
-    ColSpec("market",     "Market",   62, None, "Trading",  None),
-    ColSpec("ticker",     "Ticker",   64, None, "Trading",  None),
-    ColSpec("buy_date",   "Date",     84, None, "Buy",      None),
-    ColSpec("buy_price",  "Price",    78, None, "Buy",      None),
-    ColSpec("buy_qty",    "Qty",      55, None, "Buy",      None),
-    ColSpec("buy_amount", "Amount",   85, None, "Buy",      None),
-    ColSpec("sell_date",  "Date",     84, None, "Sell",     None),
-    ColSpec("sell_days",  "Days",     40, None, "Sell",     None),
-    ColSpec("sell_price", "Price",    78, None, "Sell",     None),
-    ColSpec("sell_qty",   "Qty",      55, None, "Sell",     None),
-    ColSpec("sell_amount","Amount",   85, None, "Sell",     None),
-    ColSpec("sell_pl",    "P/L",      85, None, "Sell",     None),
-    ColSpec("sell_pl_pct","P/L(%)",   70, None, "Sell",     None),
-    ColSpec("pos_days",   "Days",     40, None, "Position", None),
-    ColSpec("pos_price",  "Price",    78, None, "Position", None),
-    ColSpec("pos_pl",     "P/L",      85, None, "Position", None),
-    ColSpec("pos_pl_pct", "P/L(%)",   70, None, "Position", None),
-    ColSpec("p5",         "5D",       70, None, "Past",     None),
-    ColSpec("p10",        "10D",      70, None, "Past",     None),
-    ColSpec("p20",        "20D",      70, None, "Past",     None),
+    ColSpec("company",    tr("종목", "Company"), 140, None, _G_TRADING,  None),  # flex-absorbing, see _fit_columns
+    ColSpec("market",     tr("시장", "Market"),   62, None, _G_TRADING,  None),
+    ColSpec("ticker",     tr("코드", "Ticker"),   64, None, _G_TRADING,  None),
+    ColSpec("buy_date",   tr("날짜", "Date"),     84, None, _G_BUY,      None),
+    ColSpec("buy_price",  tr("가격", "Price"),    78, None, _G_BUY,      None),
+    ColSpec("buy_qty",    tr("수량", "Qty"),      55, None, _G_BUY,      None),
+    ColSpec("buy_amount", tr("금액", "Amount"),   85, None, _G_BUY,      None),
+    ColSpec("sell_date",  tr("날짜", "Date"),     84, None, _G_SELL,     None),
+    ColSpec("sell_days",  tr("일수", "Days"),     40, None, _G_SELL,     None),
+    ColSpec("sell_price", tr("가격", "Price"),    78, None, _G_SELL,     None),
+    ColSpec("sell_qty",   tr("수량", "Qty"),      55, None, _G_SELL,     None),
+    ColSpec("sell_amount",tr("금액", "Amount"),   85, None, _G_SELL,     None),
+    ColSpec("sell_pl",    tr("손익", "P/L"),      85, None, _G_SELL,     None),
+    ColSpec("sell_pl_pct",tr("손익(%)", "P/L(%)"), 70, None, _G_SELL,     None),
+    ColSpec("pos_days",   tr("일수", "Days"),     40, None, _G_POSITION, None),
+    ColSpec("pos_price",  tr("가격", "Price"),    78, None, _G_POSITION, None),
+    ColSpec("pos_pl",     tr("손익", "P/L"),      85, None, _G_POSITION, None),
+    ColSpec("pos_pl_pct", tr("손익(%)", "P/L(%)"), 70, None, _G_POSITION, None),
+    ColSpec("p5",         "5D",       70, None, _G_PAST,     None),
+    ColSpec("p10",        "10D",      70, None, _G_PAST,     None),
+    ColSpec("p20",        "20D",      70, None, _G_PAST,     None),
 ]
 
 
@@ -134,7 +143,7 @@ def dash():
 
 
 def loading_item():
-    it = QTableWidgetItem("Total")
+    it = QTableWidgetItem(tr("조회 중", "Total"))
     it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
     it.setForeground(QColor(TEXT_FAINT))
     return it
@@ -158,10 +167,10 @@ def _monthly_summary_label(rec: dict) -> QLabel:
 
     html = (
         f'<span style="font-weight:600; color:{ACCENT_TEXT};">{month_label}</span>'
-        '&nbsp;&nbsp;&nbsp;' + field("Trades", rec.get("trade_count", 0)) +
-        '&nbsp;&nbsp;&nbsp;' + field("Buy", f"{rec.get('buy_amount', 0.0):,.0f}") +
-        '&nbsp;&nbsp;&nbsp;' + field("Realized P/L", f"{pl:+,.0f}", pl_color) +
-        '&nbsp;&nbsp;&nbsp;' + field("Win rate", win_text)
+        '&nbsp;&nbsp;&nbsp;' + field(tr("거래 수", "Trades"), rec.get("trade_count", 0)) +
+        '&nbsp;&nbsp;&nbsp;' + field(tr("매수", "Buy"), f"{rec.get('buy_amount', 0.0):,.0f}") +
+        '&nbsp;&nbsp;&nbsp;' + field(tr("실현 손익", "Realized P/L"), f"{pl:+,.0f}", pl_color) +
+        '&nbsp;&nbsp;&nbsp;' + field(tr("승률", "Win rate"), win_text)
     )
     lbl = QLabel(html)
     lbl.setStyleSheet(f"background: {GRP_BG}; padding-left: 12px; font-size: 9pt;")

@@ -179,18 +179,18 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         # Headline figures first at the KPI size, then the supporting ones
         # (and the three inputs) at body size after a divider (docs/ui.md
         # 8.16): every value and input stays in the strip.
-        cell("total_asset", "Total Assets", "Valuation + cash")
-        cell("total_pl", "Total P/L", "Realized + unrealized")
-        cell("total_pl_pct", "Total P/L (%)", "vs Principal")
+        cell("total_asset", tr("총자산", "Total Assets"), tr("평가액 + 현금", "Valuation + cash"))
+        cell("total_pl", tr("총 손익", "Total P/L"), tr("실현 + 평가 손익", "Realized + unrealized"))
+        cell("total_pl_pct", tr("총 손익 (%)", "Total P/L (%)"), tr("원금 대비", "vs Principal"))
         card.add_divider()
-        cell("cumulative_asset", "Cumulative Assets", "Live NAV + withdrawals", primary=False)
-        self._principal_edit = self._make_money_input("e.g. 50,000,000")
-        cell("principal", "Principal", "Deposits − withdrawals", self._principal_edit, primary=False)
-        cell("cost_basis", "Cost Basis", "Open positions cost", primary=False)
-        self._deposit_edit = self._make_money_input("e.g. 10,000,000")
-        cell("deposit", "Deposit", "", self._deposit_edit, primary=False)
-        self._withdrawal_edit = self._make_money_input("e.g. 5,000,000")
-        cell("withdrawal", "Withdrawal", "Cumulative", self._withdrawal_edit, primary=False)
+        cell("cumulative_asset", tr("누적 자산", "Cumulative Assets"), tr("실시간 평가액 + 출금액", "Live NAV + withdrawals"), primary=False)
+        self._principal_edit = self._make_money_input(tr("예: 50,000,000", "e.g. 50,000,000"))
+        cell("principal", tr("원금", "Principal"), tr("입금 − 출금", "Deposits − withdrawals"), self._principal_edit, primary=False)
+        cell("cost_basis", tr("매입 원가", "Cost Basis"), tr("보유 종목 매입액", "Open positions cost"), primary=False)
+        self._deposit_edit = self._make_money_input(tr("예: 10,000,000", "e.g. 10,000,000"))
+        cell("deposit", tr("예수금", "Deposit"), "", self._deposit_edit, primary=False)
+        self._withdrawal_edit = self._make_money_input(tr("예: 5,000,000", "e.g. 5,000,000"))
+        cell("withdrawal", tr("출금", "Withdrawal"), tr("누적", "Cumulative"), self._withdrawal_edit, primary=False)
 
         # Every cell has the same stretch factor, so the columns come out
         # equal whenever the window is wide enough; when it is not, each cell
@@ -313,7 +313,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         tbl = self._table = SectionTable(SECTIONS)
         tbl.setColumnCount(len(self._COLS))
         # Zebra off: fill_table_rows paints its own stripes per item.
-        setup_table(tbl, zebra=False, empty_text="No trades yet -- Add Trade records one")
+        setup_table(tbl, zebra=False, empty_text=tr("거래가 없습니다 -- 거래 추가로 기록하세요", "No trades yet -- Add Trade records one"))
         tbl.setSortingEnabled(False)
         tbl.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         # Vertical bar always shown: with AsNeeded it came and went as the
@@ -473,7 +473,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
 
     def _show_holdings_summary(self):
         if not show_holdings_summary(self, self._closed_data, self._open_data):
-            self.status_message.emit("Summary: no trades recorded yet")
+            self.status_message.emit(tr("종목별 요약: 기록된 거래가 없습니다", "Summary: no trades recorded yet"))
 
     def _save_overrides(self, records: list) -> bool:
         """Persist just the given edited records back to the DB in one
@@ -633,7 +633,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         ), '_price_thread')
         thread.prices_ready.connect(self._on_prices_ready)
         thread.status_message.connect(self.status_message.emit)
-        self._path_label.setText("Loading current prices...")
+        self._path_label.setText(tr("현재가 불러오는 중...", "Loading current prices..."))
         thread.start()
 
     def _on_prices_ready(self, results: list, request_id: int):
@@ -731,7 +731,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         if self._deposit_thread is not None and self._deposit_thread.isRunning():
             return
         self._fetch_dep_btn.setEnabled(False)
-        self.status_message.emit("Fetching account deposit from KIS...")
+        self.status_message.emit(tr("KIS에서 계좌 예수금 조회 중...", "Fetching account deposit from KIS..."))
         self._track_thread(AccountDepositThread(), '_deposit_thread')
         self._deposit_thread.finished.connect(self._on_account_deposit_fetched)
         self._deposit_thread.start()
@@ -739,14 +739,14 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
     def _on_account_deposit_fetched(self, val: float, err: str):
         self._fetch_dep_btn.setEnabled(True)
         if err:
-            self.status_message.emit("Account deposit fetch failed")
+            self.status_message.emit(tr("계좌 예수금 조회 실패", "Account deposit fetch failed"))
             QMessageBox.critical(self, _TITLE, tr(f"계좌 예수금을 조회하지 못했습니다:\n{err}", f"Failed to fetch the account deposit:\n{err}"))
             return
         self._deposit_edit.setText(f"{int(val):,}")
         self._on_deposit_changed()
         # Result on the status bar (docs/ui.md 8.4: one place for transient
         # results), not a modal -- the field stays focused for an edit.
-        self.status_message.emit(f"Account deposit: {int(val):,} KRW (estimate) -- filled into Deposit")
+        self.status_message.emit(tr(f"계좌 예수금: {int(val):,} KRW (추정) -- 예수금에 입력했습니다", f"Account deposit: {int(val):,} KRW (estimate) -- filled into Deposit"))
         self._deposit_edit.selectAll()
         self._deposit_edit.setFocus()
 
@@ -782,12 +782,12 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
                 if tooltip:
                     val_lbl.setToolTip(tooltip)
             if key == "deposit":
-                sub_lbl.setText(f"{agg['deposit_pct']:.1f}% of invested")
+                sub_lbl.setText(tr(f"투자금의 {agg['deposit_pct']:.1f}%", f"{agg['deposit_pct']:.1f}% of invested"))
 
         set_kpi("total_asset", f"{nav:,.0f}")
         set_kpi("cumulative_asset", f"{cumulative_asset:,.0f}")
         set_kpi("total_pl", f"{total_pl:+,.0f}", _pos_color(total_pl),
-                 tooltip=f"Cumulative Assets ({cumulative_asset:,.0f}) - Principal ({principal:,.0f})")
+                 tooltip=tr(f"누적 자산 ({cumulative_asset:,.0f}) - 원금 ({principal:,.0f})", f"Cumulative Assets ({cumulative_asset:,.0f}) - Principal ({principal:,.0f})"))
         set_kpi("total_pl_pct", f"{agg['total_pl_pct']:+.1f}%", _pos_color(agg["total_pl_pct"]))
         set_kpi("cost_basis", f"{agg['cost_total']:,.0f}")
         set_kpi("deposit", None)  # value is the live QLineEdit; only the sub-label updates
@@ -814,7 +814,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
                     matched_company = comp
                 
         if not matches:
-            self.status_message.emit(f"No completed trades found for '{self._search_stock_pl_edit.text()}'")
+            self.status_message.emit(tr(f"'{self._search_stock_pl_edit.text()}'의 매도 완료 거래가 없습니다", f"No completed trades found for '{self._search_stock_pl_edit.text()}'"))
             return
             
         dlg = StockTradeHistoryDialog(matched_company, matches, total_pl, total_buy, total_sell, self)
@@ -878,7 +878,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
                     matched_company = comp
 
         if not matches:
-            self.status_message.emit(f"No trades found for '{text}'")
+            self.status_message.emit(tr(f"'{text}'의 거래가 없습니다", f"No trades found for '{text}'"))
             self._open_stocks_combo.blockSignals(True)
             self._open_stocks_combo.setCurrentIndex(0)
             self._open_stocks_combo.blockSignals(False)
@@ -995,7 +995,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         # already).
         if col == 0:
             curr_val = rec.get("company", "")
-            new_str, ok = QInputDialog.getText(self, "Edit", "Company Name:", text=str(curr_val))
+            new_str, ok = QInputDialog.getText(self, tr("수정", "Edit"), tr("종목명:", "Company Name:"), text=str(curr_val))
             if ok and new_str.strip():
                 edited = dict(rec, company=new_str.strip(), is_overridden=True)
                 if not self._save_overrides([edited]):
@@ -1007,7 +1007,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
 
         if col == 2:
             curr_val = rec.get("ticker", "")
-            new_str, ok = QInputDialog.getText(self, "Edit", "Ticker:", text=str(curr_val))
+            new_str, ok = QInputDialog.getText(self, tr("수정", "Edit"), tr("코드:", "Ticker:"), text=str(curr_val))
             if ok and new_str.strip():
                 new_ticker = new_str.strip()
                 edited = dict(rec, ticker=new_ticker, is_overridden=True)
