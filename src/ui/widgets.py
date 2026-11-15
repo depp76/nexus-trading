@@ -595,6 +595,10 @@ class StockTable(QTableWidget):
         # min-widths exceed it, a real horizontal scrollbar should appear
         # instead of silently shrinking every column below its floor.
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # Vertical bar always shown so the viewport width -- and with it every
+        # flex column's width -- does not change when search / status /
+        # market filters show fewer rows than fit (2026-11-15).
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.doubleClicked.connect(self._on_row_activated)
 
         self._build_frozen_column()

@@ -316,6 +316,10 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         setup_table(tbl, zebra=False, empty_text="No trades yet -- Add Trade records one")
         tbl.setSortingEnabled(False)
         tbl.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # Vertical bar always shown: with AsNeeded it came and went as the
+        # toolbar filters changed the row count, the viewport width changed
+        # by the bar's width and _fit_columns resized Company (2026-11-15).
+        tbl.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
 
         grouped_hdr = GroupedHeaderView(SECTIONS, self._COLS, tbl)
         grouped_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
