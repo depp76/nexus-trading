@@ -73,7 +73,13 @@ class TrendScoreSection(QWidget):
         box.setSpacing(6)
         s = rec.scored.get(ticker) if rec is not None else None
 
-        # Title: the same style as the panel's table title above it.
+        self._add_title(box, rec)
+        self._add_summary(box, rec, s, ticker)
+        self._add_percentile_cards(box, s)
+        self._add_gate_rows(box, rec, s)
+
+    def _add_title(self, box: QVBoxLayout, rec) -> None:
+        """Title: the same style as the panel's table title above it."""
         title = QLabel(tr("추세 점수", "Trend Score")
                        + ((tr(f" · {rec.as_of:%Y-%m-%d} 기준", f" · as of {rec.as_of:%Y-%m-%d}"))
                           if rec is not None else ""))
@@ -82,7 +88,8 @@ class TrendScoreSection(QWidget):
         self.title_lbl = title
         box.addWidget(title)
 
-        # Summary: caption | weekly average (the score) | latest + rank.
+    def _add_summary(self, box: QVBoxLayout, rec, s, ticker: str) -> None:
+        """Summary: caption | weekly average (the score) | latest + rank."""
         summary = QHBoxLayout()
         summary.setSpacing(8)
         cap = QLabel(tr("주간 평균", "Weekly avg"))
@@ -110,7 +117,8 @@ class TrendScoreSection(QWidget):
             self.hint_lbl.setToolTip(NOT_SCORED_TEXT)
             self.total_lbl.setToolTip(NOT_SCORED_TEXT)
 
-        # Three percentile cards, always there ("-" without a score).
+    def _add_percentile_cards(self, box: QVBoxLayout, s) -> None:
+        """Three percentile cards, always there ("-" without a score)."""
         cards = QGridLayout()
         cards.setSpacing(6)
         self.cards: dict[str, KpiCard] = {}
@@ -125,7 +133,8 @@ class TrendScoreSection(QWidget):
             self.cards[key] = card
         box.addLayout(cards)
 
-        # Four gate rows, always there (neutral "-" badges without a score).
+    def _add_gate_rows(self, box: QVBoxLayout, rec, s) -> None:
+        """Four gate rows, always there (neutral "-" badges without a score)."""
         min_range = (rec.params if rec is not None else StrategyParams()).gate_range_min
         checks = [
             ("liquid", tr("유동성", "Liquidity"), (lambda x: x.liquid)),

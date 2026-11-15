@@ -142,6 +142,61 @@ class Features:
     regime_cols: np.ndarray | None = None
 
 
+def _relative_strength(ds, close: np.ndarray, idx: np.ndarray, by_market, p: StrategyParams) -> np.ndarray:
+    """2-4 RS: each name's `rs_window` return minus its index's (its own market's index per
+    column with several markets, spec 9-25; else the one KOSPI series)."""
+    ret_w = close / shift(close, p.rs_window) - 1.0
+    if by_market:
+        idx_cols = ds.index_cols()
+        return ret_w - (idx_cols / shift(idx_cols, p.rs_window) - 1.0)
+    idx_ret = idx / shift(idx, p.rs_window) - 1.0
+    return ret_w - idx_ret[:, None]
+
+
+def _flow_features(ds, close: np.ndarray, adv: np.ndarray, ma_s: np.ndarray, p: StrategyParams,
+                   flow_lead: int) -> tuple[bool, np.ndarray, np.ndarray, np.ndarray, float]:
+    """(has_flows, flow_strength, flow_ok, flow_exit, flow_coverage): the 2-3 F filter, the
+    3-3 FX exit and the 2-4 flow strength; all-False / NaN when the dataset has no flows."""
+    fi = getattr(ds, "flow_fi", None)
+    has_flows = fi is not None and bool(np.isfinite(fi).any())
+    if not has_flows:
+        return (False, np.full(close.shape, np.nan), np.zeros(close.shape, dtype=bool),
+                np.zeros(close.shape, dtype=bool), 0.0)
+    fi = np.asarray(fi, dtype=float)
+    if flow_lead > 0:
+        # Validation-only contamination (checklist A2, NEX-28): row t holds the flow of
+        # t+flow_lead (look-ahead). Never set in a real run; default 0 = spec 5 convention.
+        fi = lead(fi, flow_lead)
+    flow_long = rolling(fi, p.flow_long_window, "sum")
+    flow_short = rolling(fi, p.flow_short_window, "sum")
+    flow_exit_sum = rolling(fi, p.flow_exit_window, "sum")
+    with np.errstate(divide="ignore", invalid="ignore"):
+        flow_strength = np.where(adv > 0, flow_long / adv, np.nan)
+    flow_ok = (flow_long > 0) & (flow_short > 0)
+    flow_exit = (flow_exit_sum < 0) & (close < ma_s)
+    flow_coverage = float(np.isfinite(fi).mean()) if fi.size else 0.0
+    return True, flow_strength, flow_ok, flow_exit, flow_coverage
+
+
+def _regime_features(b, idx: np.ndarray, by_market, p: StrategyParams,
+                     shape: tuple[int, ...]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(regime_on, check_day, regime_cols): the 2-1 L1 state. With several markets (spec 9-25)
+    each column follows its own market's index and regime_on is "any market risk-on"."""
+    if by_market:
+        states = {m: regime_state(arr, b.dates, p) for m, arr in by_market.items()}
+        check_day = next(iter(states.values()))[1]
+        regime_cols = np.empty(shape, dtype=bool)
+        base_state = regime_state(idx, b.dates, p)[0]
+        for j, tk in enumerate(b.tickers):
+            st = states.get(b.market_of(tk))
+            regime_cols[:, j] = st[0] if st is not None else base_state
+        regime_on = np.any(np.stack([st[0] for st in states.values()]), axis=0)
+    else:
+        regime_on, check_day = regime_state(idx, b.dates, p)
+        regime_cols = np.repeat(regime_on[:, None], shape[1], axis=1)
+    return regime_on, check_day, regime_cols
+
+
 def compute_features(ds, params: StrategyParams, flow_lead: int = 0) -> Features:
     """All layer signals for `ds` (a dataset.Dataset) under `params`."""
     b = ds.stocks
@@ -168,53 +223,15 @@ def compute_features(ds, params: StrategyParams, flow_lead: int = 0) -> Features
 
     atr_arr = atr(high, low, close, p.atr_window)
 
-    ret_w = close / shift(close, p.rs_window) - 1.0
     idx = np.asarray(ds.index_close, dtype=float)
     by_market = getattr(ds, "index_by_market", None)
-    if by_market:
-        idx_cols = ds.index_cols()
-        rs = ret_w - (idx_cols / shift(idx_cols, p.rs_window) - 1.0)
-    else:
-        idx_ret = idx / shift(idx, p.rs_window) - 1.0
-        rs = ret_w - idx_ret[:, None]
+    rs = _relative_strength(ds, close, idx, by_market, p)
 
     high52 = rolling(high, p.high_52w_window, "max", min_periods=max(20, int(p.high_52w_window * 0.8)))
     high52_prox = close / high52
 
-    fi = getattr(ds, "flow_fi", None)
-    has_flows = fi is not None and bool(np.isfinite(fi).any())
-    if has_flows:
-        fi = np.asarray(fi, dtype=float)
-        if flow_lead > 0:
-            # Validation-only contamination (checklist A2, NEX-28): row t holds the flow of
-            # t+flow_lead (look-ahead). Never set in a real run; default 0 = spec 5 convention.
-            fi = lead(fi, flow_lead)
-        flow_long = rolling(fi, p.flow_long_window, "sum")
-        flow_short = rolling(fi, p.flow_short_window, "sum")
-        flow_exit_sum = rolling(fi, p.flow_exit_window, "sum")
-        with np.errstate(divide="ignore", invalid="ignore"):
-            flow_strength = np.where(adv > 0, flow_long / adv, np.nan)
-        flow_ok = (flow_long > 0) & (flow_short > 0)
-        flow_exit = (flow_exit_sum < 0) & (close < ma_s)
-        flow_coverage = float(np.isfinite(fi).mean()) if fi.size else 0.0
-    else:
-        flow_strength = np.full(close.shape, np.nan)
-        flow_ok = np.zeros(close.shape, dtype=bool)
-        flow_exit = np.zeros(close.shape, dtype=bool)
-        flow_coverage = 0.0
-
-    if by_market:
-        states = {m: regime_state(arr, b.dates, p) for m, arr in by_market.items()}
-        check_day = next(iter(states.values()))[1]
-        regime_cols = np.empty(close.shape, dtype=bool)
-        base_state = regime_state(idx, b.dates, p)[0]
-        for j, tk in enumerate(b.tickers):
-            st = states.get(b.market_of(tk))
-            regime_cols[:, j] = st[0] if st is not None else base_state
-        regime_on = np.any(np.stack([st[0] for st in states.values()]), axis=0)
-    else:
-        regime_on, check_day = regime_state(idx, b.dates, p)
-        regime_cols = np.repeat(regime_on[:, None], close.shape[1], axis=1)
+    has_flows, flow_strength, flow_ok, flow_exit, flow_coverage = _flow_features(ds, close, adv, ma_s, p, flow_lead)
+    regime_on, check_day, regime_cols = _regime_features(b, idx, by_market, p, close.shape)
 
     return Features(
         trend_ok=trend_ok, breakout=breakout, vol_ok=vol_ok, flow_ok=flow_ok, liquid=liquid, traded=traded,

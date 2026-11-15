@@ -133,29 +133,15 @@ def _parse_ymd(s, cache: dict):
     return cache[s]
 
 
-def summarize_positions(open_data: list, closed_data: list, *, deposit: float,
-                        withdrawal: float, principal: float, today=None) -> dict:
-    """Aggregate the Trading History positions for the dashboard cards.
+def _pct(num, den):
+    return (num / den * 100) if den else 0.0
 
-    Mutates the records in place the same way the tab used to:
-      * every record gets `curr_days` (days since sell for closed rows, days
-        held for open rows);
-      * open records get `curr_pl` / `curr_pl_pct` from `curr_price * qty`
-        (zero while no price has arrived), plus `position_w` (evaluation
-        weight in total invested capital) and `curr_pct_pl`;
-      * closed records get `position_w = curr_pct_pl = 0`.
 
-    Returns a dict with the KR / US / total cost, evaluation, P/L and P/L %
-    figures, the live NAV (`nav`) and its cumulative counterpart including
-    past withdrawals (`cumulative_asset`), that cumulative figure's P/L
-    versus `principal`, and the deposit ratio. Pure function (no Qt) so it
-    is unit-testable; the tab only renders the result.
-    """
-    from data.cache import is_us_market
-
-    today = today or _dt.date.today()
+def _stamp_curr_days(records: list, today) -> None:
+    """`curr_days`: days since the sell date, else days since the buy date
+    (left alone when neither parses)."""
     date_cache: dict = {}
-    for r in closed_data + open_data:
+    for r in records:
         sell_dt = _parse_ymd(r.get("sell_date", ""), date_cache)
         if sell_dt:
             r["curr_days"] = (today - sell_dt).days
@@ -163,6 +149,13 @@ def summarize_positions(open_data: list, closed_data: list, *, deposit: float,
             buy_dt = _parse_ymd(r.get("buy_date", ""), date_cache)
             if buy_dt:
                 r["curr_days"] = (today - buy_dt).days
+
+
+def _mark_open_positions(open_data: list) -> tuple[float, float, float, float]:
+    """Set `curr_pl` / `curr_pl_pct` on every open record and return the
+    (kr_cost, kr_eval, us_cost, us_eval) totals; a record without a quote is
+    carried at cost."""
+    from data.cache import is_us_market
 
     kr_cost = kr_eval = us_cost = us_eval = 0.0
     for r in open_data:
@@ -183,12 +176,47 @@ def summarize_positions(open_data: list, closed_data: list, *, deposit: float,
         else:
             kr_cost += buy_amt
             kr_eval += eval_val
+    return kr_cost, kr_eval, us_cost, us_eval
 
+
+def _stamp_position_weights(open_data: list, closed_data: list, nav: float) -> None:
+    """`position_w` (evaluation weight in `nav`) and `curr_pct_pl` on open
+    records; both zero on closed ones."""
+    for r in open_data:
+        qty = r.get("qty", 0.0)
+        price = r.get("curr_price", 0.0)
+        ev = (price * qty) if price > 0 and qty > 0 else r.get("buy_amount", 0.0)
+        r["position_w"] = _pct(ev, nav) if nav > 0 else 0.0
+        r["curr_pct_pl"] = r["curr_pl_pct"] * (r["position_w"] / 100.0) if r["position_w"] else 0.0
+    for r in closed_data:
+        r["position_w"] = 0.0
+        r["curr_pct_pl"] = 0.0
+
+
+def summarize_positions(open_data: list, closed_data: list, *, deposit: float,
+                        withdrawal: float, principal: float, today=None) -> dict:
+    """Aggregate the Trading History positions for the dashboard cards.
+
+    Mutates the records in place the same way the tab used to:
+      * every record gets `curr_days` (days since sell for closed rows, days
+        held for open rows);
+      * open records get `curr_pl` / `curr_pl_pct` from `curr_price * qty`
+        (zero while no price has arrived), plus `position_w` (evaluation
+        weight in total invested capital) and `curr_pct_pl`;
+      * closed records get `position_w = curr_pct_pl = 0`.
+
+    Returns a dict with the KR / US / total cost, evaluation, P/L and P/L %
+    figures, the live NAV (`nav`) and its cumulative counterpart including
+    past withdrawals (`cumulative_asset`), that cumulative figure's P/L
+    versus `principal`, and the deposit ratio. Pure function (no Qt) so it
+    is unit-testable; the tab only renders the result.
+    """
+    today = today or _dt.date.today()
+    _stamp_curr_days(closed_data + open_data, today)
+
+    kr_cost, kr_eval, us_cost, us_eval = _mark_open_positions(open_data)
     cost_total = kr_cost + us_cost
     eval_total = kr_eval + us_eval
-
-    def _pct(num, den):
-        return (num / den * 100) if den else 0.0
 
     # `nav` (live net asset value: current holdings + cash on hand) is what
     # the "Total Asset" KPI card shows; `cumulative_asset` folds past
@@ -199,15 +227,7 @@ def summarize_positions(open_data: list, closed_data: list, *, deposit: float,
     cumulative_asset = nav + withdrawal
     total_pl = cumulative_asset - principal
 
-    for r in open_data:
-        qty = r.get("qty", 0.0)
-        price = r.get("curr_price", 0.0)
-        ev = (price * qty) if price > 0 and qty > 0 else r.get("buy_amount", 0.0)
-        r["position_w"] = _pct(ev, nav) if nav > 0 else 0.0
-        r["curr_pct_pl"] = r["curr_pl_pct"] * (r["position_w"] / 100.0) if r["position_w"] else 0.0
-    for r in closed_data:
-        r["position_w"] = 0.0
-        r["curr_pct_pl"] = 0.0
+    _stamp_position_weights(open_data, closed_data, nav)
 
     return {
         "kr_cost": kr_cost, "kr_pl": kr_eval - kr_cost, "kr_pl_pct": _pct(kr_eval - kr_cost, kr_cost),

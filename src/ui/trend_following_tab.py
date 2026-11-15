@@ -674,6 +674,14 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.result_tabs.setObjectName("ResultTabs")   # theme.py colors the last (Warnings) tab
         self.result_tabs.setProperty("warn", False)
 
+        self.result_tabs.addTab(self._build_compare_table(), tr("변형 비교", "Variant Comparison"))
+        self.result_tabs.addTab(self._build_metrics_table(), tr("전체 지표", "All Metrics"))
+        self.result_tabs.addTab(self._build_monthly_table(), tr("월별 수익률", "Monthly Returns"))
+        self.result_tabs.addTab(self._build_trades_view(), tr("매매 내역", "Trades"))
+        self.result_tabs.addTab(self._build_warnings_view(), tr("경고 (0)", "Warnings (0)"))
+        return self.result_tabs
+
+    def _build_compare_table(self) -> QTableWidget:
         self.compare_table = setup_table(QTableWidget(0, len(COMPARISON_HEADERS)),
                                          empty_text=tr("백테스트를 실행하면 규칙과 벤치마크를 비교합니다",
                                                         "Run Backtest to compare the rules and benchmarks"))
@@ -690,10 +698,11 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.compare_table.setItemDelegateForColumn(SHARPE_COL, self._sharpe_delegate)
         self.compare_table.itemSelectionChanged.connect(self._on_compare_selection_changed)
         install_table_keys(self.compare_table)
-        self.result_tabs.addTab(self.compare_table, tr("변형 비교", "Variant Comparison"))
+        return self.compare_table
 
-        # Every scorecard column for every run and cost (the table this tab had
-        # before the 2026-11 redesign, unchanged).
+    def _build_metrics_table(self) -> QTableWidget:
+        """Every scorecard column for every run and cost (the table this tab
+        had before the 2026-11 redesign, unchanged)."""
         self.table = setup_table(QTableWidget(), empty_text=tr("백테스트를 실행하면 성과표가 채워집니다",
                                                                  "Run Backtest to fill the scorecard"))
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -706,8 +715,9 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.table.setColumnWidth(1, 50)
         _fit_headers(self.table)
         install_table_keys(self.table)      # Ctrl+C copies the selected rows as TSV (docs/ui.md 8.6)
-        self.result_tabs.addTab(self.table, tr("전체 지표", "All Metrics"))
+        return self.table
 
+    def _build_monthly_table(self) -> QTableWidget:
         self.monthly_table = setup_table(QTableWidget(0, len(MONTH_HEADERS)),
                                          empty_text=tr("백테스트를 실행하면 선택한 규칙의 월별 수익률(%)이 나옵니다",
                                                         "Run Backtest to see the selected rule's monthly returns (%)"))
@@ -717,10 +727,11 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.monthly_table.setColumnWidth(len(MONTH_HEADERS) - 1, 80)
         _fit_headers(self.monthly_table)
         install_table_keys(self.monthly_table)
-        self.result_tabs.addTab(self.monthly_table, tr("월별 수익률", "Monthly Returns"))
+        return self.monthly_table
 
-        # The same list as the popup (StrategyTradesView); "크게 보기", a
-        # double-click or Enter on a row opens StrategyTradesDialog.
+    def _build_trades_view(self) -> StrategyTradesView:
+        """The same list as the popup (StrategyTradesView); "크게 보기", a
+        double-click or Enter on a row opens StrategyTradesDialog."""
         self.trades_detail_btn = make_button(tr("크게 보기", "Expand"), on_click=self.open_trades_dialog,
                                              tooltip=tr("같은 매매 내역을 모든 열이 한 번에 보이는 큰 창으로 엽니다",
                                                         "Open the same trades in a larger window with every "
@@ -731,11 +742,12 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.trades_view.setContentsMargins(6, 6, 6, 0)
         self.trades_table = self.trades_view.table
         self.trades_summary_lbl = self.trades_view.summary_lbl
-        self.result_tabs.addTab(self.trades_view, tr("매매 내역", "Trades"))
+        return self.trades_view
 
-        # The shown result's caveats (benchmark substitutions, flow coverage,
-        # skipped variants), readable here instead of only in the saved report
-        # (review_codex.md S3).
+    def _build_warnings_view(self) -> QScrollArea:
+        """The shown result's caveats (benchmark substitutions, flow coverage,
+        skipped variants), readable here instead of only in the saved report
+        (review_codex.md S3)."""
         self.warn_lbl = QLabel(tr("경고 없음.", "No warnings."))
         self.warn_lbl.setObjectName("warn")
         self.warn_lbl.setWordWrap(True)
@@ -747,8 +759,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setWidget(self.warn_lbl)
-        self.result_tabs.addTab(scroll, tr("경고 (0)", "Warnings (0)"))
-        return self.result_tabs
+        return scroll
 
     def _draw_empty_chart(self):
         for ax in (self.ax, self.ax_dd):

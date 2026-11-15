@@ -56,6 +56,18 @@ class TrendConditions:
         return COST_CHOICES[self.cost_choice][0]
 
 
+def _make_spin(lo, hi, step, value, suffix, tip=""):
+    sb = QSpinBox()
+    sb.setRange(lo, hi)
+    sb.setSingleStep(step)
+    sb.setValue(int(value))
+    sb.setSuffix(suffix)
+    sb.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+    sb.setMinimumWidth(_SPIN_W)
+    sb.setToolTip(tip)
+    return sb
+
+
 class TrendConditionsDialog(VariantPickerDialog):
     """The rule picker plus the run conditions; 취소 -> 적용 at the bottom.
     After `exec()`, `conditions()` is the edited value."""
@@ -72,17 +84,21 @@ class TrendConditionsDialog(VariantPickerDialog):
         grid.setHorizontalSpacing(16)
         grid.setVerticalSpacing(4)
 
-        def spin(lo, hi, step, value, suffix, tip=""):
-            sb = QSpinBox()
-            sb.setRange(lo, hi)
-            sb.setSingleStep(step)
-            sb.setValue(int(value))
-            sb.setSuffix(suffix)
-            sb.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            sb.setMinimumWidth(_SPIN_W)
-            sb.setToolTip(tip)
-            return sb
+        self._build_inputs(conditions)
+        self._lay_out_fields(grid)
 
+        # Above the 취소/적용 row (the last item of the picker's layout).
+        root = self.layout()
+        root.insertWidget(root.count() - 1, form)
+
+        # The descriptions quote these numbers: keep them current.
+        for sig in (self.universe_spin.valueChanged, self.liquidity_spin.valueChanged,
+                    self.positions_spin.valueChanged, self.weekday_combo.currentIndexChanged):
+            sig.connect(self._refresh_description)
+
+    def _build_inputs(self, conditions: TrendConditions) -> None:
+        """The six condition inputs, set from `conditions`."""
+        spin = _make_spin
         self.universe_spin = spin(20, 300, 10, conditions.universe_size, tr(" 개", " names"),
                                   tr("선택한 시장 전체에서 시가총액(원화 환산) 상위 N개 종목",
                                      "Top N names by market cap (in KRW) across the selected markets"))
@@ -111,7 +127,9 @@ class TrendConditionsDialog(VariantPickerDialog):
                                        "The Sharpe target the result is judged by (default 1.0); the value at "
                                        f"Run applies to that result. The MDD target is fixed at {TARGET_MDD * 100:g}%."))
 
-        # Two rows of three: 종목·보유 조건 / 운용·평가, the name above each input.
+    def _lay_out_fields(self, grid: QGridLayout) -> None:
+        """Two rows of three: 종목·보유 조건 / 운용·평가, the name above each
+        input; the multi-market note under them."""
         fields = [(tr("시가총액 상위", "Market-cap top N"), self.universe_spin),
                   (tr("20일 평균 거래대금 하한", "Min 20-day avg. trading value"), self.liquidity_spin),
                   (tr("최대 보유 종목 수", "Max positions"), self.positions_spin),
@@ -137,15 +155,6 @@ class TrendConditionsDialog(VariantPickerDialog):
         self.market_note.setObjectName("muted")
         self.market_note.setWordWrap(True)
         grid.addWidget(self.market_note, 4, 0, 1, 3)
-
-        # Above the 취소/적용 row (the last item of the picker's layout).
-        root = self.layout()
-        root.insertWidget(root.count() - 1, form)
-
-        # The descriptions quote these numbers: keep them current.
-        for sig in (self.universe_spin.valueChanged, self.liquidity_spin.valueChanged,
-                    self.positions_spin.valueChanged, self.weekday_combo.currentIndexChanged):
-            sig.connect(self._refresh_description)
 
     def _refresh_description(self, *_):
         self._params = self._current().params()
