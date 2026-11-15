@@ -361,3 +361,67 @@ class TestButtonOrderAndSizing(unittest.TestCase):
         self.assertGreater(y(tab.add_ticker_btn), y(tab.refresh_btn))   # the add group below
         self.assertEqual(y(tab.market_combo), y(tab.add_ticker_btn))
         tab.hide()
+
+
+class TestClearSelectionOutside(unittest.TestCase):
+    """Trading History (2026-11-15): a clicked trade row stayed highlighted after
+    clicking elsewhere; the selection now goes once the user moves on."""
+
+    def setUp(self):
+        from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit
+        from ui.common import clear_selection_on_outside_click
+        self.win = QWidget()
+        lay = QVBoxLayout(self.win)
+        self.label = QLabel("toolbar label")
+        self.edit = QLineEdit()
+        self.table = setup_table(QTableWidget(3, 2))
+        for r in range(3):
+            for c in range(2):
+                self.table.setItem(r, c, QTableWidgetItem(f"r{r}c{c}"))
+        for w in (self.label, self.edit, self.table):
+            lay.addWidget(w)
+        clear_selection_on_outside_click(self.table, focus_root=self.win)
+        self.win.resize(400, 300)
+        self.win.show()
+        self.win.activateWindow()
+        QApplication.processEvents()
+
+    def tearDown(self):
+        self.win.close()
+        self.win.deleteLater()
+        QApplication.processEvents()
+
+    def _select_row(self, row=1):
+        rect = self.table.visualRect(self.table.model().index(row, 0))
+        QTest.mouseClick(self.table.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
+        self.assertTrue(self.table.selectionModel().hasSelection())
+
+    def test_click_on_a_non_focusable_label_clears(self):
+        self._select_row()
+        QTest.mouseClick(self.label, Qt.MouseButton.LeftButton)
+        self.assertFalse(self.table.selectionModel().hasSelection())
+
+    def test_focus_moving_to_another_widget_clears(self):
+        self._select_row()
+        self.table.setFocus()
+        self.edit.setFocus(Qt.FocusReason.TabFocusReason)
+        QApplication.processEvents()
+        self.assertFalse(self.table.selectionModel().hasSelection())
+
+    def test_clicks_inside_the_table_move_the_selection(self):
+        self._select_row(0)
+        self._select_row(2)
+        self.assertEqual({i.row() for i in self.table.selectedIndexes()}, {2})
+
+    def test_other_windows_keep_the_selection(self):
+        """The right-click menu and the edit / delete-confirm dialogs are other
+        windows: they act on the selection, so it must survive them."""
+        from PyQt6.QtWidgets import QDialog, QPushButton
+        self._select_row()
+        dlg = QDialog(self.win)
+        btn = QPushButton("OK", dlg)
+        dlg.show()
+        QApplication.processEvents()
+        QTest.mouseClick(btn, Qt.MouseButton.LeftButton)
+        self.assertTrue(self.table.selectionModel().hasSelection())
+        dlg.close()

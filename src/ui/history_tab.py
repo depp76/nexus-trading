@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 from ui.common import (
     _fmt_num_edit, ThreadOwnerMixin,
     BTN_H, make_button, setup_table, make_footer_label, TAB_MARGINS, TAB_SPACING,
-    KpiStrip, install_table_keys,
+    KpiStrip, install_table_keys, clear_selection_on_outside_click,
 )
 from ui.colors import PROFIT, LOSS
 from ui.history_calc import compute_pl_fields, build_monthly_rows, summarize_positions
@@ -325,6 +325,9 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         # Ctrl+C copies the selected trades, Enter edits like a double-click
         # (docs/ui.md 1.8 / 8.6); month summary rows are not trades.
         install_table_keys(tbl, on_activate=self._on_cell_double_clicked, skip_row=self._is_summary_row)
+        # Clicking or tabbing elsewhere drops the row highlight (it used to stay
+        # on the last clicked trade until another row was clicked).
+        clear_selection_on_outside_click(tbl, focus_root=self)
         tbl.cellDoubleClicked.connect(self._on_cell_double_clicked)
         # Delete: right-click menu or the Delete key on the selected rows.
         # trade_db.delete_trade() existed for a long time with no UI path to

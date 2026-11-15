@@ -448,6 +448,44 @@ def copy_rows_tsv(table: QTableWidget, skip_row=None) -> str:
     return text
 
 
+class _ClearSelectionOutside(QObject):
+    """Drops a table's row selection once keyboard focus leaves it for another
+    widget of the same window. Labels and empty background never take focus,
+    so `focus_root` (the tab around the table) gets Qt.ClickFocus: a click on
+    them then focuses the root (Qt gives click focus to the nearest parent
+    that accepts it) and the table loses focus. Popups and dialogs are other
+    windows (the right-click menu, the edit and delete-confirm boxes), and
+    focus leaving the app is no widget at all, so the selection those act on
+    survives them. Only the QApplication.focusChanged signal is used: an
+    app-wide Python event filter crashed while widgets were being destroyed."""
+
+    def __init__(self, table: QTableWidget, focus_root: QWidget | None):
+        super().__init__(table)
+        self._table = table
+        if focus_root is not None and focus_root.focusPolicy() == Qt.FocusPolicy.NoFocus:
+            focus_root.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        QApplication.instance().focusChanged.connect(self._on_focus_changed)
+
+    def _on_focus_changed(self, old, new) -> None:
+        t = self._table
+        try:
+            if old is None or new is None or not (old is t or t.isAncestorOf(old)):
+                return
+            if new is t or t.isAncestorOf(new) or new.window() is not t.window():
+                return
+            if t.selectionModel() is not None and t.selectionModel().hasSelection():
+                t.clearSelection()
+        except RuntimeError:        # the table's C++ object is already gone
+            return
+
+
+def clear_selection_on_outside_click(table: QTableWidget, focus_root: QWidget | None = None) -> None:
+    """Make `table`'s selection go away once the user clicks or tabs elsewhere
+    in `focus_root` / the same window (Trading History, 2026-11-15). A click on
+    an empty part of the table itself already clears it (Qt)."""
+    table._clear_outside = _ClearSelectionOutside(table, focus_root)
+
+
 def install_table_keys(table: QTableWidget, on_activate=None, skip_row=None) -> None:
     """Give a table the app-wide keyboard behaviour: Ctrl+C copies the
     selected rows as TSV; Enter does what a double-click on the current cell
