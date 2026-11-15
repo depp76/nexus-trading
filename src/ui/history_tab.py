@@ -292,6 +292,19 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         rows.addLayout(view_row)
         return rows
 
+
+    # ---Language switch (docs/ui.md 8.20): MainWindow rebuilds every tab in
+    # the new language and carries this state over. Plain values only (the
+    # ui classes themselves are re-imported).
+    def export_state(self) -> dict:
+        return {"period": self._period_filter, "by_month": self._sort_by_date,
+                "hide_stale": self._hide_stale_closed}
+
+    def import_state(self, state: dict) -> None:
+        self._stale_toggle_btn.setChecked(state["hide_stale"])
+        self._on_grouping_changed("month" if state["by_month"] else "status")
+        self._on_period_filter_changed(state["period"])
+
     def _on_grouping_changed(self, key: str):
         self._sort_by_date = key == "month"
         for k, btn in self._group_buttons.items():

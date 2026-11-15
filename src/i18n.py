@@ -7,7 +7,9 @@ Korean literal keep working under the default language.
 The language is fixed for the life of the process: `main.py` calls
 `load_language()` before it imports any `ui` module, so module-level constants
 built with `tr()` (column lists, help texts) come out in the chosen language.
-Switching languages saves the choice and restarts the app (`MainWindow`).
+Switching languages at run time saves the choice, re-imports the ui/threads
+modules and rebuilds the main window in place (`main.switch_language`, no
+restart; docs/ui.md 8.20).
 
 No Qt widgets here and no imports from `ui`/`data`/`strategy`, so any layer
 (including `strategy.trend_following.variant_info`) may use `tr()`.

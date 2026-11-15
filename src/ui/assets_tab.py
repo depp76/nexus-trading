@@ -346,6 +346,16 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         labels[self.COL_TOTAL_ASSETS] = self._currency  # "KRW" or "USD"
         return labels
 
+
+    # ---Language switch (docs/ui.md 8.20): MainWindow rebuilds every tab in
+    # the new language and carries this state over. Plain values only (the
+    # ui classes themselves are re-imported).
+    def export_state(self) -> dict:
+        return {"currency": self._currency_combo.currentText()}
+
+    def import_state(self, state: dict) -> None:
+        self._currency_combo.setCurrentText(state["currency"])
+
     def _on_currency_changed(self, text: str):
         self._currency = text
         self._grouped_hdr.set_sub_labels(self._current_sub_labels())

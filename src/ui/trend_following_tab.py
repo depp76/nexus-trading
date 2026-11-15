@@ -769,6 +769,50 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         """Investor flows are loaded only when a chosen rule uses them (A3-A5)."""
         return any(VARIANTS[vid].needs_flows for vid in self._selected_variants())
 
+
+    # ---Language switch (docs/ui.md 8.20): MainWindow rebuilds every tab in
+    # the new language and carries this state over. Plain values only (the
+    # ui classes themselves are re-imported).
+    def is_running(self) -> bool:
+        return bool(self._running)
+
+    def export_state(self) -> dict:
+        return {
+            "conditions": dataclasses.asdict(self.conditions),
+            "markets": self.selected_markets(),
+            "start": self.start_edit.date().toPyDate(), "end": self.end_edit.date().toPyDate(),
+            "result": self._result, "target_sharpe": self.target_sharpe,
+            "mult": self._mult, "sel_ids": list(self._sel_ids), "sel_id": self._sel_id,
+        }
+
+    def import_state(self, state: dict) -> None:
+        self.set_conditions(TrendConditions(**state["conditions"]))
+        wanted = set(state["markets"]) or {"KOSPI"}
+        for m in MARKETS:                      # switch the wanted ones on first: one always stays on
+            if m in wanted:
+                self.market_buttons[m].setChecked(True)
+        for m in MARKETS:
+            if m not in wanted:
+                self.market_buttons[m].setChecked(False)
+        for edit, d in ((self.start_edit, state["start"]), (self.end_edit, state["end"])):
+            edit.setDate(QDate(d.year, d.month, d.day))
+        result = state.get("result")
+        if result is not None:
+            # Redraw the last finished result in the new language, as a run's
+            # finish does (_on_research_finished), then its view selection.
+            self._result = result
+            self.save_btn.setEnabled(True)
+            self.set_target_sharpe(state["target_sharpe"])
+            self.populate(result)
+            if state.get("mult") is not None:
+                self.set_cost(state["mult"])
+            if state.get("sel_ids"):
+                self.set_selection(state["sel_ids"], focus=state.get("sel_id"))
+            self._update_basis()
+            self._update_pending()
+            self._show_warnings(result)
+        self._update_run_state()
+
     def set_conditions(self, conditions: TrendConditions) -> None:
         self.conditions = conditions
         self._on_form_changed()

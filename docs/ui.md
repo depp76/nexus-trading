@@ -809,8 +809,11 @@ Phase 0~6 계획표는 `docs/history/ui_archive_2026-09_10.md`로 옮겼다. Pha
 - **선택 위치**: 앱 머리 오른쪽, 자동 새로고침·마지막 갱신 시각 다음에 국기 버튼 두 개(태극기 = 한국어, 성조기 = 영어, `ui/language_switch.py`).
   글자 없이 국기 아이콘만(`ui/icons/flag_kr.svg`, `flag_us.svg`, 24×16), 툴팁 "한국어"/"English". 현재 언어의 국기가 눌린 상태(ACCENT 테두리, `QToolButton#langFlag`).
   Windows는 국기 이모지를 그리지 못해 SVG로 그린다.
-- **바꾸는 방법**: 다른 국기를 누르면 "다시 시작할까요?" 확인 → 예: 선택을 저장하고 앱을 다시 시작, 아니요: 원래 국기로 되돌림.
-  문구는 시작할 때 한 번 만들어지므로(모듈 상수 포함) 실행 중 즉석 전환은 하지 않는다.
+- **바꾸는 방법**(2026-11-15 개정: 재시작 없음): 다른 국기를 누르면 곧바로 바뀐다 — 선택을 저장하고 `ui`·`threads` 모듈을 다시 불러온 뒤
+  메인 창을 새 언어로 다시 만들어 기존 창과 바꿔 끼운다(`main.switch_language`). 각 탭의 상태(Universe 표·필터·추세 점수 고정, History
+  기간·묶음, Total Assets 통화, Strategy 조건·기간·시장·마지막 결과와 선택)는 `export_state()`/`import_state()`로 넘어가고 결과는 새 언어로
+  다시 그린다. 데이터 캐시와 DB는 그대로. 진행 중인 백테스트가 있을 때만 "멈추고 바꿀까요?"를 묻는다(아니요: 원래 국기로). 진행 중이던
+  Universe 새로고침은 새 창에서 다시 시작한다.
 - **저장**: `QSettings`("PortfolioManagement") `ui/language`. `custom_settings.json`에 넣지 않는 이유는 Universe 탭이 그 파일을 통째로 다시 쓰기 때문.
 - **구현**: `src/i18n.py`의 `tr("한국어", "English")`를 문구 자리에 쓴다(두 언어가 한 줄에 나란히). `main.py`가 어떤 `ui` 모듈보다 먼저 `i18n.load_language()`를 부른다.
   테스트는 저장된 설정을 읽지 않으므로 항상 한국어로 돈다. 한국어일 때만 Qt `qtbase_ko` 번역을 설치한다.

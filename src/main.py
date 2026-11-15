@@ -8,11 +8,13 @@ from PyQt6.QtWidgets import (
     QLabel, QTabWidget,
     QCheckBox, QMessageBox,
 )
-from PyQt6.QtCore import Qt, QTimer, QTranslator, QLibraryInfo, QProcess
+from PyQt6.QtCore import Qt, QTimer, QTranslator, QLibraryInfo
 from PyQt6.QtGui import QFont, QShortcut, QKeySequence
 
 # The UI language must be set before any ui module is imported: module-level
 # label constants are built with i18n.tr() at import time (docs/ui.md 8.20).
+# A switch at run time re-imports the ui/threads modules (_reload_ui_modules).
+import importlib
 import i18n
 i18n.load_language()
 from i18n import tr
@@ -71,10 +73,81 @@ from ui.universe_tab import UniverseTab
 # Strategy research tab (re-introduced 2026-09-28 with strategy.trend_following v03)
 from ui.strategy_tab import StrategyTab
 
+# Every name main.py takes from the ui/threads packages. A language switch
+# drops those packages from sys.modules, imports them again (their module-level
+# tr() constants come out in the new language) and rebinds these names, so the
+# MainWindow built next uses the fresh modules (docs/ui.md 8.20).
+_UI_NAMES = {
+    "ui.common": ("create_font", "apply_matplotlib_font", "FONT_FAMILY_CSS", "FONT_TITLE", "FONT_HEADING",
+                  "FONT_BODY", "cancel_thread", "refresh_state", "RefreshFailures"),
+    "ui.language_switch": ("LanguageSwitch",),
+    "ui.theme": ("app_qss", "app_palette", "apply_matplotlib_theme", "TEXT_EMPTY"),
+    "ui.colors": ("OK", "WARN", "DANGER"),
+    "threads.fetch_threads": ("AutoBackupThread",),
+    "ui.history_tab": ("TradingHistoryTab",),
+    "ui.assets_tab": ("TradingRecordTab",),
+    "ui.universe_tab": ("UniverseTab",),
+    "ui.strategy_tab": ("StrategyTab",),
+}
+_RELOAD_PACKAGES = ("ui", "threads")
+
+
+def _reload_ui_modules() -> None:
+    for name in list(sys.modules):
+        if any(name == pkg or name.startswith(pkg + ".") for pkg in _RELOAD_PACKAGES):
+            del sys.modules[name]
+    importlib.invalidate_caches()
+    g = globals()
+    for mod_name, names in _UI_NAMES.items():
+        mod = importlib.import_module(mod_name)
+        for n in names:
+            g[n] = getattr(mod, n)
+
+
+def _install_qt_translator(app) -> None:
+    """Qt's own buttons and dialogs (message-box Yes/No, input and file
+    dialogs) in Korean, like the app's labels (docs/ui.md 8.11); English needs
+    no translator. Called at start and on every language switch."""
+    old = getattr(app, "_nexus_qt_translator", None)
+    if old is not None:
+        app.removeTranslator(old)
+        app._nexus_qt_translator = None
+    if i18n.language() == "ko":
+        t = QTranslator(app)
+        if t.load("qtbase_ko", QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
+            app.installTranslator(t)
+            app._nexus_qt_translator = t
+
+
+def switch_language(old: "MainWindow", lang: str) -> "MainWindow":
+    """Rebuild the main window in `lang` without restarting the app
+    (docs/ui.md 8.20): save the language, carry each tab's state over, stop
+    the old window's work, re-import the ui modules, build a new window and
+    retire the old one. Data caches (data.*) and the database are untouched."""
+    app = QApplication.instance()
+    state = old.export_state()
+    old.stop_background_work()
+    i18n.save_language(lang)
+    i18n.set_language(lang)
+    _install_qt_translator(app)
+    _reload_ui_modules()
+    new = MainWindow(initial_refresh=False, run_backup=False)
+    new.import_state(state)
+    if state["maximized"]:
+        new.showMaximized()
+    else:
+        new.show()
+    app._nexus_main_window = new      # the only strong reference to the live window
+    old.retire()
+    return new
+
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, initial_refresh: bool = True, run_backup: bool = True):
+        """`initial_refresh` / `run_backup` are False when a language switch
+        rebuilds the window: the old window's data is carried over instead."""
         super().__init__()
+        self._retired = False
         self.setWindowTitle("Nexus Trading")
         self.resize(1100, 850)
 
@@ -191,7 +264,8 @@ class MainWindow(QMainWindow):
         self.universe_tab.refresh_started.connect(self.trading_history_tab._reload_current)
         self.universe_tab.auto_lightweight_tick.connect(self.trading_history_tab._start_realtime_price_update)
 
-        self.universe_tab.refresh_data()
+        if initial_refresh:
+            self.universe_tab.refresh_data()
 
         # ---Tab movement shortcuts (Ctrl+Tab / Ctrl+Shift+Tab) ---
         # QShortcut(WindowShortcut) works across the entire window regardless of focus position
@@ -205,25 +279,80 @@ class MainWindow(QMainWindow):
 
         # Automatic backup of portfolio.db (trades + asset snapshots) + custom_settings.json (roadmap 2-4).
         # Runs in the background so it never blocks startup.
-        self._auto_backup_thread = AutoBackupThread()
-        self._auto_backup_thread.backup_done.connect(self._on_thread_status_message)
-        self._auto_backup_thread.start()
+        self._auto_backup_thread = None
+        if run_backup:
+            self._auto_backup_thread = AutoBackupThread()
+            self._auto_backup_thread.backup_done.connect(self._on_thread_status_message)
+            self._auto_backup_thread.start()
 
-    restart_requested = False
-
+    # ---Language switch without a restart (docs/ui.md 8.20) ---
     def _on_language_requested(self, lang: str) -> None:
-        """Save the language and restart: labels are built once at startup,
-        so a switch takes a fresh process."""
-        answer = QMessageBox.question(
-            self, "Nexus Trading",
-            tr("언어를 바꾸려면 앱을 다시 시작해야 합니다. 지금 다시 시작할까요?",
-               "The app needs to restart to change the language. Restart now?"))
-        if answer != QMessageBox.StandardButton.Yes:
-            self.language_switch.reset()
-            return
-        i18n.save_language(lang)
-        self.restart_requested = True
+        """Switch at once; only a running backtest asks first, since it is
+        stopped (its last finished result is carried over and redrawn)."""
+        if self.strategy_tab.is_running():
+            answer = QMessageBox.question(
+                self, "Nexus Trading",
+                tr("진행 중인 백테스트를 멈추고 언어를 바꿀까요?",
+                   "Stop the running backtest and switch the language?"))
+            if answer != QMessageBox.StandardButton.Yes:
+                self.language_switch.reset()
+                return
+        # Leave this click handler before the window that owns it is replaced.
+        QTimer.singleShot(0, lambda: switch_language(self, lang))
+
+    def export_state(self) -> dict:
+        return {
+            "geometry": self.saveGeometry(), "maximized": self.isMaximized(),
+            "tab": self.tabs.currentIndex(), "auto_refresh": self.auto_refresh_cb.isChecked(),
+            "last_sync_at": self._last_sync_at,
+            "universe": self.universe_tab.export_state(),
+            "history": self.trading_history_tab.export_state(),
+            "assets": self.trading_record_tab.export_state(),
+            "strategy": self.strategy_tab.export_state(),
+        }
+
+    def import_state(self, state: dict) -> None:
+        self.restoreGeometry(state["geometry"])
+        self.tabs.setCurrentIndex(state["tab"])
+        self.auto_refresh_cb.setChecked(state["auto_refresh"])
+        if state["last_sync_at"] is not None:
+            self._last_sync_at = state["last_sync_at"]
+            self.update_time_label.setText(tr(f"최근 갱신 {self._last_sync_at:%H:%M:%S}",
+                                              f"last {self._last_sync_at:%H:%M:%S}"))
+            self._update_refresh_indicator()
+        self.trading_history_tab.import_state(state["history"])
+        self.trading_record_tab.import_state(state["assets"])
+        self.strategy_tab.import_state(state["strategy"])
+        self.universe_tab.import_state(state["universe"])
+        if state["universe"].get("refreshing"):
+            self.universe_tab.refresh_data()     # the old window's refresh was stopped midway
+
+    def stop_background_work(self) -> None:
+        """Stop the timers and every worker thread this window started."""
+        self.global_auto_timer.stop()
+        self._indicator_timer.stop()
+        threads_to_stop = []
+        if self._auto_backup_thread is not None:
+            threads_to_stop.append(self._auto_backup_thread)
+        for tab in ("universe_tab", "trading_history_tab", "trading_record_tab", "strategy_tab"):
+            if hasattr(self, tab):
+                threads_to_stop.extend(getattr(self, tab).collect_threads_to_stop())
+        for t in threads_to_stop:
+            try:
+                if t.isRunning():
+                    cancel_thread(t)   # cancellable workers exit at their next check
+                    t.quit()
+                    if not t.wait(2000):   # wait up to 2 s
+                        t.terminate()     # force-kill if still alive
+                        t.wait(500)
+            except Exception:  # boundary: shutdown must go on whatever one thread does
+                logger.warning("Failed to cleanly stop background thread", exc_info=True)
+
+    def retire(self) -> None:
+        """Close a window a language switch replaced, without quitting the app."""
+        self._retired = True
         self.close()
+        self.deleteLater()
 
     def _tab_next(self):
         """Ctrl+Tab: Move to the Next Tab (Circular)."""
@@ -290,42 +419,17 @@ class MainWindow(QMainWindow):
 
     # ---Clean shutdown ---
     def closeEvent(self, event):
-        """Stop all background QThread workers so the process exits cleanly."
+        """Stop all background QThread workers so the process exits cleanly.
 
         Without this, ThreadPoolExecutors inside QThread.run() keep non-daemon
         Python threads alive after the Qt event loop ends, which blocks the
-        terminal from returning to the shell prompt.
+        terminal from returning to the shell prompt. A window retired by a
+        language switch has stopped its work already and must not quit the app.
         """
-        # Collect every QThread this window may have started
-        threads_to_stop = []
-
-        abt = getattr(self, '_auto_backup_thread', None)
-        if abt is not None:
-            threads_to_stop.append(abt)
-
-        if hasattr(self, 'universe_tab'):
-            threads_to_stop.extend(self.universe_tab.collect_threads_to_stop())
-
-        if hasattr(self, 'trading_history_tab'):
-            threads_to_stop.extend(self.trading_history_tab.collect_threads_to_stop())
-
-        if hasattr(self, 'trading_record_tab'):
-            threads_to_stop.extend(self.trading_record_tab.collect_threads_to_stop())
-
-        if hasattr(self, 'strategy_tab'):
-            threads_to_stop.extend(self.strategy_tab.collect_threads_to_stop())
-
-        for t in threads_to_stop:
-            try:
-                if t.isRunning():
-                    cancel_thread(t)   # cancellable workers exit at their next check
-                    t.quit()
-                    if not t.wait(2000):   # wait up to 2 s
-                        t.terminate()     # force-kill if still alive
-                        t.wait(500)
-            except Exception:
-                logger.warning("Failed to cleanly stop background thread on close", exc_info=True)
-
+        if self._retired:
+            event.accept()
+            return
+        self.stop_background_work()
         QApplication.instance().quit()
         event.accept()
 
@@ -337,13 +441,7 @@ if __name__ == "__main__":
     # (notably QTabBar and QHeaderView theming); Fusion renders every rule
     # (docs/ui.md 6.4).
     app.setStyle("Fusion")
-    # Qt's own buttons and dialogs (message-box Yes/No, input dialogs, file
-    # dialogs) in Korean, like the app's labels (docs/ui.md 8.11); English
-    # needs no translator.
-    if i18n.language() == "ko":
-        _qt_ko = QTranslator(app)
-        if _qt_ko.load("qtbase_ko", QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
-            app.installTranslator(_qt_ko)
+    _install_qt_translator(app)
     app_font = create_font(style_name="Semilight")
     app.setFont(app_font)
     apply_matplotlib_font()
@@ -353,13 +451,9 @@ if __name__ == "__main__":
     app.setPalette(app_palette())
     app.setStyleSheet(app_qss(FONT_FAMILY_CSS))
 
-    window = MainWindow()
-    window.showMaximized()
+    app._nexus_main_window = MainWindow()      # replaced by switch_language()
+    app._nexus_main_window.showMaximized()
     ret = app.exec()
-    if window.restart_requested:
-        # Language switch (docs/ui.md 8.20): the window has stopped its
-        # threads in closeEvent; start a fresh process with the same command.
-        QProcess.startDetached(sys.executable, sys.argv)
     # Ensure all remaining non-daemon threads (ThreadPoolExecutor workers
     # started by data_fetcher) don't block process exit.
     os._exit(ret if ret else 0)

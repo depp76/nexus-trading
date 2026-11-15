@@ -275,11 +275,13 @@ not fixtures. Trading History principal/deposit/withdrawal live in `QSettings`
   translator `main.py` installs (Korean mode only).
 - **UI language (user direction, 2026-11-15; docs/ui.md 8.20):** Korean (default) or English,
   picked with the header's flag buttons (`ui/language_switch.py`, saved in `QSettings`
-  `ui/language`; a switch restarts the app). Every visible string that has a Korean form is
+  `ui/language`; a switch rebuilds the main window in place without restarting:
+  `main.switch_language` re-imports the `ui`/`threads` packages and carries each tab's
+  `export_state()`/`import_state()` over — a new tab state that matters belongs there). Every visible string that has a Korean form is
   written `tr("한국어", "English")` (`src/i18n.py`, no Qt-widget/ui/data imports, so
   `variant_info.py` uses it too); new Korean labels must come with their English partner.
   `main.py` calls `i18n.load_language()` before importing any `ui` module, so module-level
-  `tr()` constants are fine; tests never load the saved setting and run in Korean. Never
+  `tr()` constants are fine (the run-time switch re-imports those modules); tests never load the saved setting and run in Korean. Never
   translate persisted values (saved view names, status codes, DB fields) — only their display.
 - UI 변경은 `docs/ui.md` 의 전역 규칙을 따른다.
 - One font family app-wide, Malgun Gothic Semilight (user direction, 2026-09-19): every
