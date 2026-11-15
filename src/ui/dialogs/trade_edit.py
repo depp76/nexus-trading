@@ -272,7 +272,11 @@ class TradeEntryDialog(QDialog):
         layout = _form_layout(self)
 
         self.market_combo = QComboBox()
-        self.market_combo.addItems(["KOSPI", "KOSDAQ", "NASDAQ", "NASDAQ 100", "NYSE", "AMEX"])
+        # One US choice (user decision 2026-11-15): the stored value is "US";
+        # trades saved earlier as NASDAQ / NASDAQ 100 / NYSE / AMEX keep their
+        # value and are still US everywhere (data.cache.is_us_market).
+        for value, label in (("KOSPI", "KOSPI"), ("KOSDAQ", "KOSDAQ"), ("US", tr("미국", "US"))):
+            self.market_combo.addItem(label, value)
 
         self.ticker_edit = QLineEdit()
         self.ticker_edit.setPlaceholderText(tr("종목코드 (예: 005930, QQQM)", "Ticker (e.g. QQQM or 005930)"))
@@ -321,7 +325,7 @@ class TradeEntryDialog(QDialog):
         layout.addRow(btn_box)
 
     def on_save(self):
-        market = self.market_combo.currentText()
+        market = self.market_combo.currentData()
         ticker = self.ticker_edit.text().strip().upper()
         if not ticker:
             QMessageBox.warning(self, _TITLE, tr("종목코드를 입력하세요.", "Ticker is required."))

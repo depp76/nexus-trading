@@ -187,7 +187,7 @@ class TestMarketLists(unittest.TestCase):
         self.assertEqual(normalize({"market": ["S&P500", "KOSPI", "bogus"]})["market"], ["KOSPI", "S&P500"])
         self.assertEqual(normalize({"market": []})["market"], "ALL")
         self.assertEqual(normalize({"market": "ALL"})["market"], "ALL")
-        self.assertEqual(describe_view({"market": ["KOSPI", "NASDAQ 100"]}), "KOSPI+NASDAQ")
+        self.assertEqual(describe_view({"market": ["KOSPI", "NASDAQ 100"]}), "KOSPI+NASDAQ 100")
 
 
 class _FakeFetch:
@@ -227,7 +227,7 @@ class TestMarketToggles(_TabCase):
         tab = self._tab([_stock("A")])
         checked = {m: b.isChecked() for m, b in tab._market_buttons.items()}
         self.assertEqual(checked, {"KOSPI": True, "KOSDAQ": True, "NASDAQ 100": False, "S&P500": False})
-        self.assertEqual(tab._market_buttons["S&P500"].text(), "S&&P500")      # shows "S&P500", no mnemonic
+        self.assertEqual(tab._market_buttons["S&P500"].text(), "S&&P 500")     # shows "S&P 500", no mnemonic
         self.assertEqual(tab.selected_markets(), ["KOSPI", "KOSDAQ"])
 
     def test_saved_markets_are_restored(self):

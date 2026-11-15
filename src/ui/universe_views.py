@@ -47,7 +47,10 @@ RANGE_FIELDS = (
 FIELD_BY_KEY = {f.key: f for f in RANGE_FIELDS}
 
 # The toolbar's markets in display order: the row "market" value -> button label.
-MARKETS = {"KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ", "NASDAQ 100": "NASDAQ", "S&P500": "S&P500"}
+# key (stored in rows, settings and saved views) -> toggle label. The US
+# toggles are index constituent groups, so they show the index names
+# (2026-11-15: "NASDAQ" read like the exchange the Add Ticker row offered).
+MARKETS = {"KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ", "NASDAQ 100": "NASDAQ 100", "S&P500": "S&P 500"}
 
 
 def market_list(market) -> list | str:

@@ -70,9 +70,12 @@ from ui.common import (
 _TITLE = "Trading Universe"
 
 
-# Markets the "Add Ticker" row can add a single name from (2026-11-15: NASDAQ
-# and NYSE added; US names go through data.market.fetch_single_stock's US path).
-ADD_TICKER_MARKETS = ("KOSPI", "KOSDAQ", "NASDAQ", "NYSE")
+# Markets the "Add Ticker" row can add a single name from: (stored value, label).
+# One US choice (user decision 2026-11-15): the US lookup does not depend on the
+# exchange, and "NASDAQ"/"NYSE" next to the NASDAQ 100 / S&P 500 toggles read as
+# the same thing. Rows added earlier as "NASDAQ"/"NYSE" still load (any market
+# without a toggle always shows, universe_views.matches).
+ADD_TICKER_MARKETS = (("KOSPI", "KOSPI"), ("KOSDAQ", "KOSDAQ"), ("US", tr("미국", "US")))
 
 
 def _part_label(part: str) -> str:
@@ -163,6 +166,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._market_buttons = {}
         for m, label in MARKETS.items():
             btn = self._filter_button(label.replace("&", "&&"), checked=(m in DEFAULT_UNIVERSE_MARKETS))
+            btn.setFixedWidth(max(self._FILTER_BTN_W, btn.sizeHint().width()))   # "NASDAQ 100" is wider
             btn.setToolTip(tr(f"{label}: 켜면 새로고침이 이 시장(상위 {UNIVERSE_MARKET_SIZES[m]}종목)을 받아 와 "
                               "표에 보여 줍니다. 최소 한 시장은 켜져 있어야 합니다.",
                               f"{label}: when on, Refresh fetches this market (top {UNIVERSE_MARKET_SIZES[m]} names) "
@@ -201,11 +205,12 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         add_row = QHBoxLayout()
         add_row.setSpacing(6)
         self.market_combo = QComboBox()
-        self.market_combo.addItems(list(ADD_TICKER_MARKETS))
+        for value, label in ADD_TICKER_MARKETS:
+            self.market_combo.addItem(label, value)
         self.market_combo.setMinimumWidth(100)
         self.market_combo.setToolTip(tr("추가할 종목의 시장(위의 시장 필터와 별개)",
                                          "Market of the ticker to add (separate from the market filter above)"))
-        self.market_combo.currentTextChanged.connect(self._on_add_market_changed)
+        self.market_combo.currentIndexChanged.connect(self._on_add_market_changed)
         add_row.addWidget(self.market_combo)
 
         self.ticker_input = QLineEdit()
@@ -490,12 +495,12 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             return tr("코드 예: 005930", "Ticker, e.g. 005930")
         return tr("티커 예: AAPL", "Ticker, e.g. AAPL")
 
-    def _on_add_market_changed(self, market: str):
-        self.ticker_input.setPlaceholderText(self._add_placeholder(market))
+    def _on_add_market_changed(self, _index: int = 0):
+        self.ticker_input.setPlaceholderText(self._add_placeholder(self.market_combo.currentData()))
 
     def add_ticker(self):
         ticker = self.ticker_input.text().strip().upper()
-        market = self.market_combo.currentText()
+        market = self.market_combo.currentData()
         if not ticker:
             return
 
@@ -558,7 +563,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
                                                  f"'{ticker}' is already in the table."))
             return
 
-        target_market = result.get('market', '') or self.market_combo.currentText()
+        target_market = result.get('market', '') or self.market_combo.currentData()
         added_list = self.custom_settings.setdefault("added", [])
         if not any(x.get("ticker") == ticker for x in added_list):
             added_list.append({"market": target_market, "ticker": ticker})
