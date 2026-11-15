@@ -156,6 +156,29 @@ class TestStockChart(unittest.TestCase):
         for b in d._period_buttons.values():
             self.assertGreaterEqual(b.width(), b.sizeHint().width())
 
+    def test_axis_and_end_labels_fit_a_narrow_chart(self):
+        """2026-11-15: fixed 7.5% / 10% margins cut "100,000" and the axis
+        label once the dialog could be narrowed; margins now come from the
+        measured labels."""
+        d = StockMaDialog("005930", "Samsung", "KOSPI", _df(ew=True))
+        d.showNormal()
+        d.resize(700, 600)
+        d.show()
+        QApplication.processEvents()
+        for k in ("MA5", "MA20", "EW"):
+            d._set_series(k, True)
+        d._apply_period("All")
+        d._canvas.draw()
+        r = d._canvas.get_renderer()
+        fig_w = d._fig.bbox.width
+        for ax in d._panel_axes.values():
+            if ax.get_visible():
+                self.assertGreaterEqual(ax.yaxis.get_tightbbox(r).x0, 0)
+        self.assertTrue(d._end_labels)
+        for ann in d._end_labels.values():
+            self.assertLessEqual(ann.get_window_extent(r).x1, fig_w)
+        d.close()
+
     def test_simple_chart_row_has_no_series_group(self):
         d = StockMaDialog("KR3YT", "KR 3Y", "Index", _df(volume=False), change_mode="bp")
         row = next(iter(d._period_buttons.values())).parentWidget().parentWidget()

@@ -87,6 +87,11 @@ _PERIODS = [("1M", 1), ("3M", 3), ("6M", 6), ("1Y", 12), ("3Y", 36), ("All", Non
 _PERIOD_LABELS = {"1M": tr("1개월", "1M"), "3M": tr("3개월", "3M"), "6M": tr("6개월", "6M"),
                   "1Y": tr("1년", "1Y"), "3Y": tr("3년", "3Y"), "All": tr("전체", "All")}
 _DEFAULT_PERIOD = "1Y"
+# Figure margins before the first measurement (fractions, the old fixed
+# values); _fit_margins then sizes them in pixels from the labels.
+_DEFAULT_MARGINS = (0.075, 0.90)
+_MARGIN_PAD_PX = 6
+_MIN_RIGHT_PX = 12
 # Independent series toggles (user direction 2026-10-15), key -> label.
 # Price-panel lines use their _lines key; "Div" is the divergence panel.
 _SERIES = {
@@ -666,8 +671,9 @@ class StockMaDialog(QDialog):
         fixed 3:1:1 -- panels can be hidden, the price panel too when no
         price line is selected)."""
         panels = self._visible_panels()
+        left, right = getattr(self, "_margins", _DEFAULT_MARGINS)
         gs = self._fig.add_gridspec(len(panels), 1, height_ratios=[r for _, r in panels],
-                                    hspace=0.08, left=0.075, right=0.90, top=0.97, bottom=0.07)
+                                    hspace=0.08, left=left, right=right, top=0.97, bottom=0.07)
         shown = set()
         for i, (key, _r) in enumerate(panels):
             ax = self._panel_axes[key]
@@ -678,6 +684,39 @@ class StockMaDialog(QDialog):
         for key, ax in self._panel_axes.items():
             if key not in shown:
                 ax.set_visible(False)
+
+    def _fit_margins(self) -> bool:
+        """Left/right margins in pixels from what has to fit there: the
+        widest Y-axis tick labels + axis label of the visible panels on the
+        left, the end-value labels on the right. Fixed fractions (7.5% / 10%)
+        cut "100,000" and the axis label once the dialog could be narrowed
+        to ~1000 px (2026-11-15). Re-grids and returns True when the margins
+        moved by a pixel or more."""
+        if self._x is None:
+            return False
+        fig_w = self._fig.bbox.width
+        if fig_w <= 0:
+            return False
+        renderer = self._canvas.get_renderer()
+        left_px = 0.0
+        for ax in self._panel_axes.values():
+            if not ax.get_visible():
+                continue
+            bb = ax.yaxis.get_tightbbox(renderer)
+            if bb is not None:
+                left_px = max(left_px, ax.bbox.x0 - bb.x0)
+        right_px = _MIN_RIGHT_PX
+        price = self._panel_axes["price"]
+        for ann in self._end_labels.values():
+            right_px = max(right_px, ann.get_window_extent(renderer).x1 - price.bbox.x1)
+        left = min(0.4, (left_px + _MARGIN_PAD_PX) / fig_w)
+        right = max(0.6, 1.0 - (right_px + _MARGIN_PAD_PX) / fig_w)
+        old_l, old_r = getattr(self, "_margins", _DEFAULT_MARGINS)
+        if abs(left - old_l) * fig_w < 1 and abs(right - old_r) * fig_w < 1:
+            return False
+        self._margins = (float(left), float(right))
+        self._apply_layout()
+        return True
 
     def _set_panel(self, key: str, on: bool) -> None:
         self._panel_on[key] = bool(on)
@@ -707,6 +746,7 @@ class StockMaDialog(QDialog):
         self._apply_layout()
         self._autofit_y()
         self._place_end_labels()
+        self._fit_margins()
         self._update_hover(self._cursor_idx)
         self._canvas.draw_idle()
 
@@ -781,7 +821,11 @@ class StockMaDialog(QDialog):
         canvas.mpl_connect("motion_notify_event", self._on_motion)
         canvas.mpl_connect("axes_leave_event", self._on_leave)
         canvas.mpl_connect("figure_leave_event", self._on_leave)
-        canvas.mpl_connect("resize_event", lambda _e: self._place_end_labels())
+        canvas.mpl_connect("resize_event", lambda _e: self._on_canvas_resize())
+
+    def _on_canvas_resize(self) -> None:
+        self._place_end_labels()
+        self._fit_margins()
 
     def _index_at(self, xdata: float) -> int:
         i = int(np.searchsorted(self._x, xdata))
@@ -946,6 +990,7 @@ class StockMaDialog(QDialog):
         self._panel_axes["price"].set_xlim(*self._clamp_xlim(xmin, xmax))
         self._autofit_y()
         self._place_end_labels()
+        self._fit_margins()                 # the Y tick labels change with the range in view
         self._update_scrollbar()
         self._canvas.draw_idle()
 
