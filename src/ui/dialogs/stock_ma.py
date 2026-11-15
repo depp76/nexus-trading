@@ -123,19 +123,32 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         self._investor_data = investor_data or []
         self._change_mode = change_mode
 
-        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint | Qt.WindowType.WindowMinimizeButtonHint)
-        self.setWindowTitle(tr(f"{name} ({ticker}) — 이동평균", f"{name} ({ticker}) — Moving Averages"))
-        fit_to_screen(self, 1200, 720)
-        self.showMaximized()
-
+        self._setup_window()
         self._is_simple_chart = ticker in _SIMPLE_CHART_TICKERS or change_mode == 'bp'
         self._has_data = (
             df is not None and not df.is_empty() and "Close" in df.columns
             and (self._is_simple_chart or all(c in df.columns for c in MA_RAMP))
         )
         self._currency, self._unit_suffix, self._fmt_str = self._format_config()
+        self._init_chart_state()
 
-        # Artists / state the interaction handlers refer to.
+        splitter, chart_v = self._build_splitter()
+        self._build_chart_column(chart_v)
+
+        # No Close button (user direction 2026-11-15): the title bar and Esc close it.
+        splitter.splitterMoved.connect(lambda *_: self._align_right_panel())
+
+    # ---------------------------------------------------------- construction
+    def _setup_window(self) -> None:
+        """Window flags, title and the maximized initial size."""
+        name, ticker = self._name, self._ticker
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint | Qt.WindowType.WindowMinimizeButtonHint)
+        self.setWindowTitle(tr(f"{name} ({ticker}) — 이동평균", f"{name} ({ticker}) — Moving Averages"))
+        fit_to_screen(self, 1200, 720)
+        self.showMaximized()
+
+    def _init_chart_state(self) -> None:
+        """Artists / state the interaction handlers refer to."""
         self._lines = {}          # "Close" | "MA5" | ... | "EW" -> Line2D
         self._end_labels = {}     # same keys -> Annotation
         self._crosshairs = []     # one axvline per panel
@@ -149,6 +162,10 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         self._cursor_idx = None
         self.scrollbar = None
 
+    def _build_splitter(self) -> tuple[QSplitter, QVBoxLayout]:
+        """The root splitter: the chart column on the left and, for stocks or
+        when there is investor / futures data, the right panel. Returns the
+        splitter and the (still empty) chart column layout."""
         root = QVBoxLayout(self)
         root.setSpacing(6)
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -160,7 +177,7 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         chart_v.setSpacing(4)
         splitter.addWidget(chart_widget)
 
-        is_stock = market in _STOCK_MARKETS
+        is_stock = self._market in _STOCK_MARKETS
         self._right_layout = None
         self._right_panel = None
         self._right_title = None      # first line of the right panel, level with the button row
@@ -173,7 +190,11 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
             splitter.setStretchFactor(0, 10)
             splitter.setStretchFactor(1, 0)          # the panel keeps its content width; the chart flexes
             splitter.setCollapsible(1, False)
+        return splitter, chart_v
 
+    def _build_chart_column(self, chart_v: QVBoxLayout) -> None:
+        """Header and button rows, the figure (plotted, or a notice without
+        data), the bond Y-zoom row and the horizontal scrollbar."""
         chart_v.addLayout(self._build_header_row())
         chart_v.addWidget(self._build_view_row())
 
@@ -182,20 +203,20 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         if self._has_data:
             self._plot()
         else:
-            ax = self._fig.add_subplot(111)
-            ax.text(0.5, 0.5, tr("상세 데이터를 불러오지 못했습니다.", "Failed to load detailed data."),
-                    ha="center", va="center",
-                    transform=ax.transAxes, color=TEXT_MUTED, fontsize=FONT_BODY)
-            ax.set_axis_off()
+            self._draw_no_data_notice()
 
-        if change_mode == 'bp':
+        if self._change_mode == 'bp':
             chart_v.addLayout(self._build_y_zoom_row())
         chart_v.addWidget(self._canvas, 1)
         if self.scrollbar is not None:
             chart_v.addWidget(self.scrollbar)
 
-        # No Close button (user direction 2026-11-15): the title bar and Esc close it.
-        splitter.splitterMoved.connect(lambda *_: self._align_right_panel())
+    def _draw_no_data_notice(self) -> None:
+        ax = self._fig.add_subplot(111)
+        ax.text(0.5, 0.5, tr("상세 데이터를 불러오지 못했습니다.", "Failed to load detailed data."),
+                ha="center", va="center",
+                transform=ax.transAxes, color=TEXT_MUTED, fontsize=FONT_BODY)
+        ax.set_axis_off()
 
     # ------------------------------------------------------------- top rows
     def _build_header_row(self) -> QHBoxLayout:

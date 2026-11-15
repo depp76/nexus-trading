@@ -64,6 +64,14 @@ def _make_rw_edit(placeholder: str = "") -> QLineEdit:
     return e
 
 
+def _toolbar_hbox() -> QHBoxLayout:
+    """One line of the controls row: 8px spacing, no margins."""
+    row = QHBoxLayout()
+    row.setSpacing(8)
+    row.setContentsMargins(0, 0, 0, 0)
+    return row
+
+
 # Message boxes are titled with the tab name (docs/ui.md 8.5).
 _TITLE = "Trading History"
 # Period filter keys (1M/3M/YTD/All) -> button label; the keys stay what the filter code compares.
@@ -220,13 +228,25 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         rows = QVBoxLayout()
         rows.setSpacing(6)
         rows.setContentsMargins(0, 0, 0, 0)
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        row.setContentsMargins(0, 0, 0, 0)
-        view_row = QHBoxLayout()
-        view_row.setSpacing(8)
-        view_row.setContentsMargins(0, 0, 0, 0)
+        row = _toolbar_hbox()
+        view_row = _toolbar_hbox()
 
+        self._add_stock_finder(row)
+        self._add_period_buttons(view_row)
+        view_row.addSpacing(14)
+        self._add_grouping_buttons(view_row)
+        view_row.addSpacing(14)
+        self._add_stale_toggle(view_row)
+        view_row.addStretch()
+
+        row.addStretch()
+        self._add_action_buttons(row)
+        rows.addLayout(row)
+        rows.addLayout(view_row)
+        return rows
+
+    def _add_stock_finder(self, row: QHBoxLayout) -> None:
+        """Holdings jump combo, company search field and its Search button."""
         self._open_stocks_combo = QComboBox()
         self._open_stocks_combo.addItem(tr("보유 종목...", "Current Holdings..."))
         self._open_stocks_combo.setFixedHeight(_BTN_H)
@@ -244,7 +264,8 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         row.addWidget(self._search_stock_pl_edit)
         row.addWidget(make_button(tr("검색", "Search"), on_click=self._on_search_stock_pl))
 
-        # Period filter (mockup "periods": 1M/3M/YTD/All), by buy date.
+    def _add_period_buttons(self, view_row: QHBoxLayout) -> None:
+        """Period filter (mockup "periods": 1M/3M/YTD/All), by buy date."""
         self._period_filter = "All"
         self._period_buttons = {}
         for label in ("1M", "3M", "YTD", "All"):
@@ -252,14 +273,14 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             btn.clicked.connect(lambda checked, p=label: self._on_period_filter_changed(p))
             view_row.addWidget(btn)
             self._period_buttons[label] = btn
-        view_row.addSpacing(14)
 
-        # Row grouping: by status (closed, then open) or by month (all trades
-        # newest first with a month summary row after each month). A view
-        # mode, not a column sort -- the month summary rows cannot take part
-        # in a header-click sort -- so it is a two-button segment like the
-        # period filter (docs/ui.md 8.2; it was a "Sort: Date" toggle whose
-        # label named the other mode).
+    def _add_grouping_buttons(self, view_row: QHBoxLayout) -> None:
+        """Row grouping: by status (closed, then open) or by month (all trades
+        newest first with a month summary row after each month). A view
+        mode, not a column sort -- the month summary rows cannot take part
+        in a header-click sort -- so it is a two-button segment like the
+        period filter (docs/ui.md 8.2; it was a "Sort: Date" toggle whose
+        label named the other mode)."""
         self._sort_by_date = False
         self._group_buttons = {}
         for key, label in (("status", tr("상태별", "By Status")), ("month", tr("월별", "By Month"))):
@@ -267,30 +288,25 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             btn.clicked.connect(lambda _c, k=key: self._on_grouping_changed(k))
             view_row.addWidget(btn)
             self._group_buttons[key] = btn
-        view_row.addSpacing(14)
 
-        # docs/ui.md 3.5: the 30-day rule used to be hardcoded with no UI
-        # trace of it, so a user seeing a blank current-price cell had no
-        # way to know why.
+    def _add_stale_toggle(self, view_row: QHBoxLayout) -> None:
+        """docs/ui.md 3.5: the 30-day rule used to be hardcoded with no UI
+        trace of it, so a user seeing a blank current-price cell had no way
+        to know why."""
         self._hide_stale_closed = True
         self._stale_toggle_btn = make_button(
             tr("오래된 시세 숨김", "Hide stale prices"), tooltip=tr("매도 후 30일이 지난 거래의 현재가를 숨깁니다", "Hide the current price of trades closed more than 30 days ago"),
             checkable=True, checked=True)
         self._stale_toggle_btn.toggled.connect(self._on_stale_toggle_changed)
         view_row.addWidget(self._stale_toggle_btn)
-        view_row.addStretch()
 
-        row.addStretch()
-
-        # Actions; Add Trade is the tab's one primary (docs/ui.md 8.1).
+    def _add_action_buttons(self, row: QHBoxLayout) -> None:
+        """Actions; Add Trade is the tab's one primary (docs/ui.md 8.1)."""
         row.addWidget(make_button(tr("종목별 요약", "Summary"), on_click=self._show_holdings_summary))
         self._fetch_dep_btn = make_button(tr("예수금 조회", "Fetch Deposit"), on_click=self._fetch_account_deposit)
         row.addWidget(self._fetch_dep_btn)
         row.addWidget(make_button(tr("다시 읽기", "Reload"), on_click=self._reload_current))
         row.addWidget(make_button(tr("거래 추가", "Add Trade"), "primary", self._show_add_trade_dialog))
-        rows.addLayout(row)
-        rows.addLayout(view_row)
-        return rows
 
 
     # ---Language switch (docs/ui.md 8.20): MainWindow rebuilds every tab in

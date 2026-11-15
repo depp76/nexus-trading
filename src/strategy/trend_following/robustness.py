@@ -293,6 +293,90 @@ def _run_variant(ds, feats, params, vid: str, cm, score_cache: dict):
     return run_backtest(ds, feats, params, v, cm, scores=scores)
 
 
+def _e1_weekday_runs(ds, p, runnable, base1, cm1, counter, progress, should_stop) -> list[WeekdayRun]:
+    """Checklist E1 (spec 6-4, 9-17): every variant on each of the five check weekdays; the
+    default weekday reuses the 1x base-matrix run instead of running it again."""
+    weekday_runs: list[WeekdayRun] = []
+    for w in range(5):
+        if w == p.check_weekday:
+            for vid in runnable:
+                s = base1[vid]
+                weekday_runs.append(WeekdayRun(vid, w, stats_from_metrics(s.metrics),
+                                               period_stats(s.nav, s.dates, s.rf_period)))
+            continue
+        pw = replace(p, check_weekday=w)
+        featsw = compute_features(ds, pw)
+        cache: dict = {}
+        for vid in runnable:
+            _stop(should_stop)
+            _say(progress, tr(f"E1: {vid} 점검 요일 {WEEKDAY_NAMES[w]}...", f"E1: {vid} with check weekday {WEEKDAY_NAMES[w]}..."))
+            res = _run_variant(ds, featsw, pw, vid, cm1, cache)
+            counter.add(GROUP_E1)
+            weekday_runs.append(WeekdayRun(vid, w, stats_from_metrics(summarize_run(res)),
+                                           period_stats(res.nav, res.dates, res.rf_period)))
+    return weekday_runs
+
+
+def _e2_neighbor_runs(ds, p, variant_ids, base1, cm1, counter, progress, should_stop
+                      ) -> tuple[list[NeighborRun], list[dict], list[str]]:
+    """Checklist E2 (spec 6-4, 9-17): (runs, warm-up checks, skipped notes) over the
+    pre-registered ``E2_NEIGHBORS``; a neighbour the snapshot warm-up cannot cover is skipped."""
+    neighbor_runs: list[NeighborRun] = []
+    checks: list[dict] = []
+    skipped: list[str] = []
+    for nid, f, v, _vids in E2_NEIGHBORS:
+        wanted = [vid for n2, _, _, vid in planned_e2_runs(variant_ids) if n2 == nid and vid in base1]
+        chk = warmup_check(ds, p, f, v)
+        chk["id"] = nid
+        checks.append(chk)
+        if not wanted:
+            continue
+        if not chk["ok"]:
+            skipped.append(f"{nid} ({f}={v}): snapshot warm-up has {chk['available_sessions']} sessions, "
+                           f"{chk['needed_sessions']} needed; not run (the window is never shortened) -- report to the CIO")
+            continue
+        pn = neighbor_params(p, f, v)
+        featsn = compute_features(ds, pn)
+        for vid in wanted:
+            _stop(should_stop)
+            _say(progress, tr(f"E2: {vid} {f}={v} ({nid})...", f"E2: {vid} with {f}={v} ({nid})..."))
+            res = _run_variant(ds, featsn, pn, vid, cm1, {})
+            counter.add(GROUP_E2)
+            neighbor_runs.append(NeighborRun(
+                nid, f, v, vid, stats_from_metrics(summarize_run(res)),
+                period_stats(res.nav, res.dates, res.rf_period), float(base1[vid].metrics["sharpe"])))
+    return neighbor_runs, checks, skipped
+
+
+def _e4_top_trade_rows(runnable, base1, seed_krw) -> list[TopTradeRow]:
+    """Checklist E4 (spec 6-4): top-trade share of each variant's 1x base run."""
+    top_rows: list[TopTradeRow] = []
+    for vid in runnable:
+        s = base1[vid]
+        yrs = max((s.dates[-1] - s.dates[0]).days / 365.0, 1e-9) if len(s.dates) > 1 else 0.0
+        top_rows.append(top_trade_stats(vid, s.trades, seed_krw, yrs))
+    return top_rows
+
+
+def _a2_contamination_runs(ds, p, flow_lead, runnable, base1, cm1, counter, progress, should_stop
+                           ) -> list[ContaminationRow]:
+    """Checklist A2 (validation only, spec 9-17): flow variants rerun with flows `flow_lead`
+    sessions early, next to the clean 1x base run; nothing when the dataset has no flows."""
+    contam: list[ContaminationRow] = []
+    featsc = compute_features(ds, p, flow_lead=flow_lead)
+    if featsc.has_flows:
+        for vid in runnable:
+            if not VARIANTS[vid].needs_flows:
+                continue
+            _stop(should_stop)
+            _say(progress, tr(f"A2: {vid} 수급 {flow_lead}세션 앞당김 (검증 전용)...", f"A2: {vid} with flows {flow_lead} session early (validation only)..."))
+            res = _run_variant(ds, featsc, p, vid, cm1, {})
+            counter.add(GROUP_A2)
+            contam.append(ContaminationRow(vid, stats_from_metrics(base1[vid].metrics),
+                                           stats_from_metrics(summarize_run(res))))
+    return contam
+
+
 def run_robustness(ds, req: RobustnessRequest, progress=None, should_stop=None) -> RobustnessResult:
     r = req.research
     p = r.params
@@ -304,75 +388,23 @@ def run_robustness(ds, req: RobustnessRequest, progress=None, should_stop=None) 
     counter.add(GROUP_BASE, sum(1 for x in research.runs if x.kind == "strategy"))
     runnable = [vid for vid in r.variant_ids if vid in base1]       # flow variants drop out without flows
 
-    # -- E1 --------------------------------------------------------------
     weekday_runs: list[WeekdayRun] = []
     if req.run_e1:
-        for w in range(5):
-            if w == p.check_weekday:
-                for vid in runnable:
-                    s = base1[vid]
-                    weekday_runs.append(WeekdayRun(vid, w, stats_from_metrics(s.metrics),
-                                                   period_stats(s.nav, s.dates, s.rf_period)))
-                continue
-            pw = replace(p, check_weekday=w)
-            featsw = compute_features(ds, pw)
-            cache: dict = {}
-            for vid in runnable:
-                _stop(should_stop)
-                _say(progress, tr(f"E1: {vid} 점검 요일 {WEEKDAY_NAMES[w]}...", f"E1: {vid} with check weekday {WEEKDAY_NAMES[w]}..."))
-                res = _run_variant(ds, featsw, pw, vid, cm1, cache)
-                counter.add(GROUP_E1)
-                weekday_runs.append(WeekdayRun(vid, w, stats_from_metrics(summarize_run(res)),
-                                               period_stats(res.nav, res.dates, res.rf_period)))
+        weekday_runs = _e1_weekday_runs(ds, p, runnable, base1, cm1, counter, progress, should_stop)
 
-    # -- E2 --------------------------------------------------------------
     neighbor_runs: list[NeighborRun] = []
     checks: list[dict] = []
     skipped: list[str] = []
     if req.run_e2:
-        for nid, f, v, _vids in E2_NEIGHBORS:
-            wanted = [vid for n2, _, _, vid in planned_e2_runs(r.variant_ids) if n2 == nid and vid in base1]
-            chk = warmup_check(ds, p, f, v)
-            chk["id"] = nid
-            checks.append(chk)
-            if not wanted:
-                continue
-            if not chk["ok"]:
-                skipped.append(f"{nid} ({f}={v}): snapshot warm-up has {chk['available_sessions']} sessions, "
-                               f"{chk['needed_sessions']} needed; not run (the window is never shortened) -- report to the CIO")
-                continue
-            pn = neighbor_params(p, f, v)
-            featsn = compute_features(ds, pn)
-            for vid in wanted:
-                _stop(should_stop)
-                _say(progress, tr(f"E2: {vid} {f}={v} ({nid})...", f"E2: {vid} with {f}={v} ({nid})..."))
-                res = _run_variant(ds, featsn, pn, vid, cm1, {})
-                counter.add(GROUP_E2)
-                neighbor_runs.append(NeighborRun(
-                    nid, f, v, vid, stats_from_metrics(summarize_run(res)),
-                    period_stats(res.nav, res.dates, res.rf_period), float(base1[vid].metrics["sharpe"])))
+        neighbor_runs, checks, skipped = _e2_neighbor_runs(ds, p, r.variant_ids, base1, cm1, counter,
+                                                           progress, should_stop)
 
-    # -- E4 --------------------------------------------------------------
-    top_rows: list[TopTradeRow] = []
-    for vid in runnable:
-        s = base1[vid]
-        yrs = max((s.dates[-1] - s.dates[0]).days / 365.0, 1e-9) if len(s.dates) > 1 else 0.0
-        top_rows.append(top_trade_stats(vid, s.trades, p.seed_krw, yrs))
+    top_rows = _e4_top_trade_rows(runnable, base1, p.seed_krw)
 
-    # -- A2 contamination (validation only) -------------------------------
     contam: list[ContaminationRow] = []
     if req.flow_contamination:
-        featsc = compute_features(ds, p, flow_lead=req.flow_contamination)
-        if featsc.has_flows:
-            for vid in runnable:
-                if not VARIANTS[vid].needs_flows:
-                    continue
-                _stop(should_stop)
-                _say(progress, tr(f"A2: {vid} 수급 {req.flow_contamination}세션 앞당김 (검증 전용)...", f"A2: {vid} with flows {req.flow_contamination} session early (validation only)..."))
-                res = _run_variant(ds, featsc, p, vid, cm1, {})
-                counter.add(GROUP_A2)
-                contam.append(ContaminationRow(vid, stats_from_metrics(base1[vid].metrics),
-                                               stats_from_metrics(summarize_run(res))))
+        contam = _a2_contamination_runs(ds, p, req.flow_contamination, runnable, base1, cm1, counter,
+                                        progress, should_stop)
     return RobustnessResult(req, research, weekday_runs, neighbor_runs, checks, skipped, top_rows, contam,
                             counter, ds.dates[-1] if ds.dates else None)
 

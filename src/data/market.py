@@ -119,87 +119,107 @@ def _build_kr_stock_res(code, name, market, marcap):
     }
 
 
+def _kr_listing(market, top_n):
+    """Top-`top_n` listing rows for `market`: the Naver scrape, else the FDR fallback ([] if both fail)."""
+    try:
+        results_list = _fetch_kr_listing_naver(market, top_n)
+    except PAYLOAD_ERRORS:
+        logger.warning("Naver market-listing scrape failed for market=%s", market, exc_info=True)
+        results_list = []
+
+    if not results_list:
+        logger.info("fetch_kr_market_data: Naver listing empty for market=%s, trying FDR fallback", market)
+        results_list = _fetch_kr_listing_fdr_fallback(market, top_n)
+    return results_list
+
+
+def _kr_price_with_fallback(ticker, naver_prices):
+    """The Naver quote for `ticker`, or the last close of the past 10 days when it is missing or 0."""
+    current_price = naver_prices.get(ticker, 0.0)
+    if current_price == 0:
+        try:
+            start_dt = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
+            df_p = get_historical_data(ticker, start_dt)
+            if not df_p.is_empty():
+                current_price = float(df_p.get_column('Close')[-1])
+        except (pl.exceptions.PolarsError, IndexError, ValueError):
+            logger.debug("Historical price fallback failed for ticker=%s", ticker, exc_info=True)
+    return current_price
+
+
+def _fetch_kr_rows(results_list, naver_prices, progress_callback):
+    """Price + historical changes for every listing row on a 20-worker pool:
+    {ticker: (name, marcap, price, changes)}, reporting (done, total) as rows finish."""
+    total = len(results_list)
+    done_count = 0
+    _lock = threading.Lock()
+
+    def _process_one(item):
+        nonlocal done_count
+        ticker = item['Code']
+        name   = item['Name']
+        marcap = item['Marcap']
+
+        current_price = _kr_price_with_fallback(ticker, naver_prices)
+
+        changes = fetch_historical_changes(ticker, current_price)
+        with _lock:
+            done_count += 1
+            count = done_count
+        if progress_callback:
+            progress_callback(min(count, total), total)
+        return ticker, str(name), marcap, current_price, changes
+
+    hist_data: dict = {}
+    with ThreadPoolExecutor(max_workers=20) as exe:
+        futures = [exe.submit(_process_one, item) for item in results_list]
+        for f in as_completed(futures):
+            t, n, mc, cp, ch = f.result()
+            hist_data[t] = (n, mc, cp, ch)
+    return hist_data
+
+
+def _assemble_kr_results(results_list, hist_data, market, trailing_per_dict, forward_per_dict):
+    """Universe rows in listing order; rows without fetched data are dropped."""
+    results = []
+    for item in results_list:
+        ticker = item['Code']
+        if ticker not in hist_data:
+            continue
+        name, marcap, current_price, changes = hist_data[ticker]
+        results.append({
+            "ticker": ticker,
+            "name": name,
+            "market": market,
+            "price": current_price,
+            "market_cap": marcap,
+            "currency": "₩",
+            "changes": changes,
+            "trailing_per": trailing_per_dict.get(ticker),
+            "forward_per": forward_per_dict.get(ticker),
+        })
+    return results
+
+
 def fetch_kr_market_data(market="KOSPI", top_n=200, progress_callback=None):
     try:
-        try:
-            results_list = _fetch_kr_listing_naver(market, top_n)
-        except PAYLOAD_ERRORS:
-            logger.warning("Naver market-listing scrape failed for market=%s", market, exc_info=True)
-            results_list = []
-
-        if not results_list:
-            logger.info("fetch_kr_market_data: Naver listing empty for market=%s, trying FDR fallback", market)
-            results_list = _fetch_kr_listing_fdr_fallback(market, top_n)
-
+        results_list = _kr_listing(market, top_n)
         if not results_list:
             logger.error("fetch_kr_market_data: all listing sources failed for market=%s", market)
             return []
 
-        total = len(results_list)
         all_codes = [r['Code'] for r in results_list]
         _bg_exe = ThreadPoolExecutor(max_workers=2)
         try:
             _f_prices = _bg_exe.submit(fetch_naver_realtime_prices, all_codes)
             _f_per    = _bg_exe.submit(fetch_naver_per_batch, all_codes)
             naver_prices = _f_prices.result()
-
-            done_count = 0
-            _lock = threading.Lock()
-
-            def _process_one(item):
-                nonlocal done_count
-                ticker = item['Code']
-                name   = item['Name']
-                marcap = item['Marcap']
-
-                current_price = naver_prices.get(ticker, 0.0)
-                if current_price == 0:
-                    try:
-                        start_dt = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
-                        df_p = get_historical_data(ticker, start_dt)
-                        if not df_p.is_empty():
-                            current_price = float(df_p.get_column('Close')[-1])
-                    except (pl.exceptions.PolarsError, IndexError, ValueError):
-                        logger.debug("Historical price fallback failed for ticker=%s", ticker, exc_info=True)
-
-                changes = fetch_historical_changes(ticker, current_price)
-                with _lock:
-                    done_count += 1
-                    count = done_count
-                if progress_callback:
-                    progress_callback(min(count, total), total)
-                return ticker, str(name), marcap, current_price, changes
-
-            hist_data: dict = {}
-            with ThreadPoolExecutor(max_workers=20) as exe:
-                futures = [exe.submit(_process_one, item) for item in results_list]
-                for f in as_completed(futures):
-                    t, n, mc, cp, ch = f.result()
-                    hist_data[t] = (n, mc, cp, ch)
-
+            hist_data = _fetch_kr_rows(results_list, naver_prices, progress_callback)
             trailing_per_dict, forward_per_dict = _f_per.result()
         finally:
             _bg_exe.shutdown(wait=False)
 
-        results = []
-        for item in results_list:
-            ticker = item['Code']
-            if ticker not in hist_data:
-                continue
-            name, marcap, current_price, changes = hist_data[ticker]
-            results.append({
-                "ticker": ticker,
-                "name": name,
-                "market": market,
-                "price": current_price,
-                "market_cap": marcap,
-                "currency": "₩",
-                "changes": changes,
-                "trailing_per": trailing_per_dict.get(ticker),
-                "forward_per": forward_per_dict.get(ticker),
-            })
-
-        return results
+        return _assemble_kr_results(results_list, hist_data, market, trailing_per_dict, forward_per_dict)
     except Exception:
         # boundary: contract is [] on any failure; one market's build must not take the refresh down.
         logger.error("fetch_kr_market_data failed for market=%s", market, exc_info=True)
