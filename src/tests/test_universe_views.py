@@ -32,6 +32,14 @@ class TestMatches(unittest.TestCase):
         self.assertTrue(matches(r, {"search": "0059"}))
         self.assertFalse(matches(r, {"search": "hynix"}))
 
+    def test_markets_without_a_toggle_always_show(self):
+        """2026-11-15: single names added from NASDAQ / NYSE have no market
+        toggle, so the toggles never hide them; toggled markets still filter."""
+        for m in ("NASDAQ", "NYSE"):
+            self.assertTrue(matches(_row(market=m), {"market": ["KOSPI", "KOSDAQ"]}), m)
+        self.assertFalse(matches(_row(market="NASDAQ 100"), {"market": ["KOSPI", "KOSDAQ"]}))
+        self.assertFalse(matches(_row(market="S&P500"), {"market": ["KOSPI"]}))
+
     def test_ranges_and_units(self):
         r = _row(values={"tper": 8.0, "range52w": 0.95})
         self.assertTrue(matches(r, {"ranges": {"tper": [0, 12]}}))

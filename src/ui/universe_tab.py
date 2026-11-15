@@ -26,7 +26,7 @@ from collections import Counter
 from datetime import datetime
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLineEdit, QLabel,
+    QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLineEdit,
     QPushButton, QMessageBox, QInputDialog,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
@@ -66,6 +66,11 @@ from ui.common import (
 
 # Message boxes are titled with the tab name (docs/ui.md 8.5).
 _TITLE = "Trading Universe"
+
+
+# Markets the "Add Ticker" row can add a single name from (2026-11-15: NASDAQ
+# and NYSE added; US names go through data.market.fetch_single_stock's US path).
+ADD_TICKER_MARKETS = ("KOSPI", "KOSDAQ", "NASDAQ", "NYSE")
 
 
 class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
@@ -176,22 +181,22 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         bar.addStretch()
 
         # Add a ticker: its own row under the filters (docs/ui.md 8.17), so the
-        # first row is filters | analysis + primary, and the market picked here
-        # ("추가할 시장") is never confused with the market filter above.
+        # first row is filters | analysis + primary. The market combo has no
+        # caption since 2026-11-15 (its tooltip says it is not the filter);
+        # NASDAQ / NYSE add single US names (rows of those markets have no
+        # toggle and always show, universe_views.matches).
         add_row = QHBoxLayout()
         add_row.setSpacing(6)
-        add_lbl = QLabel(tr("추가할 시장", "Add to market"))
-        add_lbl.setObjectName("muted")
-        add_row.addWidget(add_lbl)
         self.market_combo = QComboBox()
-        self.market_combo.addItems(["KOSPI", "KOSDAQ"]) #, "NASDAQ 100", "S&P500"])
+        self.market_combo.addItems(list(ADD_TICKER_MARKETS))
         self.market_combo.setMinimumWidth(100)
         self.market_combo.setToolTip(tr("추가할 종목의 시장(위의 시장 필터와 별개)",
                                          "Market of the ticker to add (separate from the market filter above)"))
+        self.market_combo.currentTextChanged.connect(self._on_add_market_changed)
         add_row.addWidget(self.market_combo)
 
         self.ticker_input = QLineEdit()
-        self.ticker_input.setPlaceholderText(tr("코드 예: 005930", "Ticker, e.g. 005930"))
+        self.ticker_input.setPlaceholderText(self._add_placeholder("KOSPI"))
         self.ticker_input.setMinimumWidth(140)
         self.ticker_input.setMaximumWidth(180)
         self.ticker_input.returnPressed.connect(self.add_ticker)
@@ -463,6 +468,15 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
         self.save_custom_settings()
         self.table.update_row_status(ticker, highlights.get(ticker, "-"))
+
+    @staticmethod
+    def _add_placeholder(market: str) -> str:
+        if market in ("KOSPI", "KOSDAQ"):
+            return tr("코드 예: 005930", "Ticker, e.g. 005930")
+        return tr("티커 예: AAPL", "Ticker, e.g. AAPL")
+
+    def _on_add_market_changed(self, market: str):
+        self.ticker_input.setPlaceholderText(self._add_placeholder(market))
 
     def add_ticker(self):
         ticker = self.ticker_input.text().strip().upper()

@@ -65,6 +65,48 @@ class TestStartupAddedTickersRenderOnce(unittest.TestCase):
         self.assertEqual([d["ticker"] for d in self.save_json.call_args.args[1]], ["100009"])
 
 
+class TestAddTickerRow(unittest.TestCase):
+    """2026-11-15: no "추가할 시장" caption; NASDAQ / NYSE can be added; the
+    input hint follows the market."""
+
+    def setUp(self):
+        p = patch("ui.universe_tab.atomic_save_json")
+        p.start()
+        self.addCleanup(p.stop)
+        from ui.universe_tab import UniverseTab
+        with patch("ui.universe_tab.safe_load_json", side_effect=_no_disk):
+            self.tab = UniverseTab()
+
+    def test_markets_caption_and_hint(self):
+        from PyQt6.QtWidgets import QLabel
+        tab = self.tab
+        combo = tab.market_combo
+        self.assertEqual([combo.itemText(i) for i in range(combo.count())], ["KOSPI", "KOSDAQ", "NASDAQ", "NYSE"])
+        self.assertFalse([w for w in tab.findChildren(QLabel) if w.text() in ("추가할 시장", "Add to market")])
+        self.assertIn("005930", tab.ticker_input.placeholderText())
+        combo.setCurrentText("NYSE")
+        self.assertIn("AAPL", tab.ticker_input.placeholderText())
+
+    def test_us_add_goes_to_the_fetch_thread_with_its_market(self):
+        tab = self.tab
+        tab.custom_settings = {"added": [], "deleted": []}
+        started = []
+
+        class _Thread:
+            def __init__(self, market, ticker):
+                started.append((market, ticker))
+                self.finished = type("S", (), {"connect": lambda *_: None})()
+
+            def start(self):
+                pass
+
+        tab.market_combo.setCurrentText("NYSE")
+        tab.ticker_input.setText("ko")
+        with patch("ui.universe_tab.SingleStockFetchThread", _Thread),              patch.object(tab, "_track_thread", side_effect=lambda t, attr=None: t),              patch.object(tab, "load_custom_settings"), patch.object(tab, "save_custom_settings"):
+            tab.add_ticker()
+        self.assertEqual(started, [("NYSE", "KO")])
+
+
 class TestStatusFilterButton(unittest.TestCase):
     """The toolbar's status button cycles blank -> Held -> Target -> blank
     (user direction 2026-09-29) at a fixed size and drives the table filter."""

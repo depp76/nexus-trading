@@ -59,14 +59,14 @@ from matplotlib.collections import PolyCollection
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QScrollBar, QButtonGroup,
-    QTableWidget, QTableWidgetItem, QHeaderView, QSplitter, QWidget,
+    QTableWidget, QTableWidgetItem, QHeaderView, QSplitter, QWidget, QSizePolicy,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QPoint, QTimer
 from PyQt6.QtGui import QColor, QFont, QFontMetrics
 
 from i18n import tr
 from ui.trend_score_section import TrendScoreSection
-from ui.common import FlowLayout, create_font, setup_table, BTN_H, FONT_HEADING, FONT_BODY, FONT_SMALL, FONT_CAPTION, make_button, button_row, fit_to_screen
+from ui.common import FlowLayout, create_font, setup_table, BTN_H, FONT_HEADING, FONT_BODY, FONT_SMALL, FONT_CAPTION, fit_to_screen
 from ui.colors import PROFIT, LOSS, MA_RAMP, MA_DIV_NEUTRAL_PCT
 from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_FAINT, LINE, SURFACE, INK_ON_LIGHT
 
@@ -92,6 +92,10 @@ _DEFAULT_PERIOD = "1Y"
 _DEFAULT_MARGINS = (0.075, 0.90)
 _MARGIN_PAD_PX = 6
 _MIN_RIGHT_PX = 12
+# Fixed panel slots (user direction 2026-11-15: toggling a panel or a series
+# must not move the price chart). Every panel the instrument has keeps its
+# slot; a panel switched off leaves its slot empty.
+_SLOT_RATIOS = {"price": 3, "vol": 1, "div": 1, "rsi": 1}
 # Independent series toggles (user direction 2026-10-15), key -> label.
 # Price-panel lines use their _lines key; "Div" is the divergence panel.
 _SERIES = {
@@ -201,6 +205,11 @@ class StockMaDialog(QDialog):
         splitter.addWidget(chart_widget)
 
         is_stock = market in _STOCK_MARKETS
+        self._right_layout = None
+        self._right_panel = None
+        self._right_title = None      # first line of the right panel, level with the button row
+        self._right_table = None      # starts level with the chart's top edge
+        self._right_gap = None        # spacer between the two, sized by _align_right_panel
         if self._investor_data or is_stock:
             panel = self._build_right_panel(is_stock)
             splitter.addWidget(panel)
@@ -228,11 +237,13 @@ class StockMaDialog(QDialog):
         if self.scrollbar is not None:
             chart_v.addWidget(self.scrollbar)
 
-        root.addLayout(button_row(make_button(tr("닫기", "Close"), on_click=self.accept)))
+        # No Close button (user direction 2026-11-15): the title bar and Esc close it.
+        splitter.splitterMoved.connect(lambda *_: self._align_right_panel())
 
     # ------------------------------------------------------------- top rows
     def _build_header_row(self) -> QHBoxLayout:
-        """Name · ticker/market · last price · change% | as-of."""
+        """Name · ticker/market · last price · change% (the as-of date moved
+        to the button row, 2026-11-15)."""
         row = QHBoxLayout()
         row.setSpacing(10)
 
@@ -255,16 +266,6 @@ class StockMaDialog(QDialog):
             self._chg_lbl.setStyleSheet(f"color:{PROFIT if chg > 0 else LOSS if chg < 0 else TEXT_MUTED};")
         row.addWidget(self._chg_lbl)
         row.addStretch()
-
-        as_of = ""
-        if self._has_data:
-            last_day = pd.to_datetime(self._df.get_column('Date')[-1]).strftime('%Y-%m-%d')
-            as_of = tr(f"{last_day} 기준", f"as of {last_day}")
-        as_of_lbl = QLabel(as_of)
-        as_of_lbl.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
-        as_of_lbl.setStyleSheet(f"color:{TEXT_FAINT};")
-        row.addWidget(as_of_lbl)
-        row.addSpacing(8)                # clear of the splitter / right panel
         return row
 
     @staticmethod
@@ -282,6 +283,9 @@ class StockMaDialog(QDialog):
         raising the dialog's minimum width. A group never splits."""
         row_w = QWidget()
         row = FlowLayout(row_w, h_spacing=18, v_spacing=6)
+        # Clear of the splitter: the as-of date ends the row and the right
+        # panel's TREND SCORE title starts level with it.
+        row.setContentsMargins(0, 0, 24, 0)
         series_w, series = self._button_group_widget()
         self._series_buttons = {}
         keys = [] if self._is_simple_chart else ["Close", *MA_RAMP.keys(), "Div"]
@@ -326,30 +330,63 @@ class StockMaDialog(QDialog):
             panels.addWidget(btn)
             self._panel_buttons[key] = btn
         row.addWidget(panels_w)
+
+        # As-of date at the right end of the (last) button line: an Ignored
+        # policy makes FlowLayout stretch it to the line's end, and it never
+        # gets narrower than its text.
+        as_of = ""
+        if self._has_data:
+            last_day = pd.to_datetime(self._df.get_column('Date')[-1]).strftime('%Y-%m-%d')
+            as_of = tr(f"{last_day} 기준", f"as of {last_day}")
+        self._as_of_lbl = QLabel(as_of)
+        self._as_of_lbl.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
+        self._as_of_lbl.setStyleSheet(f"color:{TEXT_FAINT};")
+        self._as_of_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._as_of_lbl.setMinimumWidth(self._as_of_lbl.sizeHint().width())
+        self._as_of_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        if as_of:
+            row.addWidget(self._as_of_lbl)
         return row_w
 
     def _build_right_panel(self, is_stock: bool) -> QWidget:
-        """Investor-trend table (KR stocks), futures curve (WTI) and the
-        'Company Info' link button."""
+        """Top to bottom (user direction 2026-11-15): the table's title level
+        with the button row, the investor-flow table (KR stocks) or futures
+        curve (WTI) starting level with the chart's top edge, the Trend Score
+        block, the 'Company Info' button. `_align_right_panel` keeps the two
+        alignments as the button row wraps or the dialog resizes."""
         panel = QWidget()
         v = QVBoxLayout(panel)
         v.setContentsMargins(0, 0, 0, 0)
-
-        self.trend_section = None
-        if self._market in _TREND_SCORE_MARKETS:
-            self.trend_section = TrendScoreSection(self._trend_rec, self._ticker)
-            v.addWidget(self.trend_section)
-            v.addSpacing(10)
+        # No implicit spacing: the title-to-table distance is set by the
+        # spacer alone (one-line button rows leave only a few pixels).
+        v.setSpacing(0)
+        self._right_layout = v
+        self._right_panel = panel
 
         inv = self._investor_data
         is_wti_futures = bool(inv) and self._ticker == "CL=F" and 'Contract' in inv[0]
         if is_wti_futures:
-            v.addWidget(self._section_label(tr("선물 가격 (최근 8개월)", "Futures Price (Last 8 Months)")))
-            v.addWidget(self._build_futures_table(inv))
+            self._right_title = self._section_label(tr("선물 가격 (최근 8개월)", "Futures Price (Last 8 Months)"))
+            self._right_table = self._build_futures_table(inv)
         elif inv:
-            v.addWidget(self._section_label(tr(f"투자자별 순매수 (최근 {len(inv)}일)",
-                                                  f"Investor Net Buying (Last {len(inv)} Days)")))
-            v.addWidget(self._build_investor_table(inv))
+            self._right_title = self._section_label(tr(f"투자자별 순매수 (최근 {len(inv)}일)",
+                                                       f"Investor Net Buying (Last {len(inv)} Days)"))
+            self._right_table = self._build_investor_table(inv)
+        if self._right_table is not None:
+            v.addWidget(self._right_title)
+            self._right_gap = QWidget()
+            self._right_gap.setFixedHeight(0)
+            v.addWidget(self._right_gap)
+            v.addWidget(self._right_table)
+
+        self.trend_section = None
+        if self._market in _TREND_SCORE_MARKETS:
+            self.trend_section = TrendScoreSection(self._trend_rec, self._ticker)
+            if self._right_table is not None:
+                v.addSpacing(12)
+            else:
+                self._right_title = self.trend_section     # its title line goes level with the buttons
+            v.addWidget(self.trend_section)
 
         if is_stock:
             fin_btn = QPushButton(tr("기업 정보", "Company Info"))
@@ -360,6 +397,49 @@ class StockMaDialog(QDialog):
         if not inv:
             v.addStretch()
         return panel
+
+    def _align_right_panel(self) -> None:
+        """Right panel's first line level with the first button line, its
+        table's top level with the chart's top edge (2026-11-15). Both depend
+        on the live geometry (the button row wraps on a narrow chart), so this
+        runs on show, resize and splitter moves."""
+        panel, v = self._right_panel, self._right_layout
+        if panel is None or v is None or not panel.isVisible():
+            return
+        buttons = list(self._series_buttons.values()) or list(self._period_buttons.values())
+        if not buttons:
+            return
+
+        def y_in_panel(w, local_y=0):
+            return w.mapToGlobal(QPoint(0, local_y)).y() - panel.mapToGlobal(QPoint(0, 0)).y()
+
+        first_line_mid = y_in_panel(buttons[0], buttons[0].height() // 2)
+        title = self._right_title
+        if title is self.trend_section and title is not None:
+            title_h = title.layout().itemAt(0).widget().sizeHint().height()
+        else:
+            title_h = title.sizeHint().height() if title is not None else 0
+        top = max(0, first_line_mid - title_h // 2)
+        old = v.contentsMargins()
+        if old.top() != top:
+            v.setContentsMargins(0, top, 0, 0)
+        if self._right_gap is not None:
+            # Lay out with the new top first, then correct the spacer by what
+            # is actually left between the table and the chart's top edge.
+            v.activate()
+            delta = y_in_panel(self._canvas) - y_in_panel(self._right_table)
+            gap = max(0, self._right_gap.height() + delta)
+            if self._right_gap.height() != gap:
+                self._right_gap.setFixedHeight(gap)
+                v.activate()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._align_right_panel)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._align_right_panel)
 
     @staticmethod
     def _section_label(text: str) -> QLabel:
@@ -399,7 +479,7 @@ class StockMaDialog(QDialog):
     _SIDE_CELL_PAD = 36
 
     @classmethod
-    def _fit_side_table(cls, table: QTableWidget) -> None:
+    def _fit_side_table(cls, table: QTableWidget, equal_cols=()) -> None:
         """Size every column to its widest header/cell text and pin the
         table's minimum width to the total, so the splitter cannot squeeze
         the side panel below what its numbers need. Net-purchase figures
@@ -412,6 +492,7 @@ class StockMaDialog(QDialog):
         head_fm = QFontMetrics(table.horizontalHeader().font())
         cell_fm = QFontMetrics(table.font())
         total = 0
+        widths = []
         for c in range(table.columnCount()):
             header = table.horizontalHeaderItem(c)
             w = head_fm.horizontalAdvance(header.text()) if header else 0
@@ -419,11 +500,25 @@ class StockMaDialog(QDialog):
                 it = table.item(r, c)
                 if it is not None:
                     w = max(w, cell_fm.horizontalAdvance(it.text()))
-            w += cls._SIDE_CELL_PAD
+            widths.append(w + cls._SIDE_CELL_PAD)
+        # Columns that compare like with like (investor groups) share one width.
+        if equal_cols:
+            same = max(widths[c] for c in equal_cols)
+            for c in equal_cols:
+                widths[c] = same
+        for c, w in enumerate(widths):
             table.setColumnWidth(c, w)
             total += w
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        table.horizontalHeader().setStretchLastSection(True)
+        hdr = table.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        if equal_cols:
+            # The spare panel width is shared equally by those columns (the
+            # last one used to take it all), so they stay the same width.
+            hdr.setStretchLastSection(False)
+            for c in equal_cols:
+                hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.Stretch)
+        else:
+            hdr.setStretchLastSection(True)
         scrollbar_w = table.style().pixelMetric(table.style().PixelMetric.PM_ScrollBarExtent)
         table.setMinimumWidth(total + scrollbar_w + 2 * table.frameWidth())
 
@@ -457,7 +552,9 @@ class StockMaDialog(QDialog):
                 val = row.get(key, 0)
                 color = PROFIT if val > 0 else (LOSS if val < 0 else None)
                 table.setItem(i, j, self._cell(f"{val:,}", right, color))
-        self._fit_side_table(table)
+        # Foreigner / Institution / Retail (and the detail groups) one width,
+        # so the groups read as equals (2026-11-15).
+        self._fit_side_table(table, equal_cols=range(2, 2 + len(keys)))
         return table
 
     def _open_company_page(self, *_):
@@ -580,6 +677,7 @@ class StockMaDialog(QDialog):
         self._apply_series_visibility()
         self._apply_layout()
         self._apply_period(_DEFAULT_PERIOD)
+        self._fit_margins()                 # baseline for the widest labels; toggles keep it
 
     def _plot_price_panel(self) -> None:
         """Close (ink) + MA ramp; Equal Weight rebased onto the same axis."""
@@ -657,66 +755,124 @@ class StockMaDialog(QDialog):
 
     # --------------------------------------------------------- layout / view
     def _visible_panels(self) -> list:
-        """[(panel, height ratio)]; the price panel drops out when no price
-        line is selected and another panel is on."""
+        """[(panel, slot ratio)] of the panels shown, top to bottom. The price
+        panel is hidden when no price line is selected and another panel is
+        on (an empty frame when nothing is on at all)."""
         others = [k for k in ("vol", "div", "rsi") if self._panel_on[k] and k in self._panel_axes]
-        order = [("price", 3)] if (self._price_series_visible() or not others) else []
-        for key in others:
-            # Divergence is enlarged when it replaces the price panel.
-            order.append((key, 3 if key == "div" and not order else 1))
-        return order
+        order = ["price"] if (self._price_series_visible() or not others) else []
+        return [(k, _SLOT_RATIOS[k]) for k in order + others]
+
+    def _slots(self) -> list:
+        return ["price"] + [k for k in ("vol", "div", "rsi") if k in self._panel_axes]
 
     def _apply_layout(self) -> None:
-        """Re-grid the visible panels (issue #11: the ratio is no longer a
-        fixed 3:1:1 -- panels can be hidden, the price panel too when no
-        price line is selected)."""
-        panels = self._visible_panels()
+        """Every panel the instrument has sits in its own fixed slot (price
+        3 : volume 1 : divergence 1 : RSI 1); switching one off hides it and
+        leaves the slot empty, so nothing else moves or resizes (2026-11-15;
+        it used to re-grid the visible panels, issue #11). The date labels go
+        under the lowest panel shown."""
+        slots = self._slots()
         left, right = getattr(self, "_margins", _DEFAULT_MARGINS)
-        gs = self._fig.add_gridspec(len(panels), 1, height_ratios=[r for _, r in panels],
+        gs = self._fig.add_gridspec(len(slots), 1, height_ratios=[_SLOT_RATIOS[k] for k in slots],
                                     hspace=0.08, left=left, right=right, top=0.97, bottom=0.07)
-        shown = set()
-        for i, (key, _r) in enumerate(panels):
+        shown = [k for k, _r in self._visible_panels()]
+        bottom = max(shown, key=slots.index) if shown else None
+        for i, key in enumerate(slots):
             ax = self._panel_axes[key]
             ax.set_subplotspec(gs[i])
-            ax.set_visible(True)
-            ax.tick_params(labelbottom=(i == len(panels) - 1))
-            shown.add(key)
-        for key, ax in self._panel_axes.items():
-            if key not in shown:
-                ax.set_visible(False)
+            ax.set_visible(key in shown)
+            ax.tick_params(labelbottom=(key == bottom))
 
-    def _fit_margins(self) -> bool:
-        """Left/right margins in pixels from what has to fit there: the
-        widest Y-axis tick labels + axis label of the visible panels on the
-        left, the end-value labels on the right. Fixed fractions (7.5% / 10%)
-        cut "100,000" and the axis label once the dialog could be narrowed
-        to ~1000 px (2026-11-15). Re-grids and returns True when the margins
-        moved by a pixel or more."""
+    def _fit_margins(self, grow_only: bool = False) -> bool:
+        """Left/right margins in pixels from what has to fit there, so neither
+        the Y labels nor the end-value labels are cut in a narrow dialog
+        (fixed 7.5% / 10% fractions cut "100,000"). The baseline (on plot and
+        on resize) is measured for the widest case -- every panel's Y labels
+        over the full data range, every price series' end label -- so a
+        toggle does not move the chart (2026-11-15). After that a pan, zoom
+        or toggle only widens a margin when something would be cut
+        (`grow_only`). Re-grids and returns True when a margin moved."""
         if self._x is None:
             return False
         fig_w = self._fig.bbox.width
         if fig_w <= 0:
             return False
         renderer = self._canvas.get_renderer()
-        left_px = 0.0
-        for ax in self._panel_axes.values():
-            if not ax.get_visible():
-                continue
-            bb = ax.yaxis.get_tightbbox(renderer)
-            if bb is not None:
-                left_px = max(left_px, ax.bbox.x0 - bb.x0)
-        right_px = _MIN_RIGHT_PX
-        price = self._panel_axes["price"]
-        for ann in self._end_labels.values():
-            right_px = max(right_px, ann.get_window_extent(renderer).x1 - price.bbox.x1)
+        if grow_only:
+            left_px = self._left_px(renderer, [ax for ax in self._panel_axes.values() if ax.get_visible()])
+            right_px = self._right_px_current(renderer)
+        else:
+            left_px = self._left_px_full_range(renderer)
+            right_px = self._right_px_widest(renderer)
         left = min(0.4, (left_px + _MARGIN_PAD_PX) / fig_w)
         right = max(0.6, 1.0 - (right_px + _MARGIN_PAD_PX) / fig_w)
         old_l, old_r = getattr(self, "_margins", _DEFAULT_MARGINS)
+        if grow_only:
+            left, right = max(left, old_l), min(right, old_r)
         if abs(left - old_l) * fig_w < 1 and abs(right - old_r) * fig_w < 1:
             return False
         self._margins = (float(left), float(right))
         self._apply_layout()
         return True
+
+    @staticmethod
+    def _left_px(renderer, axes) -> float:
+        out = 0.0
+        for ax in axes:
+            bb = ax.yaxis.get_tightbbox(renderer)
+            if bb is not None:
+                out = max(out, ax.bbox.x0 - bb.x0)
+        return out
+
+    def _left_px_full_range(self, renderer) -> float:
+        """Y-label width of every panel (shown or not) with its Y range set
+        to the whole data: the widest tick labels it normally gets."""
+        price = self._panel_axes["price"]
+        saved_x = price.get_xlim()
+        saved_y = {k: ax.get_ylim() for k, ax in self._panel_axes.items()}
+        try:
+            price.set_xlim(self._x_lo, self._x_hi)
+            self._autofit_y()
+            vals = [np.asarray(line.get_ydata(), dtype=float) for _k, line in self._price_lines()]
+            vals = np.concatenate(vals) if vals else np.array([])
+            vals = vals[np.isfinite(vals)]
+            if len(vals):
+                price.set_ylim(float(vals.min()), float(vals.max()))
+            return self._left_px(renderer, list(self._panel_axes.values()))
+        finally:
+            price.set_xlim(*saved_x)
+            for k, ax in self._panel_axes.items():
+                ax.set_ylim(*saved_y[k])
+
+    def _price_lines(self) -> list:
+        """[(key, Line2D)] of every price-panel series, shown or not."""
+        return [(k, self._lines[k]) for k in ("Close", *MA_RAMP.keys(), "EW") if k in self._lines]
+
+    def _right_px_current(self, renderer) -> float:
+        price = self._panel_axes["price"]
+        out = float(_MIN_RIGHT_PX)
+        for ann in self._end_labels.values():
+            out = max(out, ann.get_window_extent(renderer).x1 - price.bbox.x1)
+        return out
+
+    def _right_px_widest(self, renderer) -> float:
+        """The widest end label any price series can get: each series' label
+        at its largest value, measured as a throwaway annotation."""
+        price = self._panel_axes["price"]
+        out = float(_MIN_RIGHT_PX)
+        x_right = price.get_xlim()[1]
+        for key, line in self._price_lines():
+            ys = np.asarray(line.get_ydata(), dtype=float)
+            ys = ys[np.isfinite(ys)]
+            if not len(ys):
+                continue
+            text = self._end_label_style(key, float(np.max(np.abs(ys))))[0]
+            ann = price.annotate(text, xy=(x_right, 0), xycoords=("data", "axes fraction"), xytext=(5, 0),
+                                 textcoords="offset points", fontsize=_TICK_PT, ha="left", va="center",
+                                 annotation_clip=False, bbox=dict(boxstyle="round,pad=0.25", edgecolor="none"))
+            out = max(out, ann.get_window_extent(renderer).x1 - price.bbox.x1)
+            ann.remove()
+        return out
 
     def _set_panel(self, key: str, on: bool) -> None:
         self._panel_on[key] = bool(on)
@@ -746,7 +902,7 @@ class StockMaDialog(QDialog):
         self._apply_layout()
         self._autofit_y()
         self._place_end_labels()
-        self._fit_margins()
+        self._fit_margins(grow_only=True)
         self._update_hover(self._cursor_idx)
         self._canvas.draw_idle()
 
@@ -759,6 +915,14 @@ class StockMaDialog(QDialog):
             if line is not None and line.get_visible():
                 out.append((key, line))
         return out
+
+    def _end_label_style(self, key: str, y: float) -> tuple:
+        """(text, background, text color) of a price series' end label."""
+        if key == "Close":
+            return self._fmt_str.format(y), TEXT, INK_ON_LIGHT
+        if key == "EW":
+            return tr(f"동일가중 {_compact(y)}", f"EW {_compact(y)}"), TEXT_MUTED, INK_ON_LIGHT
+        return f"{key} {_compact(y)}", MA_RAMP[key], INK_ON_LIGHT     # every MA_RAMP step is light
 
     def _place_end_labels(self) -> None:
         """A value label at each visible price-panel line's right edge (issue
@@ -779,13 +943,7 @@ class StockMaDialog(QDialog):
             y = line.get_ydata()[idx]
             if y is None or not np.isfinite(y):
                 continue
-            if key == "Close":
-                text, bg, fg = self._fmt_str.format(y), TEXT, INK_ON_LIGHT
-            elif key == "EW":
-                text, bg, fg = tr(f"동일가중 {_compact(y)}", f"EW {_compact(y)}"), TEXT_MUTED, INK_ON_LIGHT
-            else:
-                bg = MA_RAMP[key]
-                text, fg = f"{key} {_compact(y)}", INK_ON_LIGHT   # every MA_RAMP step is light
+            text, bg, fg = self._end_label_style(key, y)
             entries.append((key, float(y), text, bg, fg))
         if not entries:
             return
@@ -990,7 +1148,7 @@ class StockMaDialog(QDialog):
         self._panel_axes["price"].set_xlim(*self._clamp_xlim(xmin, xmax))
         self._autofit_y()
         self._place_end_labels()
-        self._fit_margins()                 # the Y tick labels change with the range in view
+        self._fit_margins(grow_only=True)   # only if a zoomed-in range needs wider labels
         self._update_scrollbar()
         self._canvas.draw_idle()
 
