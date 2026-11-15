@@ -8,6 +8,7 @@ Contains:
   AutoBackupThread, AccountDepositThread, GeminiStockReportThread
 """
 import os
+import re
 import shutil
 import datetime as _dt
 import logging
@@ -518,11 +519,47 @@ class PositionPriceFetchThread(QThread):
         self._skip_fetch = skip_fetch if skip_fetch is not None else [False] * len(names)
 
     def run(self):
-        import re
-        from data_fetcher import (
-            fetch_naver_realtime_prices, get_usd_krw_rate, fetch_historical_changes,
-            _get_listing_with_norm, is_us_market,
-        )
+        name_to_info = self._resolve_kr_codes()
+        price_map = self._fetch_kr_prices(name_to_info)
+        us_price_map, us_price_map_usd = self._fetch_us_prices(name_to_info)
+
+        def _compute_pl(i, name):
+            return self._compute_pl(i, name, name_to_info, price_map, us_price_map, us_price_map_usd)
+
+        max_workers = min(10, max(1, len(self._names)))
+        with ThreadPoolExecutor(max_workers=max_workers) as exe:
+            results = list(exe.map(lambda arg: _compute_pl(*arg), enumerate(self._names)))
+
+        self.prices_ready.emit(results, self.request_id)
+
+    @staticmethod
+    def _match_listing(name: str, df_krx, df_etf):
+        """KRX then ETF listing row for `name` ({"code", "market"}), exact NameNorm first; None if absent."""
+        search_term = re.sub(r'[\s_]+', '', name.upper())
+
+        row = df_krx[df_krx['NameNorm'] == search_term]
+        if row.empty:
+            row = df_krx[df_krx['NameNorm'].str.contains(search_term, regex=False, na=False)]
+
+        if row.empty:
+            row = df_etf[df_etf['NameNorm'] == search_term]
+        if row.empty:
+            row = df_etf[df_etf['NameNorm'].str.contains(search_term, regex=False, na=False)]
+
+        if row.empty:
+            return None
+        code_col = 'Symbol' if 'Symbol' in row.columns else 'Code'
+        code = str(row.iloc[0][code_col])
+        if code.isdigit():
+            code = code.zfill(6)
+        market = row.iloc[0].get('Market', 'KRX') if 'Market' in row.columns else 'ETF'
+        if "KOSDAQ GLOBAL" in market:
+            market = "KOSDAQ"
+        return {"code": code, "market": market}
+
+    def _resolve_kr_codes(self) -> dict:
+        """Step 1: name -> {"code", "market"[, "name"]} for the KR positions (given ticker or listing match)."""
+        from data_fetcher import _get_listing_with_norm, is_us_market
 
         # ---Build name - KRX code mapping ---
         name_to_info: dict = {}
@@ -548,29 +585,17 @@ class PositionPriceFetchThread(QThread):
                 if is_us_market(market):
                     continue
 
-                search_term = re.sub(r'[\s_]+', '', name.upper())
-
-                row = df_krx[df_krx['NameNorm'] == search_term]
-                if row.empty:
-                    row = df_krx[df_krx['NameNorm'].str.contains(search_term, regex=False, na=False)]
-
-                if row.empty:
-                    row = df_etf[df_etf['NameNorm'] == search_term]
-                if row.empty:
-                    row = df_etf[df_etf['NameNorm'].str.contains(search_term, regex=False, na=False)]
-
-                if not row.empty:
-                    code_col = 'Symbol' if 'Symbol' in row.columns else 'Code'
-                    code = str(row.iloc[0][code_col])
-                    if code.isdigit():
-                        code = code.zfill(6)
-                    market = row.iloc[0].get('Market', 'KRX') if 'Market' in row.columns else 'ETF'
-                    if "KOSDAQ GLOBAL" in market:
-                        market = "KOSDAQ"
-                    name_to_info[name] = {"code": code, "market": market}
+                info = self._match_listing(name, df_krx, df_etf)
+                if info is not None:
+                    name_to_info[name] = info
         except Exception as e:
             # boundary: each step of this thread runs even when an earlier one failed.
             logger.warning("[PositionPriceFetch] KRX/ETF listing error: %s", e, exc_info=True)
+        return name_to_info
+
+    def _fetch_kr_prices(self, name_to_info: dict) -> dict:
+        """Step 2: real-time KRX prices via Naver, keyed by code ({} on failure)."""
+        from data_fetcher import fetch_naver_realtime_prices
 
         # ---Fetch real-time prices via Naver (KRX) ---
         unique_codes = list({v["code"] for v in name_to_info.values()})
@@ -583,8 +608,10 @@ class PositionPriceFetchThread(QThread):
             except Exception as e:
                 # boundary: each step of this thread runs even when an earlier one failed.
                 logger.warning("[PositionPriceFetch] Naver price error: %s", e, exc_info=True)
+        return price_map
 
-        # ---Fetch real-time prices via YahooQuery (US/Other) ---
+    def _us_quote_targets(self, name_to_info: dict) -> tuple[list, list]:
+        """Names left unresolved by step 1 (once each) and the Yahoo symbols to quote them by."""
         us_names = []
         yq_safe  = []
         seen_us: set = set()
@@ -596,6 +623,14 @@ class PositionPriceFetchThread(QThread):
                 us_names.append(name)
                 t = self._tickers[i]
                 yq_safe.append(t.upper() if t else name.upper())
+        return us_names, yq_safe
+
+    def _fetch_us_prices(self, name_to_info: dict) -> tuple[dict, dict]:
+        """Step 3: Yahoo quotes for the rest; fills name_to_info and returns (KRW, USD) price maps by name."""
+        from data_fetcher import get_usd_krw_rate
+
+        # ---Fetch real-time prices via YahooQuery (US/Other) ---
+        us_names, yq_safe = self._us_quote_targets(name_to_info)
 
         us_price_map: dict = {}
         us_price_map_usd: dict = {}
@@ -620,96 +655,106 @@ class PositionPriceFetchThread(QThread):
             except Exception as e:
                 # boundary: each step of this thread runs even when an earlier one failed.
                 logger.warning("[PositionPriceFetch] US price error: %s", e, exc_info=True)
+        return us_price_map, us_price_map_usd
+
+    @staticmethod
+    def _empty_row(i: int) -> dict:
+        """The result row for a position without a name."""
+        return {
+            "index":       i,
+            "ticker":      "",
+            "market":      "",
+            "name":        "",
+            "curr_price":  0.0,
+            "curr_pl":     0.0,
+            "curr_pl_pct": 0.0,
+            "wk1":         0.0,
+            "wk2":         0.0,
+            "mth1":        0.0,
+        }
+
+    def _compute_pl(self, i, name, name_to_info, price_map, us_price_map, us_price_map_usd) -> dict:
+        """Step 4: one position's result row (price, P/L, 1w/2w/1m changes)."""
+        from data_fetcher import is_us_market
 
         # ---Calculate P/L per position ---
-        def _compute_pl(i, name):
-            if not name:
-                return {
-                    "index":       i,
-                    "ticker":      "",
-                    "market":      "",
-                    "name":        "",
-                    "curr_price":  0.0,
-                    "curr_pl":     0.0,
-                    "curr_pl_pct": 0.0,
-                    "wk1":         0.0,
-                    "wk2":         0.0,
-                    "mth1":        0.0,
-                }
+        if not name:
+            return self._empty_row(i)
 
-            info = name_to_info.get(name)
-            if info:
-                code = info["code"]
-                market = info["market"]
-                resolved_name = info.get("name")
-            else:
-                code = ""
-                market = ""
-                resolved_name = None
+        info = name_to_info.get(name)
+        if info:
+            code = info["code"]
+            market = info["market"]
+            resolved_name = info.get("name")
+        else:
+            code = ""
+            market = ""
+            resolved_name = None
 
-            curr_price = 0.0
-            curr_pl = 0.0
-            curr_pl_pct = 0.0
-            wk1 = 0.0
-            wk2 = 0.0
-            mth1 = 0.0
+        curr_price = 0.0
+        curr_pl = 0.0
+        curr_pl_pct = 0.0
 
-            is_us = is_us_market(market)
+        is_us = is_us_market(market)
 
-            # ---Current price (KRW for display) ---
-            if info and not is_us:
-                curr_price = price_map.get(code, 0.0)
-            elif info and is_us:
-                curr_price = us_price_map.get(name, 0.0)
+        # ---Current price (KRW for display) ---
+        if info and not is_us:
+            curr_price = price_map.get(code, 0.0)
+        elif info and is_us:
+            curr_price = us_price_map.get(name, 0.0)
 
-            # ---Raw USD price for historical comparison ---
-            # fetch_historical_changes uses the ticker's historical Close (USD)
-            # so we must pass the USD price, not the KRW-converted one.
-            if is_us:
-                curr_price_for_hist = us_price_map_usd.get(name, 0.0)
-            else:
-                curr_price_for_hist = curr_price
+        # ---Raw USD price for historical comparison ---
+        # fetch_historical_changes uses the ticker's historical Close (USD)
+        # so we must pass the USD price, not the KRW-converted one.
+        if is_us:
+            curr_price_for_hist = us_price_map_usd.get(name, 0.0)
+        else:
+            curr_price_for_hist = curr_price
 
-            # ---P/L (open positions only) ---
-            if self._is_open[i]:
-                qty     = self._qtys[i]
-                buy_amt = self._buy_amts[i]
+        # ---P/L (open positions only) ---
+        if self._is_open[i]:
+            qty     = self._qtys[i]
+            buy_amt = self._buy_amts[i]
 
-                if curr_price > 0 and qty > 0:
-                    eval_val    = curr_price * qty
-                    curr_pl     = eval_val - buy_amt
-                    curr_pl_pct = (curr_pl / buy_amt * 100) if buy_amt else 0.0
+            if curr_price > 0 and qty > 0:
+                eval_val    = curr_price * qty
+                curr_pl     = eval_val - buy_amt
+                curr_pl_pct = (curr_pl / buy_amt * 100) if buy_amt else 0.0
 
-            # ---Past % changes (open AND closed, USD-safe) ---
-            if curr_price_for_hist > 0 and not self._skip_fetch[i]:
-                try:
-                    fetch_code = code if code else name
-                    changes = fetch_historical_changes(fetch_code, curr_price_for_hist)
-                    wk1  = changes.get("5d",  0.0)
-                    wk2  = changes.get("10d", 0.0)
-                    mth1 = changes.get("20d", 0.0)
-                except Exception as exc:
-                    # boundary: one position's trend failure must not drop the other rows.
-                    logger.warning("Error fetching trend for %s: %s", name, exc, exc_info=True)
+        wk1, wk2, mth1 = self._trend_changes(i, name, code, curr_price_for_hist)
 
-            return {
-                "index":       i,
-                "ticker":      code,
-                "market":      market,
-                "name":        resolved_name,
-                "curr_price":  curr_price,
-                "curr_pl":     curr_pl,
-                "curr_pl_pct": curr_pl_pct,
-                "wk1":         wk1,
-                "wk2":         wk2,
-                "mth1":        mth1,
-            }
+        return {
+            "index":       i,
+            "ticker":      code,
+            "market":      market,
+            "name":        resolved_name,
+            "curr_price":  curr_price,
+            "curr_pl":     curr_pl,
+            "curr_pl_pct": curr_pl_pct,
+            "wk1":         wk1,
+            "wk2":         wk2,
+            "mth1":        mth1,
+        }
 
-        max_workers = min(10, max(1, len(self._names)))
-        with ThreadPoolExecutor(max_workers=max_workers) as exe:
-            results = list(exe.map(lambda arg: _compute_pl(*arg), enumerate(self._names)))
+    def _trend_changes(self, i: int, name: str, code: str, curr_price_for_hist: float) -> tuple:
+        """(wk1, wk2, mth1) % changes for position i; zeros when skipped, priceless or failed."""
+        from data_fetcher import fetch_historical_changes
 
-        self.prices_ready.emit(results, self.request_id)
+        wk1 = 0.0
+        wk2 = 0.0
+        mth1 = 0.0
+        # ---Past % changes (open AND closed, USD-safe) ---
+        if curr_price_for_hist > 0 and not self._skip_fetch[i]:
+            try:
+                fetch_code = code if code else name
+                changes = fetch_historical_changes(fetch_code, curr_price_for_hist)
+                wk1  = changes.get("5d",  0.0)
+                wk2  = changes.get("10d", 0.0)
+                mth1 = changes.get("20d", 0.0)
+            except Exception as exc:
+                # boundary: one position's trend failure must not drop the other rows.
+                logger.warning("Error fetching trend for %s: %s", name, exc, exc_info=True)
+        return wk1, wk2, mth1
 
 
 # ---------------------------------------------------------------------------

@@ -140,7 +140,10 @@ Dev tooling is in `requirements-dev.txt`
   `QCalendarWidget` rules have no current caller and are kept for the next `QDateEdit`),
   `dialogs/` (one module per
   dialog group: `index_ma`, `stock_ma`, `trade_edit`, `trade_history`, `assets_graph`,
-  `holdings_summary`, `assets_report`, `stock_report`, `variant_picker`, `trend_conditions`, `strategy_trades`; import from `ui.dialogs`),
+  `holdings_summary`, `assets_report`, `stock_report`, `variant_picker`, `trend_conditions`, `strategy_trades`; import from `ui.dialogs`;
+  `StockMaDialog` is split into mixins over shared dialog state since 2026-11-15: `stock_ma_plot`
+  (panels, slots, margins, end labels, toggles), `stock_ma_hover` (crosshair/hover), `stock_ma_view`
+  (pan/zoom/period/autofit), plus `stock_ma_side` (right panel), `stock_ma_consts`, `stock_ma_helpers`),
   `history_table.py` (cell factories, `fill_table_rows`, `SectionTable` + the column
   `SECTIONS` for the history grid), `history_calc.py` (pure P/L maths, no Qt:
   `compute_pl_fields`, `build_monthly_rows`, `summarize_positions`), `assets_report.py` (pure maths for the Total Assets graph's
