@@ -128,10 +128,10 @@ class Policy:
     """What the engine asks each session: orders to fill at the next open."""
     max_positions: int = 10 ** 6
 
-    def initial_orders(self, eng: "Engine", t0: int) -> list[Order]:
+    def initial_orders(self, eng: Engine, t0: int) -> list[Order]:
         return []
 
-    def decide(self, t: int, eng: "Engine") -> list[Order]:
+    def decide(self, t: int, eng: Engine) -> list[Order]:
         return []
 
 

@@ -923,8 +923,10 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
 
             # Weekly: compare to the immediately preceding record if it is within 7 calendar days.
             # Records are always sorted ascending by date, so i-1 is the only candidate (O(N) total).
-            weekly_pct = None; weekly_amt = None
-            weekly_usd_amt = None; weekly_usd_pct = None
+            weekly_pct = None
+            weekly_amt = None
+            weekly_usd_amt = None
+            weekly_usd_pct = None
             is_weekly = False
             try:
                 if i > 0 and parsed_dates[i] is not None and parsed_dates[i - 1] is not None:
@@ -946,13 +948,15 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
                 logger.debug("Weekly change calculation failed at row index=%d", i, exc_info=True)
 
             # Cumulative: relative to the very first record
-            cumulative_pct = None; cumulative_amt = None
+            cumulative_pct = None
+            cumulative_amt = None
             if i > 0:
                 cumulative_amt = total - first_total
                 if first_total:
                     cumulative_pct = cumulative_amt / first_total * 100
 
-            cumulative_usd_pct = None; cumulative_usd_amt = None
+            cumulative_usd_pct = None
+            cumulative_usd_amt = None
             if i > 0:
                 cumulative_usd_amt = usd_val - first_usd_total
                 if first_usd_total:

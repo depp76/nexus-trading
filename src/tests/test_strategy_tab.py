@@ -917,7 +917,8 @@ class TestTradeList(unittest.TestCase):
         self.assertTrue(tab.trades_detail_btn.isEnabled())
         # same rows, same order, same text as the popup
         dlg = tab.open_trades_dialog()
-        grid = lambda tbl: [[tbl.item(r, c).text() for c in range(tbl.columnCount())] for r in range(tbl.rowCount())]
+        def grid(tbl):
+            return [[tbl.item(r, c).text() for c in range(tbl.columnCount())] for r in range(tbl.rowCount())]
         self.assertEqual(grid(dlg.table), grid(tab.trades_table))
         dlg.close()
 

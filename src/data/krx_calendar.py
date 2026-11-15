@@ -44,7 +44,7 @@ def parse_holiday_rows(items: list[dict]) -> dict[date, bool]:
 
 def _load_cache() -> tuple[dict[date, bool], date | None]:
     try:
-        with open(KRX_CALENDAR_CACHE_FILE, "r", encoding="utf-8") as f:
+        with open(KRX_CALENDAR_CACHE_FILE, encoding="utf-8") as f:
             raw = json.load(f)
         days = {date.fromisoformat(k): bool(v) for k, v in raw["days"].items()}
         return days, date.fromisoformat(raw["fetched_on"])

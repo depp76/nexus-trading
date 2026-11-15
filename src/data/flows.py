@@ -50,7 +50,7 @@ def _load_cache(ticker: str) -> dict:
     if not os.path.exists(path):
         return {"covers_from": None, "rows": {}}
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             raw = json.load(f)
         rows = {r["Date"]: r for r in raw.get("rows", []) if r.get("Date")}
         return {"covers_from": raw.get("covers_from"), "rows": rows}

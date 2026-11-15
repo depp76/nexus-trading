@@ -54,7 +54,7 @@ def _singleflight_cache(maxsize, provisional=None):
     Only meant for single-argument functions keyed on that argument, which
     is all get_stock_listing/_get_listing_with_norm need."""
     def decorator(fn):
-        cache: "OrderedDict[str, tuple]" = OrderedDict()  # key -> (date, result, expires_at)
+        cache: OrderedDict[str, tuple] = OrderedDict()  # key -> (date, result, expires_at)
         cache_lock = threading.Lock()
         key_locks: dict = {}
 

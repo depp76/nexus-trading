@@ -97,10 +97,10 @@ class TradeCost:
     def total(self) -> float:
         return self.commission + self.tax + self.slippage
 
-    def __add__(self, other: "TradeCost") -> "TradeCost":
+    def __add__(self, other: TradeCost) -> TradeCost:
         return TradeCost(self.commission + other.commission, self.tax + other.tax, self.slippage + other.slippage)
 
-    def scaled(self, k: float) -> "TradeCost":
+    def scaled(self, k: float) -> TradeCost:
         return TradeCost(self.commission * k, self.tax * k, self.slippage * k)
 
 
@@ -205,11 +205,11 @@ class CostModel:
         ).scaled(self.cost_multiplier)
 
     # -- variants --------------------------------------------------------------
-    def scaled(self, multiplier: float) -> "CostModel":
+    def scaled(self, multiplier: float) -> CostModel:
         """Same assumptions at another multiplier (sensitivity analysis)."""
         return replace(self, cost_multiplier=float(multiplier))
 
-    def for_etf(self, slippage_rate: float = 0.0002) -> "CostModel":
+    def for_etf(self, slippage_rate: float = 0.0002) -> CostModel:
         """The benchmark variant: ETF slippage assumption (4-1 (4)); the tax
         table already carries ETF = 0 and the fund's expense ratio is embedded
         in a total-return ETF's price, so nothing else changes."""

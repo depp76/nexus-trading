@@ -97,13 +97,17 @@ class StockTradeHistoryDialog(QDialog):
                 pl_pct_val = rec.get("pl_pct", 0.0)
 
             pl_it = _ni(pl_val)
-            if pl_val > 0: pl_it.setForeground(QC_PROFIT)
-            elif pl_val < 0: pl_it.setForeground(QC_LOSS)
+            if pl_val > 0:
+                pl_it.setForeground(QC_PROFIT)
+            elif pl_val < 0:
+                pl_it.setForeground(QC_LOSS)
             tbl.setItem(r, pl_col, pl_it)
 
             pl_pct_it = _ni(pl_pct_val, "{:+.1f}%")
-            if pl_pct_val > 0: pl_pct_it.setForeground(QC_PROFIT)
-            elif pl_pct_val < 0: pl_pct_it.setForeground(QC_LOSS)
+            if pl_pct_val > 0:
+                pl_pct_it.setForeground(QC_PROFIT)
+            elif pl_pct_val < 0:
+                pl_pct_it.setForeground(QC_LOSS)
             tbl.setItem(r, pct_col, pl_pct_it)
 
         # ---Total row (always present for both open and closed) ---
@@ -137,15 +141,19 @@ class StockTradeHistoryDialog(QDialog):
             tbl.setItem(total_row, 7, _bold_ni(total_sell))
             # P/L (col 8)
             pl_tot_it = _bold_ni(total_pl)
-            if total_pl > 0: pl_tot_it.setForeground(QC_PROFIT)
-            elif total_pl < 0: pl_tot_it.setForeground(QC_LOSS)
+            if total_pl > 0:
+                pl_tot_it.setForeground(QC_PROFIT)
+            elif total_pl < 0:
+                pl_tot_it.setForeground(QC_LOSS)
             tbl.setItem(total_row, 8, pl_tot_it)
             # P/L % (col 9)
             if total_buy > 0:
                 total_pct = (total_pl / total_buy) * 100
                 pct_tot_it = _bold_ni(total_pct, "{:+.1f}%")
-                if total_pct > 0: pct_tot_it.setForeground(QC_PROFIT)
-                elif total_pct < 0: pct_tot_it.setForeground(QC_LOSS)
+                if total_pct > 0:
+                    pct_tot_it.setForeground(QC_PROFIT)
+                elif total_pct < 0:
+                    pct_tot_it.setForeground(QC_LOSS)
             else:
                 pct_tot_it = QTableWidgetItem("")
                 pct_tot_it.setFont(bold_font)
@@ -160,14 +168,18 @@ class StockTradeHistoryDialog(QDialog):
             tbl.setItem(total_row, 5, QTableWidgetItem(""))
             tbl.setItem(total_row, 8, _bold_ni(total_sell))
             total_pl_it = _bold_ni(total_pl)
-            if total_pl > 0: total_pl_it.setForeground(QC_PROFIT)
-            elif total_pl < 0: total_pl_it.setForeground(QC_LOSS)
+            if total_pl > 0:
+                total_pl_it.setForeground(QC_PROFIT)
+            elif total_pl < 0:
+                total_pl_it.setForeground(QC_LOSS)
             tbl.setItem(total_row, 9, total_pl_it)
             if total_buy > 0:
                 total_pct = (total_pl / total_buy) * 100
                 pct_it = _bold_ni(total_pct, "{:+.1f}%")
-                if total_pct > 0: pct_it.setForeground(QC_PROFIT)
-                elif total_pct < 0: pct_it.setForeground(QC_LOSS)
+                if total_pct > 0:
+                    pct_it.setForeground(QC_PROFIT)
+                elif total_pct < 0:
+                    pct_it.setForeground(QC_LOSS)
             else:
                 pct_it = QTableWidgetItem("")
                 pct_it.setFont(bold_font)

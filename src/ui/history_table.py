@@ -235,8 +235,10 @@ def fill_table_rows(tbl, rows: list, *, hide_stale_closed: bool = True) -> list:
             tbl.setItem(r, 10, ni(rec.get("sell_qty", 0.0)))
             tbl.setItem(r, 11, ni(rec.get("sell_amount", 0.0)))
             pl_it = ni(rec.get("pl", 0.0))
-            if rec.get("pl", 0.0) > 0:   pl_it.setForeground(QC_PROFIT)
-            elif rec.get("pl", 0.0) < 0: pl_it.setForeground(QC_LOSS)
+            if rec.get("pl", 0.0) > 0:
+                pl_it.setForeground(QC_PROFIT)
+            elif rec.get("pl", 0.0) < 0:
+                pl_it.setForeground(QC_LOSS)
             tbl.setItem(r, 12, pl_it)
             tbl.setItem(r, 13, pi(rec.get("pl_pct", 0.0)))
         else:
@@ -263,8 +265,10 @@ def fill_table_rows(tbl, rows: list, *, hide_stale_closed: bool = True) -> list:
             tbl.setItem(r, 15, ni(curr_price))
             if is_open_row:
                 pl_cur = ni(rec.get("curr_pl", 0.0))
-                if rec.get("curr_pl", 0.0) > 0:   pl_cur.setForeground(QC_PROFIT)
-                elif rec.get("curr_pl", 0.0) < 0: pl_cur.setForeground(QC_LOSS)
+                if rec.get("curr_pl", 0.0) > 0:
+                    pl_cur.setForeground(QC_PROFIT)
+                elif rec.get("curr_pl", 0.0) < 0:
+                    pl_cur.setForeground(QC_LOSS)
                 tbl.setItem(r, 16, pl_cur)
                 tbl.setItem(r, 17, pi(rec.get("curr_pl_pct", 0.0)))
             else:
@@ -281,8 +285,10 @@ def fill_table_rows(tbl, rows: list, *, hide_stale_closed: bool = True) -> list:
                         opp_pl_pct = (curr_price - sell_price) / sell_price * 100
 
                         pl_cur = ni(opp_pl)
-                        if opp_pl > 0:   pl_cur.setForeground(QC_PROFIT)
-                        elif opp_pl < 0: pl_cur.setForeground(QC_LOSS)
+                        if opp_pl > 0:
+                            pl_cur.setForeground(QC_PROFIT)
+                        elif opp_pl < 0:
+                            pl_cur.setForeground(QC_LOSS)
                         tbl.setItem(r, 16, pl_cur)
                         tbl.setItem(r, 17, pi(opp_pl_pct))
                     else:

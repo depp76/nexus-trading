@@ -123,7 +123,8 @@ class TestUntradableDoesNotLeakIntoOtherFills(unittest.TestCase):
         ds = synthetic_dataset()
         ds.stocks.open[ds.start_idx + 1, ds.stocks.col("UP")] = np.nan
         alt = _run(ds)
-        key = lambda r: [(t.ticker, t.entry_date, t.exit_date) for t in r.trades if t.ticker == "SPIKE"]
+        def key(r):
+            return [(t.ticker, t.entry_date, t.exit_date) for t in r.trades if t.ticker == "SPIKE"]
         self.assertEqual(key(base), key(alt))
 
 

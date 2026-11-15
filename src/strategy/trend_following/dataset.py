@@ -65,7 +65,7 @@ ETF_BRANDS = (
     "TIME", "TIMEFOLIO", "KoAct", "KIWOOM", "WON", "UNICORN", "1Q", "TREX", "FOCUS", "MASTER",
     "마이티", "히어로즈", "파워", "에셋플러스",
 )
-_ETF_NAME_RE = re.compile(r"^(?:%s)(?:\s|$)|(?<![A-Za-z])ETN(?![A-Za-z])" % "|".join(map(re.escape, ETF_BRANDS)),
+_ETF_NAME_RE = re.compile(r"^(?:{})(?:\s|$)|(?<![A-Za-z])ETN(?![A-Za-z])".format("|".join(map(re.escape, ETF_BRANDS))),
                           re.IGNORECASE)
 # Extra listing rows requested so that dropping ETFs still leaves `universe_size` stocks.
 LISTING_POOL_FACTOR = 2
@@ -89,7 +89,7 @@ def select_stock_universe(listing: list[dict], size: int) -> tuple[list[dict], l
     return kept, excluded
 
 
-def universe_impact(stocks: "PriceBook", start_idx: int, ended_min_missing: int = 10) -> dict:
+def universe_impact(stocks: PriceBook, start_idx: int, ended_min_missing: int = 10) -> dict:
     """Measurable size of the survivorship / look-ahead exposure of the universe (checklist B1):
     names whose data ends inside the evaluation window (last bar followed by at least
     `ended_min_missing` empty sessions) and names whose first bar lies after the evaluation start."""
@@ -179,7 +179,7 @@ class PriceBook:
 
     @classmethod
     def from_frames(cls, frames: dict[str, pl.DataFrame], calendar: list[date],
-                    markets: dict[str, str] | None = None, names: dict[str, str] | None = None) -> "PriceBook":
+                    markets: dict[str, str] | None = None, names: dict[str, str] | None = None) -> PriceBook:
         tickers = list(frames)
         T, N = len(calendar), len(tickers)
         arrays = {c: np.full((T, N), np.nan) for c in _OHLCV}

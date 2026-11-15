@@ -1388,7 +1388,7 @@ class GroupedHeaderView(QHeaderView):
 
         total_h = self._GROUP_H + self._SUB_H
 
-        for label, start, span, color in self._sections:
+        for label, start, span, _color in self._sections:
             if start >= self.count():
                 continue
             # X-coordinates: from left edge of start col to right edge of (start+span-1)
@@ -1426,7 +1426,7 @@ class GroupedHeaderView(QHeaderView):
         pen_sec = QPen()
         pen_sec.setWidth(1)
         pen_sec.setCosmetic(True)
-        for _, start, span, color in self._sections:
+        for _, start, span, _color in self._sections:
             if start >= self.count():
                 continue
             end_col = min(start + span - 1, self.count() - 1)

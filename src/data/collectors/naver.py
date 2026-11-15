@@ -517,7 +517,7 @@ def fetch_quarterly_financials(ticker: str, market: str):
 
             rows = []
             for i, k in enumerate(keys):
-                def parse_val(d_col):
+                def parse_val(d_col, k=k):
                     if k not in d_col:
                         return 0.0
                     v_str = d_col[k].get('value')
@@ -560,14 +560,14 @@ def fetch_quarterly_financials(ticker: str, market: str):
                 df = df.sort_values(by='asOfDate', ascending=False).head(12)
 
             rows = []
-            for idx, row in df.iterrows():
+            for _idx, row in df.iterrows():
                 d_val = row.get('asOfDate', '')
                 if hasattr(d_val, 'strftime'):
                     d_val = d_val.strftime("%Y-%m-%d")
                 else:
                     d_val = str(d_val)[:10]
 
-                def get_val(key):
+                def get_val(key, row=row):
                     v = row.get(key, 0)
                     if pd.isna(v):
                         return 0.0

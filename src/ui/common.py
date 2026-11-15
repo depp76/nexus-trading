@@ -12,7 +12,8 @@ import math
 import tempfile
 import logging
 import datetime as _dt
-from typing import Any, Callable, Literal
+from typing import Any, Literal
+from collections.abc import Callable
 
 from PyQt6.QtCore import QObject, QEvent, Qt, QRect, QSize, QPoint
 from PyQt6.QtWidgets import (
@@ -893,7 +894,7 @@ def safe_load_json(file_path: str, default: Any = None) -> Any:
     if not os.path.exists(file_path):
         return default if default is not None else {}
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
         logger.warning("Failed to load JSON from %s: %s", file_path, e, exc_info=True)

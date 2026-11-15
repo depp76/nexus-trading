@@ -101,7 +101,7 @@ class TestComputeScores(unittest.TestCase):
 
     def test_scores_compose_and_rank_within_gate(self):
         sb, t = self.sb, self.t
-        for tk, j in self.j.items():
+        for _tk, j in self.j.items():
             if not sb.liquid[t, j]:
                 continue
             self.assertAlmostEqual(sb.trend_score[t, j], sb.pct["ma50_div"][t, j] + sb.pct["range52"][t, j])

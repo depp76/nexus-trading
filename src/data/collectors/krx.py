@@ -94,7 +94,7 @@ def fetch_vkospi(date_str: str = None) -> float:
 def _load_vkospi_cache() -> dict:
     if os.path.exists(_KRX_VKOSPI_CACHE_PATH):
         try:
-            with open(_KRX_VKOSPI_CACHE_PATH, "r", encoding="utf-8") as f:
+            with open(_KRX_VKOSPI_CACHE_PATH, encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             logger.debug("Failed to load VKOSPI cache file, starting fresh", exc_info=True)
@@ -214,7 +214,7 @@ def _read_mof_csv(path: str) -> pd.DataFrame:
 def _load_jp10y_disk_cache():
     """Last downloaded series from JP10Y_CACHE_FILE ({YYYY-MM-DD: yield %}), or None."""
     try:
-        with open(JP10Y_CACHE_FILE, "r", encoding="utf-8") as f:
+        with open(JP10Y_CACHE_FILE, encoding="utf-8") as f:
             rows = json.load(f)
     except FileNotFoundError:
         return None

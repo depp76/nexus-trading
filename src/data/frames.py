@@ -5,7 +5,7 @@ import polars as pl
 def _to_polars(df_pd):
     if isinstance(df_pd, pl.DataFrame):
         return df_pd
-    if df_pd is None or (hasattr(df_pd, 'empty') and getattr(df_pd, 'empty')):
+    if df_pd is None or (hasattr(df_pd, 'empty') and df_pd.empty):
         return pl.DataFrame()
     df = pl.from_pandas(df_pd, include_index=True)
     for alias in ("index", "date", "None"):

@@ -46,7 +46,8 @@ class TestSingleflightCache(unittest.TestCase):
 
     def test_lru_bound_evicts_oldest(self):
         fn, calls = _cached(maxsize=2)
-        fn("A"); fn("B")
+        fn("A")
+        fn("B")
         fn("A")            # A is now most recent
         fn("C")            # evicts B
         fn("A")            # still cached
