@@ -135,6 +135,55 @@ class TestStockChart(unittest.TestCase):
         self.assertGreater(ax.get_xlim()[1] - ax.get_xlim()[0], 399)
         d._apply_period("1Y")
 
+    def test_period_segment_shares_the_wrapping_view_row(self):
+        """2026-11-15: period buttons moved from the header into the series /
+        panel row, a FlowLayout of three unsplittable groups."""
+        from ui.common import FlowLayout
+        d = StockMaDialog("005930", "Samsung", "KOSPI", _df(ew=True))
+        row = next(iter(d._period_buttons.values())).parentWidget().parentWidget()
+        self.assertIsInstance(row.layout(), FlowLayout)
+        groups = [row.layout().itemAt(i).widget() for i in range(row.layout().count())]
+        self.assertEqual(groups, [next(iter(d._series_buttons.values())).parentWidget(),
+                                  next(iter(d._period_buttons.values())).parentWidget(),
+                                  next(iter(d._panel_buttons.values())).parentWidget()])
+        # wide: one line; narrow: groups move down whole
+        self.assertEqual(len(row.layout().lines(4000)), 1)
+        narrow = row.layout().lines(groups[0].sizeHint().width() + 10)
+        self.assertEqual([len(line) for line in narrow], [1, 1, 1])
+        # one width for the segment, wide enough for every label ("3개월" was cut at 52 px)
+        widths = {b.width() for b in d._period_buttons.values()}
+        self.assertEqual(len(widths), 1)
+        for b in d._period_buttons.values():
+            self.assertGreaterEqual(b.width(), b.sizeHint().width())
+
+    def test_axis_and_end_labels_fit_a_narrow_chart(self):
+        """2026-11-15: fixed 7.5% / 10% margins cut "100,000" and the axis
+        label once the dialog could be narrowed; margins now come from the
+        measured labels."""
+        d = StockMaDialog("005930", "Samsung", "KOSPI", _df(ew=True))
+        d.showNormal()
+        d.resize(700, 600)
+        d.show()
+        QApplication.processEvents()
+        for k in ("MA5", "MA20", "EW"):
+            d._set_series(k, True)
+        d._apply_period("All")
+        d._canvas.draw()
+        r = d._canvas.get_renderer()
+        fig_w = d._fig.bbox.width
+        for ax in d._panel_axes.values():
+            if ax.get_visible():
+                self.assertGreaterEqual(ax.yaxis.get_tightbbox(r).x0, 0)
+        self.assertTrue(d._end_labels)
+        for ann in d._end_labels.values():
+            self.assertLessEqual(ann.get_window_extent(r).x1, fig_w)
+        d.close()
+
+    def test_simple_chart_row_has_no_series_group(self):
+        d = StockMaDialog("KR3YT", "KR 3Y", "Index", _df(volume=False), change_mode="bp")
+        row = next(iter(d._period_buttons.values())).parentWidget().parentWidget()
+        self.assertEqual(row.layout().count(), 2)                 # periods + panels
+
     def test_panel_toggles_regrid(self):
         d = self.dlg
         _show(d, {"Close", "Div"})

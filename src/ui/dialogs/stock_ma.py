@@ -33,8 +33,9 @@ Layout
 ::
 
     +-- splitter ------------------------------------------------------+
-    | name  ticker · market  price  chg%   [1M 3M 6M 1Y 3Y All] as-of  |
-    | Series [Close MA5 MA10 MA20 MA50 Divergence EW]     [Volume] [RSI] |
+    | name  ticker · market  price  chg%                          as-of |
+    | Series [Close MA5 .. EW]  [1M 3M 6M 1Y 3Y All]  [Volume] [RSI]     |
+    |   (2026-11-15: one wrapping row; a group moves down when narrow)    |
     |   FigureCanvas: price (+MA ramp)      | right panel (optional)   |
     |                 volume                |   investor / futures tbl |
     |                 divergence            |   "Company Info ↗"        |
@@ -65,7 +66,7 @@ from PyQt6.QtGui import QColor, QFont, QFontMetrics
 
 from i18n import tr
 from ui.trend_score_section import TrendScoreSection
-from ui.common import create_font, setup_table, BTN_H, FONT_HEADING, FONT_BODY, FONT_SMALL, FONT_CAPTION, make_button, button_row, fit_to_screen
+from ui.common import FlowLayout, create_font, setup_table, BTN_H, FONT_HEADING, FONT_BODY, FONT_SMALL, FONT_CAPTION, make_button, button_row, fit_to_screen
 from ui.colors import PROFIT, LOSS, MA_RAMP, MA_DIV_NEUTRAL_PCT
 from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_FAINT, LINE, SURFACE, INK_ON_LIGHT
 
@@ -86,6 +87,11 @@ _PERIODS = [("1M", 1), ("3M", 3), ("6M", 6), ("1Y", 12), ("3Y", 36), ("All", Non
 _PERIOD_LABELS = {"1M": tr("1개월", "1M"), "3M": tr("3개월", "3M"), "6M": tr("6개월", "6M"),
                   "1Y": tr("1년", "1Y"), "3Y": tr("3년", "3Y"), "All": tr("전체", "All")}
 _DEFAULT_PERIOD = "1Y"
+# Figure margins before the first measurement (fractions, the old fixed
+# values); _fit_margins then sizes them in pixels from the labels.
+_DEFAULT_MARGINS = (0.075, 0.90)
+_MARGIN_PAD_PX = 6
+_MIN_RIGHT_PX = 12
 # Independent series toggles (user direction 2026-10-15), key -> label.
 # Price-panel lines use their _lines key; "Div" is the divergence panel.
 _SERIES = {
@@ -203,7 +209,7 @@ class StockMaDialog(QDialog):
             splitter.setCollapsible(1, False)
 
         chart_v.addLayout(self._build_header_row())
-        chart_v.addLayout(self._build_view_row())
+        chart_v.addWidget(self._build_view_row())
 
         self._fig = Figure(figsize=(9.5, 7.5))
         self._canvas = FigureCanvas(self._fig)
@@ -226,7 +232,7 @@ class StockMaDialog(QDialog):
 
     # ------------------------------------------------------------- top rows
     def _build_header_row(self) -> QHBoxLayout:
-        """Name · ticker/market · last price · change% | period segment | as-of."""
+        """Name · ticker/market · last price · change% | as-of."""
         row = QHBoxLayout()
         row.setSpacing(10)
 
@@ -250,15 +256,6 @@ class StockMaDialog(QDialog):
         row.addWidget(self._chg_lbl)
         row.addStretch()
 
-        self._period_group = QButtonGroup(self)
-        self._period_group.setExclusive(True)
-        self._period_buttons = {}
-        for label, months in _PERIODS:
-            btn = _segment_button(_PERIOD_LABELS[label], self._period_group, checked=(label == _DEFAULT_PERIOD), width=52)
-            btn.clicked.connect(lambda _c, m=months, lbl=label: self._on_period_clicked(lbl, m))
-            row.addWidget(btn)
-            self._period_buttons[label] = btn
-
         as_of = ""
         if self._has_data:
             last_day = pd.to_datetime(self._df.get_column('Date')[-1]).strftime('%Y-%m-%d')
@@ -266,14 +263,26 @@ class StockMaDialog(QDialog):
         as_of_lbl = QLabel(as_of)
         as_of_lbl.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
         as_of_lbl.setStyleSheet(f"color:{TEXT_FAINT};")
-        row.addSpacing(6)
         row.addWidget(as_of_lbl)
+        row.addSpacing(8)                # clear of the splitter / right panel
         return row
 
-    def _build_view_row(self) -> QHBoxLayout:
-        """SHOW series toggles (independent, multi-select) | panel toggles."""
-        row = QHBoxLayout()
-        row.setSpacing(6)
+    @staticmethod
+    def _button_group_widget() -> tuple[QWidget, QHBoxLayout]:
+        w = QWidget()
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        return w, lay
+
+    def _build_view_row(self) -> QWidget:
+        """Series toggles | period segment | panel toggles, as three groups in
+        a FlowLayout (user direction 2026-11-15): one line when the chart is
+        wide enough, otherwise a group moves to the next line instead of
+        raising the dialog's minimum width. A group never splits."""
+        row_w = QWidget()
+        row = FlowLayout(row_w, h_spacing=18, v_spacing=6)
+        series_w, series = self._button_group_widget()
         self._series_buttons = {}
         keys = [] if self._is_simple_chart else ["Close", *MA_RAMP.keys(), "Div"]
         if self._has_data and "EqualWeight" in self._df.columns and not self._is_simple_chart:
@@ -282,23 +291,42 @@ class StockMaDialog(QDialog):
             cap = QLabel(tr("표시", "Series"))
             cap.setFont(create_font(FONT_CAPTION, QFont.Weight.Bold))
             cap.setStyleSheet(f"color:{TEXT_FAINT};")
-            row.addWidget(cap)
+            series.addWidget(cap)
         for key in keys:
             btn = _segment_button(_SERIES[key], checked=(key in _DEFAULT_SERIES))
             btn.clicked.connect(lambda checked, k=key: self._set_series(k, checked))
-            row.addWidget(btn)
+            series.addWidget(btn)
             self._series_buttons[key] = btn
-        row.addStretch()
+        if keys:
+            row.addWidget(series_w)
+
+        period_w, period = self._button_group_widget()
+        self._period_group = QButtonGroup(self)
+        self._period_group.setExclusive(True)
+        self._period_buttons = {}
+        for label, months in _PERIODS:
+            btn = _segment_button(_PERIOD_LABELS[label], self._period_group, checked=(label == _DEFAULT_PERIOD))
+            btn.clicked.connect(lambda _c, m=months, lbl=label: self._on_period_clicked(lbl, m))
+            period.addWidget(btn)
+            self._period_buttons[label] = btn
+        # One width for the segment, from the widest label (a fixed 52 px cut
+        # the first digit of "3개월"/"6개월").
+        seg_w = max(b.sizeHint().width() for b in self._period_buttons.values())
+        for b in self._period_buttons.values():
+            b.setFixedWidth(seg_w)
+        row.addWidget(period_w)
 
         # The divergence panel has no button here: the Divergence series
         # toggle drives it.
+        panels_w, panels = self._button_group_widget()
         self._panel_buttons = {}
         for key, label in (("vol", tr("거래량", "Volume")), ("rsi", "RSI")):
             btn = _segment_button(label)
             btn.clicked.connect(lambda checked, k=key: self._set_panel(k, checked))
-            row.addWidget(btn)
+            panels.addWidget(btn)
             self._panel_buttons[key] = btn
-        return row
+        row.addWidget(panels_w)
+        return row_w
 
     def _build_right_panel(self, is_stock: bool) -> QWidget:
         """Investor-trend table (KR stocks), futures curve (WTI) and the
@@ -643,8 +671,9 @@ class StockMaDialog(QDialog):
         fixed 3:1:1 -- panels can be hidden, the price panel too when no
         price line is selected)."""
         panels = self._visible_panels()
+        left, right = getattr(self, "_margins", _DEFAULT_MARGINS)
         gs = self._fig.add_gridspec(len(panels), 1, height_ratios=[r for _, r in panels],
-                                    hspace=0.08, left=0.075, right=0.90, top=0.97, bottom=0.07)
+                                    hspace=0.08, left=left, right=right, top=0.97, bottom=0.07)
         shown = set()
         for i, (key, _r) in enumerate(panels):
             ax = self._panel_axes[key]
@@ -655,6 +684,39 @@ class StockMaDialog(QDialog):
         for key, ax in self._panel_axes.items():
             if key not in shown:
                 ax.set_visible(False)
+
+    def _fit_margins(self) -> bool:
+        """Left/right margins in pixels from what has to fit there: the
+        widest Y-axis tick labels + axis label of the visible panels on the
+        left, the end-value labels on the right. Fixed fractions (7.5% / 10%)
+        cut "100,000" and the axis label once the dialog could be narrowed
+        to ~1000 px (2026-11-15). Re-grids and returns True when the margins
+        moved by a pixel or more."""
+        if self._x is None:
+            return False
+        fig_w = self._fig.bbox.width
+        if fig_w <= 0:
+            return False
+        renderer = self._canvas.get_renderer()
+        left_px = 0.0
+        for ax in self._panel_axes.values():
+            if not ax.get_visible():
+                continue
+            bb = ax.yaxis.get_tightbbox(renderer)
+            if bb is not None:
+                left_px = max(left_px, ax.bbox.x0 - bb.x0)
+        right_px = _MIN_RIGHT_PX
+        price = self._panel_axes["price"]
+        for ann in self._end_labels.values():
+            right_px = max(right_px, ann.get_window_extent(renderer).x1 - price.bbox.x1)
+        left = min(0.4, (left_px + _MARGIN_PAD_PX) / fig_w)
+        right = max(0.6, 1.0 - (right_px + _MARGIN_PAD_PX) / fig_w)
+        old_l, old_r = getattr(self, "_margins", _DEFAULT_MARGINS)
+        if abs(left - old_l) * fig_w < 1 and abs(right - old_r) * fig_w < 1:
+            return False
+        self._margins = (float(left), float(right))
+        self._apply_layout()
+        return True
 
     def _set_panel(self, key: str, on: bool) -> None:
         self._panel_on[key] = bool(on)
@@ -684,6 +746,7 @@ class StockMaDialog(QDialog):
         self._apply_layout()
         self._autofit_y()
         self._place_end_labels()
+        self._fit_margins()
         self._update_hover(self._cursor_idx)
         self._canvas.draw_idle()
 
@@ -758,7 +821,11 @@ class StockMaDialog(QDialog):
         canvas.mpl_connect("motion_notify_event", self._on_motion)
         canvas.mpl_connect("axes_leave_event", self._on_leave)
         canvas.mpl_connect("figure_leave_event", self._on_leave)
-        canvas.mpl_connect("resize_event", lambda _e: self._place_end_labels())
+        canvas.mpl_connect("resize_event", lambda _e: self._on_canvas_resize())
+
+    def _on_canvas_resize(self) -> None:
+        self._place_end_labels()
+        self._fit_margins()
 
     def _index_at(self, xdata: float) -> int:
         i = int(np.searchsorted(self._x, xdata))
@@ -923,6 +990,7 @@ class StockMaDialog(QDialog):
         self._panel_axes["price"].set_xlim(*self._clamp_xlim(xmin, xmax))
         self._autofit_y()
         self._place_end_labels()
+        self._fit_margins()                 # the Y tick labels change with the range in view
         self._update_scrollbar()
         self._canvas.draw_idle()
 
