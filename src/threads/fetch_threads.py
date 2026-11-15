@@ -473,13 +473,18 @@ class PositionPriceFetchThread(QThread):
     Background thread: resolves company names to KRX codes,
     fetches real-time prices from Naver Finance, and emits P/L results.
 
-    Signal prices_ready: list of dicts
+    Signal prices_ready(results, request_id): list of dicts, one per input
+    position (``index`` = its position in the input lists), and the
+    ``request_id`` the caller passed in, echoed back so the slot can drop a
+    stale run's results (review_codex.md C10).
     """
-    prices_ready = pyqtSignal(list)
+    prices_ready = pyqtSignal(list, int)
     status_message = pyqtSignal(str)  # short progress text, forwarded to MainWindow's status bar
 
-    def __init__(self, names: list, tickers: list, markets: list, buy_prices: list, qtys: list, buy_amts: list, is_open: list = None, skip_fetch: list = None):
+    def __init__(self, names: list, tickers: list, markets: list, buy_prices: list, qtys: list, buy_amts: list, is_open: list = None, skip_fetch: list = None,
+                 request_id: int = 0):
         super().__init__()
+        self.request_id = request_id
         self._names      = names
         self._tickers    = tickers
         self._markets    = markets
@@ -677,7 +682,7 @@ class PositionPriceFetchThread(QThread):
         with ThreadPoolExecutor(max_workers=max_workers) as exe:
             results = list(exe.map(lambda arg: _compute_pl(*arg), enumerate(self._names)))
 
-        self.prices_ready.emit(results)
+        self.prices_ready.emit(results, self.request_id)
 
 
 # ---------------------------------------------------------------------------

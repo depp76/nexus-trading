@@ -132,7 +132,7 @@ class TestRealtimePriceFailure(unittest.TestCase):
         t = RealtimePriceThread(["005930"], [])
         failures, fetched = [], []
         t.failed.connect(failures.append)
-        t.prices_fetched.connect(fetched.append)
+        t.prices_fetched.connect(lambda prices, complete: fetched.append(prices))
         with patch("data_fetcher.fetch_kis_realtime_prices", **patches):
             t.run()
         return failures, fetched

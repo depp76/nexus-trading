@@ -367,12 +367,14 @@ class TestSignalSlotArity(unittest.TestCase):
         c = {"ticker": "000660", "company": "other", "buy_date": "2026-03-01"}
         tab._open_data = [a, c]
         tab._closed_data = [b]
-        with patch.object(tab, "_save_overrides") as save, \
+        with patch.object(tab, "_save_overrides", return_value=True) as save, \
+             patch.object(tab, "_start_price_fetch") as refetch, \
              patch.object(tab, "_refresh_summary"), patch.object(tab, "_apply_filter"):
             tab._on_ticker_name_resolved({"name": "Samsung"}, "", "005930")
             self.assertEqual((a["company"], b["company"], c["company"]), ("Samsung", "Samsung", "other"))
             self.assertTrue(a["is_overridden"] and b["is_overridden"])
             save.assert_called_once()
+            refetch.assert_called_once()     # prices re-asked under the resolved name
             # no-op when nothing changes / no name
             tab._on_ticker_name_resolved({"name": "Samsung"}, "", "005930")
             tab._on_ticker_name_resolved(None, "err", "005930")

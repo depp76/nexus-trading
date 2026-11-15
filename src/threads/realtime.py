@@ -10,10 +10,16 @@ logger = logging.getLogger(__name__)
 
 
 class RealtimePriceThread(QThread):
-    prices_fetched = pyqtSignal(dict)
+    # (prices, complete): every quote that came back, and False when this
+    # request also emitted `failed`. A partial result (KR quotes in, the US
+    # call failed) is still applied, but must not clear the failure the
+    # same request reported (review_codex.md C12).
+    prices_fetched = pyqtSignal(dict, bool)
     status_message = pyqtSignal(str)  # short progress text for MainWindow's status bar
-    # Emitted before prices_fetched when nothing usable came back: an
-    # exception, or no quote for the tickers asked for (docs/ui.md 8.8).
+    # Emitted before prices_fetched when a market asked for gave nothing
+    # usable: an exception, or no quote at all for that market's tickers
+    # (docs/ui.md 8.8). Single tickers missing from an answer are not a
+    # failure (a halted or delisted name has no quote).
     failed = pyqtSignal(str)
 
     def __init__(self, kr_tickers, us_tickers):
@@ -25,10 +31,12 @@ class RealtimePriceThread(QThread):
         prices = {}
         error = ""
         try:
+            kr_prices = us_prices = {}
             if self.kr_tickers:
                 self.status_message.emit(f"Fetching KR quotes... (KIS, {len(self.kr_tickers)} tickers)")
                 from data_fetcher import fetch_kis_realtime_prices
-                prices.update(fetch_kis_realtime_prices(self.kr_tickers))
+                kr_prices = fetch_kis_realtime_prices(self.kr_tickers)
+                prices.update(kr_prices)
             if self.us_tickers:
                 self.status_message.emit("Waiting for Yahoo Finance response...")
                 from data_fetcher import fetch_us_realtime_prices, get_usd_krw_rate
@@ -38,10 +46,14 @@ class RealtimePriceThread(QThread):
                     prices[ticker] = price * fx_rate
             if (self.kr_tickers or self.us_tickers) and not prices:
                 error = "no quotes received (KIS/Yahoo)"
+            elif self.kr_tickers and not kr_prices:
+                error = "no KR quotes received (KIS)"
+            elif self.us_tickers and not us_prices:
+                error = "no US quotes received (Yahoo)"
         except Exception as e:
             # Before this, an exception here ended the thread silently.
             logger.warning("RealtimePriceThread failed: %s", e, exc_info=True)
             error = str(e) or type(e).__name__
         if error:
             self.failed.emit(error)
-        self.prices_fetched.emit(prices)
+        self.prices_fetched.emit(prices, not error)

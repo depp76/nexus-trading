@@ -714,6 +714,9 @@ app.setStyleSheet(app_qss(FONT_FAMILY_CSS))
   `_save_universe_cache()`는 빈 목록으로 캐시를 덮어쓰지 않는다.
 - **History 보유 종목 시세**(`RealtimePriceThread.failed`): 예외 또는 시세 0건이면 실패. 예외가 나면 스레드가 아무 신호 없이
   끝나던 것도 고침. 성공하면 `price_refresh_ok`.
+  (2026-11-14, review_codex.md C12) 요청한 시장(국내 KIS / 미국 Yahoo) 중 하나라도 예외 또는 0건이면 실패이고,
+  받은 시세는 반영하되 `prices_fetched(prices, complete=False)`라서 `price_refresh_ok`를 보내지 않는다. 전에는 국내만 받고
+  미국이 실패해도 같은 요청의 성공 신호가 실패를 바로 지웠다. 한 시장 안에서 일부 종목만 빠진 것은 실패가 아니다.
 - **헤더 점**: `ui.common.RefreshFailures`가 출처별(Trading Universe / Trading History) 실패를 들고 있고, **같은 출처의 다음 성공만**
   그 실패를 지운다. 그래서 History 시세 실패가 Universe 성공에 가려지지 않는다. 툴팁은 활성 실패를 모두 나열한다.
 
