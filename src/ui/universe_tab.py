@@ -662,6 +662,26 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._ranges = state["ranges"]
         self.filter_table()
 
+
+    # ---Language switch (docs/ui.md 8.20): MainWindow rebuilds every tab in
+    # the new language and carries this state over. Plain values only (the
+    # ui classes themselves are re-imported).
+    def export_state(self) -> dict:
+        return {"all_data": list(self.all_data), "view": self.current_view_state(),
+                "trend_rec": self._last_recommendation, "pinned": bool(self._trend_score_order),
+                "refreshing": not self.refresh_btn.isEnabled()}
+
+    def import_state(self, state: dict) -> None:
+        if state.get("all_data"):
+            self.all_data = list(state["all_data"])
+            self._sort_all_data()            # also drops the old Top/Bottom tags
+            self._reload_table()
+        self.apply_view_state(state["view"])
+        rec = state.get("trend_rec")
+        self._last_recommendation = rec
+        if rec is not None and state.get("pinned"):
+            self._on_trend_score_finished(rec, "")   # re-pin with tags in the new language
+
     def _update_filters_button(self):
         n = len(self._ranges)
         self.filters_btn.setText(tr(f"필터 ({n})", f"Filters ({n})") if n else tr("필터", "Filters"))

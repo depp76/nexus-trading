@@ -48,6 +48,24 @@ class StrategyTab(ThreadOwnerMixin, QWidget):
             tab.strategy_combo.setCurrentIndex(index)
             tab.strategy_combo.blockSignals(False)
 
+
+    # ---Language switch (docs/ui.md 8.20): MainWindow rebuilds every tab in
+    # the new language and carries this state over. Plain values only (the
+    # ui classes themselves are re-imported).
+    def is_running(self) -> bool:
+        return any(getattr(tab, "is_running", lambda: False)() for tab in self.strategy_tabs)
+
+    def export_state(self) -> dict:
+        return {"index": self.stack.currentIndex(),
+                "pages": [tab.export_state() if hasattr(tab, "export_state") else None
+                          for tab in self.strategy_tabs]}
+
+    def import_state(self, state: dict) -> None:
+        for tab, page in zip(self.strategy_tabs, state.get("pages", [])):
+            if page is not None and hasattr(tab, "import_state"):
+                tab.import_state(page)
+        self.show_strategy(state.get("index", 0))
+
     def collect_threads_to_stop(self) -> list:
         out = super().collect_threads_to_stop()
         for tab in self.strategy_tabs:

@@ -2,9 +2,10 @@
 
 Two checkable flag buttons, Taegukgi for Korean and the US flag for English;
 the current language is the checked one. Clicking the other flag emits
-`language_requested(lang)`; `MainWindow` confirms, saves the choice and
-restarts (labels are built once per process, see `i18n`). If the switch is
-declined the owner calls `reset()` to re-check the current flag.
+`language_requested(lang)`; `MainWindow` rebuilds itself in that language
+without restarting (`main.switch_language`). If the switch is declined (a
+running backtest would be stopped) the owner calls `reset()` to re-check the
+current flag.
 """
 from __future__ import annotations
 
