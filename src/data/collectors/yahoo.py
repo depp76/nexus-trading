@@ -5,6 +5,7 @@ import threading
 import requests
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 from yahooquery import Ticker as YQTicker
@@ -160,14 +161,48 @@ def fetch_wti_futures_curve():
     return results
 
 
-def fetch_us_stock_data_bulk(symbols_with_names, market_name, fx_rate, progress_callback=None):
-    """Fetches US stock data using yahooquery (batched history + meta, per-stock parallel processing)."""
-    total = len(symbols_with_names)
-    chunk_size = 20
-    chunks = [symbols_with_names[i:i + chunk_size] for i in range(0, total, chunk_size)]
-    num_chunks = len(chunks)
+_US_BULK_CHUNK_SIZE = 20
+_YQ_META_TIMEOUT = 35  # seconds to wait for each yahooquery metadata call
 
-    # ── Pre-fetch Naver market caps IN PARALLEL across pages ──────────────
+
+@dataclass
+class _UsBulkRun:
+    """Shared state of one fetch_us_stock_data_bulk call (read by every chunk worker)."""
+    market_name: str
+    fx_rate: float
+    total: int
+    progress_callback: object
+    naver_mcaps: dict
+    lock: object
+    yf_semaphore: object
+    yf_bulk_keys_added: set = field(default_factory=set)
+    done_count: int = 0
+
+    def tick(self) -> None:
+        """Count one finished symbol and report progress (called from each symbol worker)."""
+        with self.lock:
+            self.done_count += 1
+            _c = self.done_count
+        if self.progress_callback:
+            self.progress_callback(min(_c, self.total), self.total)
+
+
+@dataclass
+class _UsChunkMeta:
+    """Per-chunk metadata keyed by Yahoo symbol: market cap, display name, trailing/forward PER."""
+    market_cap: dict = field(default_factory=dict)
+    name: dict = field(default_factory=dict)
+    trailing_per: dict = field(default_factory=dict)
+    forward_per: dict = field(default_factory=dict)
+
+
+def _is_valid_pe(v) -> bool:
+    """True for a real (non-NaN) int/float PER value."""
+    return v is not None and isinstance(v, (int, float)) and v == v
+
+
+def _prefetch_naver_us_market_caps(market_name: str, total: int) -> dict:
+    """Naver market caps (USD) by bare symbol, fetched IN PARALLEL across pages; partial on failure."""
     naver_mcaps = {}
     try:
         nm = "NASDAQ" if "NASDAQ" in market_name.upper() else ("NYSE" if "NYSE" in market_name.upper() else "AMEX")
@@ -190,192 +225,225 @@ def fetch_us_stock_data_bulk(symbols_with_names, market_name, fx_rate, progress_
                 naver_mcaps.update(page_result)
     except PAYLOAD_ERRORS:
         logger.warning("Naver market cap prefetch failed, market caps may be incomplete", exc_info=True)
+    return naver_mcaps
 
-    done_count = 0
-    _lock = threading.Lock()
-    _yf_semaphore = threading.Semaphore(3)
-    _YQ_META_TIMEOUT = 35
-    _yf_bulk_keys_added = set()
 
-    def process_chunk(chunk):
-        yf_symbols = [s.replace(".", "-") for s, _ in chunk]
-        market_cap_dict = {}
-        name_dict = {}
-        trailing_per_dict = {}
-        forward_per_dict = {}
+def _store_bulk_history(orig_sym: str, single_df, run: _UsBulkRun) -> None:
+    """Put one symbol's bulk-downloaded history into _YF_BULK_CACHE (skipped when empty)."""
+    if not single_df.empty:
+        pl_df = _to_polars(single_df)
+        key = f"{orig_sym}_{start_date()}"
+        _YF_BULK_CACHE[key] = pl_df
+        run.yf_bulk_keys_added.add(key)
 
-        # ── Step 0: Bulk Pre-fetch History via yfinance ─────────────────
+
+def _prefetch_chunk_history(yf_symbols: list, run: _UsBulkRun) -> None:
+    """Step 0: bulk pre-fetch one chunk's history via yfinance into _YF_BULK_CACHE."""
+    try:
+        import yfinance as yf
+        with run.yf_semaphore:
+            bulk_df = yf.download(
+                yf_symbols,
+                start=start_date(),
+                progress=False,
+                timeout=15,
+                auto_adjust=True,
+                threads=False
+            )
+        if bulk_df is not None and not bulk_df.empty:
+            for sym in yf_symbols:
+                try:
+                    orig_sym = sym.replace("-", ".")
+                    if isinstance(bulk_df.columns, pd.MultiIndex):
+                        if sym in bulk_df.columns.get_level_values(1):
+                            _store_bulk_history(orig_sym, bulk_df.xs(sym, level=1, axis=1).dropna(how='all'), run)
+                    else:
+                        if len(yf_symbols) == 1 and sym == yf_symbols[0]:
+                            _store_bulk_history(orig_sym, bulk_df.dropna(how='all'), run)
+                except Exception:
+                    # boundary: one symbol's slice must not drop the chunk; _to_polars on a yfinance frame can raise polars/pyarrow types.
+                    logger.debug("YF bulk history slice failed for sym=%s, skipping", sym, exc_info=True)
+    except Exception:
+        # kept broad: yf.download raises arbitrary third-party exception types.
+        logger.warning("YF bulk history fetch error (chunk)", exc_info=True)
+
+
+def _apply_v7_quotes(yf_symbols: list, meta: _UsChunkMeta) -> None:
+    """Primary metadata source: the Yahoo Finance v7 quote API."""
+    try:
+        quotes = yf_quote_batch(yf_symbols, timeout=25, chunk_size=len(yf_symbols) or 1)
+        for sym, item in quotes.items():
+            mc = item.get("marketCap") or item.get("totalAssets") or 0
+            meta.market_cap[sym] = float(mc)
+            n = item.get("longName") or item.get("shortName")
+            if n:
+                meta.name[sym] = n
+            tpe = item.get("trailingPE")
+            fpe = item.get("forwardPE")
+            if _is_valid_pe(tpe):
+                meta.trailing_per[sym] = round(float(tpe), 1)
+            if _is_valid_pe(fpe):
+                meta.forward_per[sym] = round(float(fpe), 1)
+    except PAYLOAD_ERRORS:
+        logger.warning("YF v7 quote fetch error (chunk)", exc_info=True)
+
+
+def _fetch_yq_meta(missing: list):
+    """yahooquery (summary_detail, quote_type) for `missing`, fetched in parallel; {} for a failed call."""
+    yq = YQTicker(missing, asynchronous=False, timeout=30)
+
+    def _get_summary(): return yq.summary_detail
+    def _get_qt():      return yq.quote_type
+
+    with ThreadPoolExecutor(max_workers=2) as yq_exe:
+        f_summary = yq_exe.submit(_get_summary)
+        f_qt      = yq_exe.submit(_get_qt)
+        try:
+            details = f_summary.result(timeout=_YQ_META_TIMEOUT)
+        except Exception:
+            # kept broad: yahooquery raises arbitrary types (and result() raises TimeoutError); {} means "no fallback data".
+            details = {}
+        try:
+            qt = f_qt.result(timeout=_YQ_META_TIMEOUT)
+        except Exception:
+            # kept broad: as above.
+            qt = {}
+    return details, qt
+
+
+def _apply_yq_fallback(yf_symbols: list, meta: _UsChunkMeta) -> None:
+    """Fallback: yahooquery for any symbols the v7 quote left without a market cap and a name."""
+    missing = [s for s in yf_symbols if s not in meta.market_cap and s not in meta.name]
+    if not missing:
+        return
+    try:
+        details, qt = _fetch_yq_meta(missing)
+
+        if isinstance(details, dict):
+            for sym, data in details.items():
+                if isinstance(data, dict):
+                    mc = data.get('marketCap') or data.get('totalAssets', 0)
+                    if sym not in meta.market_cap:
+                        meta.market_cap[sym] = mc or 0
+                    tpe = data.get('trailingPE')
+                    fpe = data.get('forwardPE')
+                    if _is_valid_pe(tpe):
+                        meta.trailing_per.setdefault(sym, round(float(tpe), 1))
+                    if _is_valid_pe(fpe):
+                        meta.forward_per.setdefault(sym, round(float(fpe), 1))
+        if isinstance(qt, dict):
+            for sym, data in qt.items():
+                if isinstance(data, dict):
+                    n = data.get('longName') or data.get('shortName')
+                    if n and sym not in meta.name:
+                        meta.name[sym] = n
+    except Exception:
+        # kept broad: yahooquery raises arbitrary third-party exception types.
+        logger.warning("yahooquery fallback error (chunk)", exc_info=True)
+
+
+def _resolve_us_market_cap(symbol: str, yf_symbol: str, meta: _UsChunkMeta, run: _UsBulkRun) -> float:
+    """USD market cap: chunk quote metadata, then the Naver prefetch, then yfinance fast_info."""
+    usd_marcap = meta.market_cap.get(yf_symbol, 0)
+    if usd_marcap == 0:
+        usd_marcap = run.naver_mcaps.get(symbol.split('.')[0], 0)
+    if usd_marcap == 0:
         try:
             import yfinance as yf
-            with _yf_semaphore:
-                bulk_df = yf.download(
-                    yf_symbols,
-                    start=start_date(),
-                    progress=False,
-                    timeout=15,
-                    auto_adjust=True,
-                    threads=False
-                )
-            if bulk_df is not None and not bulk_df.empty:
-                for sym in yf_symbols:
-                    try:
-                        orig_sym = sym.replace("-", ".")
-                        if isinstance(bulk_df.columns, pd.MultiIndex):
-                            if sym in bulk_df.columns.get_level_values(1):
-                                single_df = bulk_df.xs(sym, level=1, axis=1).dropna(how='all')
-                                if not single_df.empty:
-                                    pl_df = _to_polars(single_df)
-                                    key = f"{orig_sym}_{start_date()}"
-                                    _YF_BULK_CACHE[key] = pl_df
-                                    _yf_bulk_keys_added.add(key)
-                        else:
-                            if len(yf_symbols) == 1 and sym == yf_symbols[0]:
-                                single_df = bulk_df.dropna(how='all')
-                                if not single_df.empty:
-                                    pl_df = _to_polars(single_df)
-                                    key = f"{orig_sym}_{start_date()}"
-                                    _YF_BULK_CACHE[key] = pl_df
-                                    _yf_bulk_keys_added.add(key)
-                    except Exception:
-                        # boundary: one symbol's slice must not drop the chunk; _to_polars on a yfinance frame can raise polars/pyarrow types.
-                        logger.debug("YF bulk history slice failed for sym=%s, skipping", sym, exc_info=True)
+            fi = yf.Ticker(yf_symbol, session=_YF_SESSION).fast_info
+            usd_marcap = float(getattr(fi, 'market_cap', 0) or 0)
         except Exception:
-            # kept broad: yf.download raises arbitrary third-party exception types.
-            logger.warning("YF bulk history fetch error (chunk)", exc_info=True)
+            # kept broad: yfinance raises arbitrary third-party exception types.
+            logger.debug("yfinance fast_info failed for %s", yf_symbol, exc_info=True)
+    return usd_marcap
 
-        # ── Primary: Yahoo Finance v7 quote API ──────────────────────────
-        try:
-            quotes = yf_quote_batch(yf_symbols, timeout=25, chunk_size=len(yf_symbols) or 1)
-            for sym, item in quotes.items():
-                mc = item.get("marketCap") or item.get("totalAssets") or 0
-                market_cap_dict[sym] = float(mc)
-                n = item.get("longName") or item.get("shortName")
-                if n:
-                    name_dict[sym] = n
-                tpe = item.get("trailingPE")
-                fpe = item.get("forwardPE")
-                if tpe is not None and isinstance(tpe, (int, float)) and tpe == tpe:
-                    trailing_per_dict[sym] = round(float(tpe), 1)
-                if fpe is not None and isinstance(fpe, (int, float)) and fpe == fpe:
-                    forward_per_dict[sym] = round(float(fpe), 1)
-        except PAYLOAD_ERRORS:
-            logger.warning("YF v7 quote fetch error (chunk)", exc_info=True)
 
-        # ── Fallback: yahooquery for any symbols still missing data ───────
-        missing = [s for s in yf_symbols if s not in market_cap_dict and s not in name_dict]
-        if missing:
-            try:
-                yq = YQTicker(missing, asynchronous=False, timeout=30)
+def _process_us_symbol(symbol: str, name: str, meta: _UsChunkMeta, run: _UsBulkRun):
+    """One symbol's result row (prices in KRW via run.fx_rate), or None when it has no price."""
+    yf_symbol = symbol.replace(".", "-")
+    try:
+        df_history = get_historical_data(symbol, start_date())
+        usd_price = 0.0
+        if not df_history.is_empty() and "Close" in df_history.columns:
+            close_valid = df_history.get_column('Close').drop_nulls()
+            if len(close_valid) > 0:
+                usd_price = safe_float(close_valid[-1])
 
-                def _get_summary(): return yq.summary_detail
-                def _get_qt():      return yq.quote_type
+        if usd_price == 0:
+            return None
 
-                with ThreadPoolExecutor(max_workers=2) as yq_exe:
-                    f_summary = yq_exe.submit(_get_summary)
-                    f_qt      = yq_exe.submit(_get_qt)
-                    try:
-                        details = f_summary.result(timeout=_YQ_META_TIMEOUT)
-                    except Exception:
-                        # kept broad: yahooquery raises arbitrary types (and result() raises TimeoutError); {} means "no fallback data".
-                        details = {}
-                    try:
-                        qt = f_qt.result(timeout=_YQ_META_TIMEOUT)
-                    except Exception:
-                        # kept broad: as above.
-                        qt = {}
+        usd_marcap = _resolve_us_market_cap(symbol, yf_symbol, meta, run)
 
-                if isinstance(details, dict):
-                    for sym, data in details.items():
-                        if isinstance(data, dict):
-                            mc = data.get('marketCap') or data.get('totalAssets', 0)
-                            if sym not in market_cap_dict:
-                                market_cap_dict[sym] = mc or 0
-                            tpe = data.get('trailingPE')
-                            fpe = data.get('forwardPE')
-                            if tpe is not None and isinstance(tpe, (int, float)) and tpe == tpe:
-                                trailing_per_dict.setdefault(sym, round(float(tpe), 1))
-                            if fpe is not None and isinstance(fpe, (int, float)) and fpe == fpe:
-                                forward_per_dict.setdefault(sym, round(float(fpe), 1))
-                if isinstance(qt, dict):
-                    for sym, data in qt.items():
-                        if isinstance(data, dict):
-                            n = data.get('longName') or data.get('shortName')
-                            if n and sym not in name_dict:
-                                name_dict[sym] = n
-            except Exception:
-                # kept broad: yahooquery raises arbitrary third-party exception types.
-                logger.warning("yahooquery fallback error (chunk)", exc_info=True)
+        display_name = meta.name.get(yf_symbol) or name or symbol
+        changes = fetch_historical_changes(symbol, usd_price, df_history)
+        return {
+            "ticker": symbol,
+            "name": display_name,
+            "market": run.market_name,
+            "price": usd_price * run.fx_rate,
+            "market_cap": usd_marcap * run.fx_rate,
+            "usd_price": usd_price,
+            "currency": "$",
+            "changes": changes,
+            "trailing_per": meta.trailing_per.get(yf_symbol),
+            "forward_per": meta.forward_per.get(yf_symbol),
+        }
+    except Exception:
+        # boundary: one bad symbol must not sink the chunk; logged with traceback.
+        logger.error("US stock data fetch failed for symbol=%s", symbol, exc_info=True)
+        return None
+    finally:
+        run.tick()
 
-        def process_symbol(symbol, name):
-            nonlocal done_count
-            yf_symbol = symbol.replace(".", "-")
-            try:
-                df_history = get_historical_data(symbol, start_date())
-                usd_price = 0.0
-                if not df_history.is_empty() and "Close" in df_history.columns:
-                    close_valid = df_history.get_column('Close').drop_nulls()
-                    if len(close_valid) > 0:
-                        usd_price = safe_float(close_valid[-1])
 
-                if usd_price == 0:
-                    return None
+def _process_us_chunk(chunk: list, run: _UsBulkRun) -> list:
+    """One chunk of (symbol, name): history prefetch, metadata, then per-symbol rows in parallel."""
+    yf_symbols = [s.replace(".", "-") for s, _ in chunk]
+    meta = _UsChunkMeta()
 
-                usd_marcap = market_cap_dict.get(yf_symbol, 0)
-                if usd_marcap == 0:
-                    usd_marcap = naver_mcaps.get(symbol.split('.')[0], 0)
-                if usd_marcap == 0:
-                    try:
-                        import yfinance as yf
-                        fi = yf.Ticker(yf_symbol, session=_YF_SESSION).fast_info
-                        usd_marcap = float(getattr(fi, 'market_cap', 0) or 0)
-                    except Exception:
-                        # kept broad: yfinance raises arbitrary third-party exception types.
-                        logger.debug("yfinance fast_info failed for %s", yf_symbol, exc_info=True)
+    _prefetch_chunk_history(yf_symbols, run)
+    _apply_v7_quotes(yf_symbols, meta)
+    _apply_yq_fallback(yf_symbols, meta)
 
-                display_name = name_dict.get(yf_symbol) or name or symbol
-                changes = fetch_historical_changes(symbol, usd_price, df_history)
-                return {
-                    "ticker": symbol,
-                    "name": display_name,
-                    "market": market_name,
-                    "price": usd_price * fx_rate,
-                    "market_cap": usd_marcap * fx_rate,
-                    "usd_price": usd_price,
-                    "currency": "$",
-                    "changes": changes,
-                    "trailing_per": trailing_per_dict.get(yf_symbol),
-                    "forward_per": forward_per_dict.get(yf_symbol),
-                }
-            except Exception:
-                # boundary: one bad symbol must not sink the chunk; logged with traceback.
-                logger.error("US stock data fetch failed for symbol=%s", symbol, exc_info=True)
-                return None
-            finally:
-                with _lock:
-                    done_count += 1
-                    _c = done_count
-                if progress_callback:
-                    progress_callback(min(_c, total), total)
+    chunk_results = []
+    with ThreadPoolExecutor(max_workers=5) as exe:
+        futures = [exe.submit(_process_us_symbol, s, n, meta, run) for s, n in chunk]
+        for f in as_completed(futures):
+            res = f.result()
+            if res:
+                chunk_results.append(res)
 
-        chunk_results = []
-        with ThreadPoolExecutor(max_workers=5) as exe:
-            futures = [exe.submit(process_symbol, s, n) for s, n in chunk]
-            for f in as_completed(futures):
-                res = f.result()
-                if res:
-                    chunk_results.append(res)
+    return chunk_results
 
-        return chunk_results
+
+def fetch_us_stock_data_bulk(symbols_with_names, market_name, fx_rate, progress_callback=None):
+    """Fetches US stock data using yahooquery (batched history + meta, per-stock parallel processing)."""
+    total = len(symbols_with_names)
+    chunk_size = _US_BULK_CHUNK_SIZE
+    chunks = [symbols_with_names[i:i + chunk_size] for i in range(0, total, chunk_size)]
+    num_chunks = len(chunks)
+
+    naver_mcaps = _prefetch_naver_us_market_caps(market_name, total)
+
+    run = _UsBulkRun(
+        market_name=market_name,
+        fx_rate=fx_rate,
+        total=total,
+        progress_callback=progress_callback,
+        naver_mcaps=naver_mcaps,
+        lock=threading.Lock(),
+        yf_semaphore=threading.Semaphore(3),
+    )
 
     results = []
     with ThreadPoolExecutor(max_workers=min(num_chunks, 6)) as executor:
-        for rs in executor.map(process_chunk, chunks):
+        for rs in executor.map(lambda c: _process_us_chunk(c, run), chunks):
             results.extend(rs)
 
     # Remove only the entries this call added, so an overlapping concurrent
     # call to fetch_us_stock_data_bulk (e.g. NASDAQ 100 + S&P 500 refreshes
     # overlapping) doesn't wipe the other call's still-in-use bulk cache entries.
-    for _k in _yf_bulk_keys_added:
+    for _k in run.yf_bulk_keys_added:
         _YF_BULK_CACHE.pop(_k, None)
     return results
 
