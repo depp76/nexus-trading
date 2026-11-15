@@ -111,7 +111,9 @@ def matches(row: dict, state: dict) -> bool:
     where None means the cell has no value (e.g. no PER, no 52W range yet);
     a row with no value never passes a filter on that column."""
     markets = market_list(state.get("market"))
-    if markets != "ALL" and row.get("market") != "Index" and row.get("market") not in markets:
+    # Only markets with a toggle are filtered: index rows and single names
+    # added from a market without one (NASDAQ / NYSE, 2026-11-15) always show.
+    if markets != "ALL" and row.get("market") in MARKETS and row.get("market") not in markets:
         return False
     status = state.get("status") or ""
     if status and row.get("status") != status:
