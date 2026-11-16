@@ -923,20 +923,31 @@ class TestTradeList(unittest.TestCase):
         self.assertEqual(grid(dlg.table), grid(tab.trades_table))
         dlg.close()
 
-    def test_tab_list_filters_and_keeps_them_across_runs(self):
+    def test_tab_list_has_no_filters_and_details_ends_the_summary_line(self):
+        """2026-11-16 (user direction): the tab's list drops the name search and
+        the reason filter; 자세히 (was 크게 보기) sits at the right end of the
+        summary line. The popup keeps both filters."""
         tab = self._tab()
         run = self._run()
-        code = sorted({t.reason for t in run.trades})[0]
         view = tab.trades_view
-        view.reason_combo.setCurrentIndex(view.reason_combo.findData(code))
-        self.assertEqual(len(view.visible_rows()), sum(1 for t in run.trades if t.reason == code))
-        tab.select_variant("A1")            # A1 becomes the focus: filter carries over when the reason occurs
-        a1 = self._run("A1")
-        if any(t.reason == code for t in a1.trades):
-            self.assertEqual(view.reason_combo.currentData(), code)
-            self.assertEqual(len(view.visible_rows()), sum(1 for t in a1.trades if t.reason == code))
-        else:
-            self.assertEqual(view.reason_combo.currentIndex(), 0)
+        self.assertFalse(view.has_filters)
+        self.assertFalse(view.search.isVisibleTo(tab))
+        self.assertFalse(view.reason_combo.isVisibleTo(tab))
+        self.assertEqual(tab.trades_detail_btn.text(), "자세히")
+        self.assertEqual(len(view.visible_rows()), len(run.trades))       # nothing filtered
+        tab.resize(1400, 900)
+        tab.show()
+        self.addCleanup(tab.hide)
+        tab.result_tabs.setCurrentIndex(3)
+        QApplication.processEvents()
+        lbl, btn = tab.trades_summary_lbl, tab.trades_detail_btn
+        mid = lambda w: w.mapTo(tab, w.rect().center()).y()          # noqa: E731
+        self.assertLessEqual(abs(mid(lbl) - mid(btn)), 3)                 # one line
+        self.assertGreater(btn.mapTo(tab, btn.rect().topLeft()).x(), lbl.mapTo(tab, lbl.rect().topLeft()).x())
+        self.assertLess(mid(btn), tab.trades_table.mapTo(tab, tab.trades_table.rect().topLeft()).y())
+        dlg = tab.open_trades_dialog()
+        self.assertTrue(dlg.view.has_filters)
+        dlg.close()
 
     def test_popup_is_wide_enough_for_every_column(self):
         tab = self._tab()

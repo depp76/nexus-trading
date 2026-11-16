@@ -733,15 +733,18 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         return self.monthly_table
 
     def _build_trades_view(self) -> StrategyTradesView:
-        """The same list as the popup (StrategyTradesView); "크게 보기", a
+        """The same list as the popup (StrategyTradesView), without its
+        search and reason filter (user direction 2026-11-16): the summary
+        line with "자세히" (was "크게 보기") at its right end. 자세히, a
         double-click or Enter on a row opens StrategyTradesDialog."""
-        self.trades_detail_btn = make_button(tr("크게 보기", "Expand"), on_click=self.open_trades_dialog,
-                                             tooltip=tr("같은 매매 내역을 모든 열이 한 번에 보이는 큰 창으로 엽니다",
+        self.trades_detail_btn = make_button(tr("자세히", "Details"), on_click=self.open_trades_dialog,
+                                             tooltip=tr("같은 매매 내역을 모든 열이 한 번에 보이는 큰 창으로 엽니다"
+                                                        "(종목 검색 · 청산 사유 필터 포함)",
                                                         "Open the same trades in a larger window with every "
-                                                        "column visible"))
+                                                        "column visible (with the name search and exit-reason filter)"))
         self.trades_detail_btn.setEnabled(False)
         self.trades_view = StrategyTradesView(empty_text=_TRADES_EMPTY, on_activate=self._on_trade_activated,
-                                              extra_widgets=(self.trades_detail_btn,))
+                                              extra_widgets=(self.trades_detail_btn,), filters=False)
         self.trades_view.setContentsMargins(6, 6, 6, 0)
         self.trades_table = self.trades_view.table
         self.trades_summary_lbl = self.trades_view.summary_lbl

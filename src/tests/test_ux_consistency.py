@@ -469,7 +469,7 @@ class TestClearSelectionOutsideTheTab(unittest.TestCase):
         win = QWidget()
         win.setFocusPolicy(Qt.FocusPolicy.ClickFocus)          # as MainWindow's central widget
         outer = QVBoxLayout(win)
-        header = QLabel("NEXUS")
+        header = QLabel("Nexus Trading")
         outer.addWidget(header)
         tab = QWidget()
         inner = QVBoxLayout(tab)
