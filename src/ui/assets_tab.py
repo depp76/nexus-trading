@@ -915,7 +915,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
                    else tr("주간 기록이 2주 이상 쌓이면 추이가 표시됩니다", "The trend appears once two or more weekly records exist"))
             ax.text(0.5, 0.5, msg, ha="center", va="center",
                      transform=ax.transAxes, color=TEXT_MUTED, fontsize=9)
-            self._chart_canvas.draw()
+            self._draw_chart()
             return
         ax.set_axis_on()
 
@@ -942,7 +942,24 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         ax.set_title(tr(f"{metrics[0]['date']} ~ {metrics[-1]['date']} · {self._currency} · 저장된 주간 기록", f"{metrics[0]['date']} ~ {metrics[-1]['date']} · {self._currency} · saved weekly records"),
                      fontsize=8, loc="left", color=TEXT_MUTED)
 
-        self._chart_canvas.draw()
+        self._draw_chart()
+
+    def _draw_chart(self):
+        """Render the inline chart now if it can be seen, else when the tab is
+        next shown: a matplotlib draw is about 0.13 s (constrained layout), and
+        it used to run at start-up and on every table refresh while this tab
+        was hidden behind another one (2026-11-16)."""
+        if self._chart_canvas.isVisible():
+            self._chart_dirty = False
+            self._chart_canvas.draw_idle()
+        else:
+            self._chart_dirty = True
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if getattr(self, "_chart_dirty", False):
+            self._chart_dirty = False
+            self._chart_canvas.draw_idle()
 
     def update_live_asset(self, current_total: float):
         self._current_live_asset = current_total

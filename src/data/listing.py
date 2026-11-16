@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import logging
 import pandas as pd
 import requests
-import FinanceDataReader as fdr
+from data.cache import fdr   # lazy: imported on first use (data.cache.LazyModule)
 
 from data.cache import safe_float
 

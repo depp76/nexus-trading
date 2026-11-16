@@ -174,7 +174,10 @@ Dev tooling is in `requirements-dev.txt`
   in the signal (`SingleStockFetchThread.finished(result, error, ticker)`,
   `StockMaThread.finished(..., market, change_mode)`) instead of capturing it in a lambda.
 - **`src/data/`**: all external data access, layered bottom-up with no import cycles
-  (module-level or lazy): `cache.py` (HTTP sessions, `_HIST_CACHE` LRU with
+  (module-level or lazy): `cache.py` (HTTP sessions, all mounted with `SharedTlsAdapter` — one SSLContext
+  with the CA bundle loaded once per process instead of once per connection, which cost ~0.1 s per new
+  connection under the GIL; a new `requests.Session` in `data/` should mount it too; `LazyModule` /
+  `fdr`, the FinanceDataReader import deferred to first use; `_HIST_CACHE` LRU with
   `_HIST_CACHE_STATS` and the per-key `_HIST_CACHE_FETCHED_AT` stamps that
   `_hist_df_is_stale(df, fetched_at)` checks against `_HIST_CACHE_STALE_TTL` (30 min) so a
   frame without today's bar is not re-fetched on every weekday lookup, `_YF_BULK_CACHE`,
