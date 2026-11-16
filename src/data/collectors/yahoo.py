@@ -8,7 +8,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
-from yahooquery import Ticker as YQTicker
 import logging
 
 from data.cache import (
@@ -290,6 +289,7 @@ def _apply_v7_quotes(yf_symbols: list, meta: _UsChunkMeta) -> None:
 
 def _fetch_yq_meta(missing: list):
     """yahooquery (summary_detail, quote_type) for `missing`, fetched in parallel; {} for a failed call."""
+    from yahooquery import Ticker as YQTicker   # at first use: off the app's start-up path
     yq = YQTicker(missing, asynchronous=False, timeout=30)
 
     def _get_summary(): return yq.summary_detail

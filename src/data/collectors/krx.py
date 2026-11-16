@@ -5,7 +5,7 @@ import json
 import threading
 import time
 import requests
-from datetime import datetime, date as _date
+from datetime import datetime, timedelta, date as _date
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import polars as pl
@@ -205,6 +205,9 @@ _JP10Y_CSV_PATHS = ("historical/jgbcme_all.csv", "jgbcme.csv")
 # failed connect three times, so a dropped connection costs 3 s instead of the ~21 s OS
 # default and the worst case is ~12 s per CSV. The historical CSV is ~1.2 MB.
 _JP10Y_TIMEOUT = (3, 20)
+# A downloaded series is not downloaded again within this window (MOF publishes once
+# a business day; same window as data.cache._HIST_CACHE_STALE_TTL).
+_JP10Y_REFETCH_TTL = timedelta(minutes=30)
 
 
 def _read_mof_csv(path: str) -> pd.DataFrame:
@@ -243,13 +246,47 @@ def _save_jp10y_disk_cache(df: pd.DataFrame) -> None:
         logger.warning("JP10Y disk cache save failed", exc_info=True)
 
 
+def _parse_mof_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """One MOF CSV as a date-indexed Close (10Y yield) frame, oldest first."""
+    df = df.rename(columns={'10Y': 'Close'})
+    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
+    return (df[['Date', 'Close']]
+            .dropna(subset=['Date', 'Close'])
+            .sort_values('Date')
+            .set_index('Date'))
+
+
+def _download_jp10y(cached):
+    """The whole series from the network. With a cached series that already
+    reaches into the month of the current-month CSV, only that small CSV is
+    downloaded and laid over the cache; the 1.2 MB historical CSV (everything
+    up to the end of last month) is needed only on the first run and once
+    after each month turns."""
+    hist_path, recent_path = _JP10Y_CSV_PATHS
+    if cached is None or cached.empty:
+        frames = [_read_mof_csv(hist_path), _read_mof_csv(recent_path)]
+        return _parse_mof_frame(pd.concat(frames, ignore_index=True))
+    recent = _parse_mof_frame(_read_mof_csv(recent_path))
+    if recent.empty:
+        return cached
+    if cached.index[-1] >= recent.index[0]:
+        merged = pd.concat([cached[cached.index < recent.index[0]], recent])
+        merged.index.name = recent.index.name
+        return merged
+    hist = _parse_mof_frame(_read_mof_csv(hist_path))
+    return pd.concat([hist[hist.index < recent.index[0]], recent])
+
+
 def _get_jp10y_df():
     """Fetch Japan 10-year government bond yield.
 
     The last downloaded series is also kept in JP10Y_CACHE_FILE, so a failed download
     right after startup still returns yesterday's series instead of None. MOF publishes
     with a lag of a few business days, so on weekdays the series is always "stale" by
-    _pdf_is_stale and each full refresh still tries the network.
+    _pdf_is_stale; a series downloaded within _JP10Y_REFETCH_TTL is served as it is
+    (until 2026-11-16 every full refresh downloaded both CSVs again, about 2.6 s, and
+    the index step waited for it).
     """
     with _JP10Y_LOCK:
         cached = _JP10Y_CACHE["df"]
@@ -258,17 +295,17 @@ def _get_jp10y_df():
             _JP10Y_CACHE["df"] = cached
         if cached is not None and not _pdf_is_stale(cached):
             return cached
+        # (frame, time) of the last download; it counts only for that same frame object.
+        fetched = _JP10Y_CACHE.get("fetched")
+        if (cached is not None and fetched is not None and fetched[0] is cached
+                and datetime.now() - fetched[1] < _JP10Y_REFETCH_TTL):
+            return cached
         try:
-            df = pd.concat([_read_mof_csv(path) for path in _JP10Y_CSV_PATHS], ignore_index=True)
-            df.rename(columns={'Date': 'Date', '10Y': 'Close'}, inplace=True)
-            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-            df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
-            df = (df[['Date', 'Close']]
-                  .dropna(subset=['Date', 'Close'])
-                  .sort_values('Date')
-                  .set_index('Date'))
+            df = _download_jp10y(cached)
             _JP10Y_CACHE["df"] = df
-            _save_jp10y_disk_cache(df)
+            _JP10Y_CACHE["fetched"] = (df, datetime.now())
+            if df is not cached:
+                _save_jp10y_disk_cache(df)
             return df
         except requests.RequestException as e:
             # Network-level failures (timeouts, refused connections, HTTP errors) are

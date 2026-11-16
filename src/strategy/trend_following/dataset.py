@@ -29,7 +29,7 @@ import polars as pl
 from data.history import get_historical_data
 from data.collectors.naver import _fetch_kr_listing_naver
 from data.listing import _fetch_kr_listing_fdr_fallback
-from data.flows import get_investor_flows
+from data.flows import get_investor_flows, FLOW_FETCH_CONCURRENCY
 from data.rates import get_cd91_series
 from data.fx import get_usd_krw_history
 from data.collectors.yahoo import get_us_listing_ranked
@@ -619,7 +619,7 @@ def _load_flows(codes: list[str], ws: str, end: date, max_workers: int, progress
     """Investor-flow frames (spec 2-3) of `codes` cut at `end`; failed or empty ones are left out."""
     flow_frames: dict[str, pl.DataFrame] = {}
     done = 0
-    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, 4))) as exe:
+    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, FLOW_FETCH_CONCURRENCY))) as exe:
         futures = {exe.submit(get_investor_flows, c, ws): c for c in codes}
         for fut in as_completed(futures):
             _check_stop(should_stop, futures)

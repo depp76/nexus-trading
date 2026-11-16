@@ -6,7 +6,7 @@ import threading
 from datetime import date, datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import polars as pl
-import FinanceDataReader as fdr
+from data.cache import fdr   # lazy: imported on first use (data.cache.LazyModule)
 import logging
 
 from data.cache import (

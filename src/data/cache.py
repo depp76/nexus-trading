@@ -12,6 +12,28 @@ from requests.adapters import HTTPAdapter
 
 logger = logging.getLogger(__name__)
 
+
+class LazyModule:
+    """A module imported on first attribute access. FinanceDataReader pulls in
+    plotly (about 0.24 s of the app's start, 2026-11-16 measurement) and only
+    worker threads call it, so `fdr = LazyModule("FinanceDataReader")` keeps
+    it off the path to the first window. Tests can still patch the name."""
+
+    def __init__(self, name: str):
+        self._lazy_name = name
+        self._lazy_mod = None
+
+    def __getattr__(self, attr: str):
+        mod = self.__dict__["_lazy_mod"]
+        if mod is None:
+            import importlib
+            mod = importlib.import_module(self.__dict__["_lazy_name"])
+            self.__dict__["_lazy_mod"] = mod
+        return getattr(mod, attr)
+
+
+fdr = LazyModule("FinanceDataReader")
+
 # What fetching and parsing one external payload can raise when the source is down or
 # answers with something unexpected: transport/HTTP errors, an undecodable body
 # (json.JSONDecodeError is a ValueError), and a payload whose shape differs from the
@@ -109,15 +131,64 @@ _HIST_CACHE_STATS: dict = {"hits": 0, "misses": 0}
 _HIST_CACHE_LOG_INTERVAL = 100  # log the hit/miss ratio every N lookups
 
 
-class YFTlsAdapter(HTTPAdapter):
-    def init_poolmanager(self, *args, **kwargs):
+class SharedTlsAdapter(HTTPAdapter):
+    """An HTTPS adapter whose connections share one SSLContext with the CA
+    bundle loaded once.
+
+    requests (2.32.3 and later) hands every new connection the certifi path,
+    and urllib3 then parses the whole bundle again for that connection: about
+    0.1 s of CPU each, serialized by the GIL. A refresh opens 20-30 Naver
+    connections at once, so its first batch waited about 3 s on that alone
+    (200 PER requests on 30 workers: 3.4 s -> 0.3 s, measured 2026-11-16).
+    Verification is unchanged: the same bundle, CERT_REQUIRED, host name check.
+    Only the default `verify=True` is handled here; a custom bundle path or
+    verify=False keeps requests' own per-connection behaviour."""
+
+    _ctx = None                      # built at the first request, shared by every instance of the class
+    _ctx_lock = threading.Lock()
+
+    @staticmethod
+    def _make_context():
         ctx = urllib3.util.ssl_.create_urllib3_context()
+        ctx.load_verify_locations(requests.certs.where())
+        return ctx
+
+    @classmethod
+    def shared_context(cls):
+        """The class's one context. Built on first use, in the worker thread
+        that makes the first request, so importing this module stays cheap."""
+        if cls.__dict__.get("_ctx") is None:
+            with cls._ctx_lock:
+                if cls.__dict__.get("_ctx") is None:
+                    cls._ctx = cls._make_context()
+        return cls.__dict__["_ctx"]
+
+    def build_connection_pool_key_attributes(self, request, verify, cert=None):
+        host_params, pool_kwargs = super().build_connection_pool_key_attributes(request, verify, cert)
+        if verify is True and host_params.get("scheme") == "https":
+            pool_kwargs.pop("ca_certs", None)
+            pool_kwargs.pop("ca_cert_dir", None)
+            pool_kwargs["ssl_context"] = self.shared_context()
+        return host_params, pool_kwargs
+
+    def cert_verify(self, conn, url, verify, cert):
+        super().cert_verify(conn, url, verify, cert)
+        if verify is True:
+            conn.ca_certs = None
+            conn.ca_cert_dir = None
+
+
+class YFTlsAdapter(SharedTlsAdapter):
+    _ctx = None
+
+    @staticmethod
+    def _make_context():
+        ctx = SharedTlsAdapter._make_context()
         try:
             ctx.set_ciphers('DEFAULT@SECLEVEL=1')
         except ssl.SSLError:
             logger.debug("TLS cipher SECLEVEL=1 not supported, using default context")
-        kwargs['ssl_context'] = ctx
-        return super().init_poolmanager(*args, **kwargs)
+        return ctx
 
 
 _YF_SESSION = requests.Session()
@@ -133,7 +204,7 @@ _YF_CRUMB_LOCK = threading.Lock()
 # data/collectors/naver.py (real-time price batches, PER lookups, listing
 # pages, investor-trend pages), instead of each call opening a fresh connection.
 _NAVER_SESSION = requests.Session()
-_NAVER_SESSION.mount("https://", HTTPAdapter(pool_maxsize=100))
+_NAVER_SESSION.mount("https://", SharedTlsAdapter(pool_maxsize=100))
 _NAVER_SESSION.headers.update({"User-Agent": "Mozilla/5.0"})
 
 # Session for the Japan MOF JGB CSVs (data/collectors/krx.py::_get_jp10y_df). On 2026-10-19
@@ -145,11 +216,12 @@ _NAVER_SESSION.headers.update({"User-Agent": "Mozilla/5.0"})
 # instead of waiting longer on one attempt. Reads are not retried. One session also lets
 # the two CSVs reuse a connection when the server keeps it open.
 _MOF_SESSION = requests.Session()
-_MOF_SESSION.mount("https://", HTTPAdapter(max_retries=urllib3.util.Retry(
+_MOF_SESSION.mount("https://", SharedTlsAdapter(max_retries=urllib3.util.Retry(
     total=None, connect=3, read=0, status=0, other=0, backoff_factor=0)))
 
 # Shared session for the KIS (Korea Investment & Securities) Open API (data/collectors/kis.py).
 _KIS_SESSION = requests.Session()
+_KIS_SESSION.mount("https://", SharedTlsAdapter())
 
 
 def _get_yf_crumb(force_refresh: bool = False):

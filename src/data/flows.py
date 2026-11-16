@@ -28,9 +28,15 @@ logger = logging.getLogger(__name__)
 
 _FLOW_COLUMNS = ["Date", "Close", "Foreigner", "Institution", "Retail"]
 _CACHE_LOCK = threading.Lock()
-# Serialise Naver page bursts across dataset threads: one ticker's fetch is
-# already 8 concurrent pages.
-_FETCH_SEMAPHORE = threading.BoundedSemaphore(2)
+# How many tickers page through Naver at once. One ticker's fetch is a chain of
+# sequential 60-row pages (the cursor is the oldest date of the page before), so
+# this is also the number of concurrent requests. It was 2 while a ticker's
+# pages were fetched 8 at a time; with sequential paging that made a cold
+# 200-name, 4-year load take 324 s (2026-11-16). 16 tickers, 1,300 rows each:
+# 19.3 s at 2, 5.1 s at 8, same rows and no errors; the Universe refresh
+# already runs 30 requests at once against the same host.
+FLOW_FETCH_CONCURRENCY = 8
+_FETCH_SEMAPHORE = threading.BoundedSemaphore(FLOW_FETCH_CONCURRENCY)
 
 
 def _cache_path(ticker: str) -> str:

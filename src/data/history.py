@@ -9,7 +9,7 @@ import threading
 from datetime import datetime
 import pandas as pd
 import polars as pl
-import FinanceDataReader as fdr
+from data.cache import fdr   # lazy: imported on first use (data.cache.LazyModule)
 
 import data.cache as _dc
 from data.cache import (

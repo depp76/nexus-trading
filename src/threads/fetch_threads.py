@@ -325,47 +325,48 @@ class AllDataFetchThread(QThread):
         all_data = []
         failed_parts = []
         try:
-            # ---Step 1: Fetch indices first (fast, one concurrent call per index) ---
-            if self.include_indices:
-                try:
-                    self.market_progress.emit("Indices", 0, len(INDEX_TICKERS))
-                    indices_data = fetch_major_indices_as_stocks()
-                    self.market_loaded.emit("Indices", indices_data)
-                    all_data.extend(indices_data)
-                    if not indices_data:
-                        failed_parts.append("Indices")
-                except Exception as e:
-                    # boundary: a failed index step must not stop the market fetches below.
-                    logger.warning("Error fetching indices: %s", e, exc_info=True)
-                    failed_parts.append("Indices")
-
-            # ---Step 2: Fetch the selected markets IN PARALLEL ---
+            # Indices and the selected markets all at once (2026-11-16: the
+            # index step used to finish first, 1.3-2.7 s, before any market
+            # started). The rows are still assembled indices first.
             markets_config = [(m, UNIVERSE_MARKET_SIZES[m]) for m in self.markets]
 
+            if self.include_indices:
+                self.market_progress.emit("Indices", 0, len(INDEX_TICKERS))
             for market, top_n in markets_config:
                 self.market_progress.emit(market, 0, top_n)
 
             def fetch_market_task(market, top_n):
                 def progress_cb(current, total, m=market):
                     self.market_progress.emit(m, current, total)
-                return market, fetch_market_data(market, top_n, progress_cb)
+                return fetch_market_data(market, top_n, progress_cb)
 
+            indices_data = []
             market_results = {}
-            with ThreadPoolExecutor(max_workers=max(1, len(markets_config))) as executor:
-                futures = {
-                    executor.submit(fetch_market_task, m, n): m
-                    for m, n in markets_config
-                }
+            n_tasks = len(markets_config) + (1 if self.include_indices else 0)
+            with ThreadPoolExecutor(max_workers=max(1, n_tasks)) as executor:
+                futures = {executor.submit(fetch_market_task, m, n): m for m, n in markets_config}
+                if self.include_indices:
+                    futures[executor.submit(fetch_major_indices_as_stocks)] = "Indices"
                 for future in as_completed(futures):
+                    part = futures[future]
                     try:
-                        market, data = future.result()
-                        market_results[market] = data
-                        self.market_loaded.emit(market, data)
+                        data = future.result()
                     except Exception as e:
-                        # boundary: one market's failure must not lose the others.
-                        market = futures[future]
-                        logger.warning("Error fetching %s: %s", market, e, exc_info=True)
-                        market_results[market] = []
+                        # boundary: one part's failure must not lose the others.
+                        logger.warning("Error fetching %s: %s", part, e, exc_info=True)
+                        if part == "Indices":
+                            failed_parts.append("Indices")
+                        else:
+                            market_results[part] = []
+                        continue
+                    self.market_loaded.emit(part, data)
+                    if part == "Indices":
+                        indices_data = data
+                        if not data:
+                            failed_parts.append("Indices")
+                    else:
+                        market_results[part] = data
+            all_data.extend(indices_data)
 
             # A name in both NASDAQ 100 and S&P500 (AAPL, MSFT, ...) is one
             # row, under the first market in display order; `also_in` lists
