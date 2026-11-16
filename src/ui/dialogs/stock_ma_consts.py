@@ -36,10 +36,14 @@ _SLOT_RATIOS = {"price": 3, "vol": 1, "div": 1, "rsi": 1}
 # Independent series toggles (user direction 2026-10-15), key -> label.
 # Price-panel lines use their _lines key; "Div" is the divergence panel.
 _SERIES = {
-    "Close": tr("종가", "Close"), "MA5": "MA5", "MA10": "MA10", "MA20": "MA20", "MA50": "MA50",
+    "Close": tr("종가", "Close"), "MA10": "MA10", "MA20": "MA20", "MA50": "MA50",
     "Div": tr("이격도", "Divergence"), "EW": tr("동일가중", "Equal Weight"),
 }
-_PRICE_SERIES = ("Close", "MA5", "MA10", "MA20", "MA50", "EW")
+# The moving averages the chart draws and toggles. MA5 was dropped on
+# 2026-11-16 (user direction); its MA_RAMP color stays for the MA20
+# divergence line.
+_MA_KEYS = ("MA10", "MA20", "MA50")
+_PRICE_SERIES = ("Close", *_MA_KEYS, "EW")
 # What the dialog opens with: close price plus the divergence panel, no moving
 # averages (user direction 2026-09-29: close only on the price panel).
 _DEFAULT_SERIES = frozenset({"Close", "Div"})
