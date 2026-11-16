@@ -78,12 +78,12 @@ class TestTrendFollowingTab(unittest.TestCase):
         button is outlined and Run stays off (strategy_run_settings_ui.md 3)."""
         tab = TrendFollowingTab()
         self.assertEqual(tab._selected_variants(), ())
-        self.assertEqual(tab.conditions_btn.text(), "조건...")
+        self.assertEqual(tab.conditions_btn.text(), "매매전략...")
         self.assertFalse(hasattr(tab, "flows_cb"))
         self.assertFalse(hasattr(tab, "event_cb"))
         self.assertFalse(tab.build_request().run_event_study)
         self.assertFalse(tab.run_btn.isEnabled())
-        self.assertEqual(tab.status_summary_lbl.text(), "조건에서 규칙을 1개 이상 선택하세요")
+        self.assertEqual(tab.status_summary_lbl.text(), "매매전략에서 규칙을 1개 이상 선택하세요")
         self.assertEqual(tab.status_summary_lbl.objectName(), "fieldError")
         self.assertTrue(tab.conditions_btn.property("invalid"))
         with patch("ui.trend_following_tab.TrendFollowingResearchThread", _FakeThread):
@@ -1187,3 +1187,120 @@ class TestToolbarLikeTheOtherTabs(unittest.TestCase):
         for b in buttons:
             self.assertGreaterEqual(b.width(), b.sizeHint().width(), b.text())
             self.assertIsNone(b.menu())
+
+
+class TestResetAfterRun(unittest.TestCase):
+    """초기화 (user direction 2026-11-16): after a run, back to the screen
+    before any run; the form stays."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.result = _result(("A0", "A1"), (1.0,))
+
+    def _finished_tab(self):
+        tab = TrendFollowingTab()
+        tab.market_buttons["KOSDAQ"].click()
+        tab.set_variant_choice(["A0", "A1"])
+        tab._on_research_finished(self.result, "")
+        return tab
+
+    def test_reset_is_only_there_with_a_result(self):
+        tab = TrendFollowingTab()
+        self.assertFalse(tab.reset_btn.isEnabled())
+        tab._on_research_finished(self.result, "")
+        self.assertTrue(tab.reset_btn.isEnabled())
+        self.assertFalse(tab.result_head.isHidden())
+
+    def test_reset_clears_the_result_and_keeps_the_form(self):
+        tab = self._finished_tab()
+        self.assertGreater(tab.compare_table.rowCount(), 0)
+        from PyQt6.QtWidgets import QMessageBox
+        with patch("ui.trend_following_tab.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
+            tab.reset_btn.click()
+        self.assertIsNone(tab._result)
+        self.assertEqual((tab.compare_table.rowCount(), tab.table.rowCount(), tab.monthly_table.rowCount()), (0, 0, 0))
+        self.assertTrue(tab.result_head.isHidden())
+        self.assertTrue(tab.selector_row.isHidden())
+        self.assertFalse(tab.save_btn.isEnabled())
+        self.assertFalse(tab.reset_btn.isEnabled())
+        self.assertEqual(tab.result_tabs.tabText(4), "경고 (0)")
+        self.assertEqual(tab.status_lbl.text(), "준비됨")
+        self.assertEqual(tab._chart_series, [])
+        # the form is untouched and a new run is possible
+        self.assertEqual(tab.selected_markets(), ("KOSPI", "KOSDAQ"))
+        self.assertEqual(tab._selected_variants(), ("A0", "A1"))
+        self.assertTrue(tab.run_btn.isEnabled())
+        self.assertIsNone(tab.export_state()["result"])
+
+    def test_no_keeps_the_result(self):
+        tab = self._finished_tab()
+        from PyQt6.QtWidgets import QMessageBox
+        with patch("ui.trend_following_tab.QMessageBox.question", return_value=QMessageBox.StandardButton.No):
+            tab.reset_btn.click()
+        self.assertIs(tab._result, self.result)
+        self.assertGreater(tab.compare_table.rowCount(), 0)
+
+    def test_locked_while_running(self):
+        tab = self._finished_tab()
+        _FakeThread.instances.clear()
+        with patch("ui.trend_following_tab.TrendFollowingResearchThread", _FakeThread):
+            tab._on_run_clicked()
+        self.assertFalse(tab.reset_btn.isEnabled())
+        tab.clear_result()                       # ignored while a run goes
+        self.assertIs(tab._result, self.result)
+        _FakeThread.instances[0].finished.emit(None, "boom")
+        self.assertTrue(tab.reset_btn.isEnabled())   # a failed run keeps the last result
+
+
+class TestNothingMovesAfterARun(unittest.TestCase):
+    """User direction 2026-11-16: the result head and selector row keep their
+    place while hidden and the KPI cards keep their height, so a run (or a
+    reset) never moves the cards, chart or result tabs."""
+
+    def test_layout_is_the_same_before_after_and_after_reset(self):
+        tab = TrendFollowingTab()
+        tab.resize(1400, 900)
+        tab.show()
+        self.addCleanup(tab.hide)
+
+        def settle():
+            for _ in range(5):
+                app.processEvents()
+
+        def geoms():
+            return [(w.mapTo(tab, w.rect().topLeft()).y(), w.height())
+                    for w in (tab.kpi_row, tab.target_card, tab.canvas, tab.result_tabs)]
+        settle()
+        before = geoms()
+        tab.set_variant_choice(["A0", "A1"])
+        tab._on_research_finished(_result(("A0", "A1"), (0.0, 1.0, 2.0)), "")
+        settle()
+        self.assertTrue(tab.result_head.isVisible())
+        self.assertEqual(geoms(), before)
+        tab.clear_result()
+        settle()
+        self.assertEqual(geoms(), before)
+
+    def test_long_basis_stays_one_line(self):
+        tab = TrendFollowingTab()
+        tab._on_research_finished(_result(("A0", "A1"), (1.0,)), "")
+        self.assertEqual(tab.result_head.height(), tab.result_head.maximumHeight())
+        self.assertEqual(tab.basis_lbl.toolTip(), tab.basis_lbl.text())
+        self.assertFalse(tab.basis_lbl.wordWrap())
+
+
+class TestMainTabsOneWidth(unittest.TestCase):
+    """User direction 2026-11-16: Trading Universe ~ Strategy tabs are one width."""
+
+    def test_every_tab_has_the_widest_width(self):
+        from PyQt6.QtWidgets import QTabWidget, QWidget
+        from ui.common import EqualWidthTabBar
+        tabs = QTabWidget()
+        tabs.setTabBar(EqualWidthTabBar())
+        for name in ("Trading Universe", "Trading History", "Total Assets", "Strategy"):
+            tabs.addTab(QWidget(), name)
+        bar = tabs.tabBar()
+        widths = {bar.tabSizeHint(i).width() for i in range(bar.count())}
+        self.assertEqual(len(widths), 1)
+        fm = bar.fontMetrics()
+        self.assertGreater(widths.pop(), fm.horizontalAdvance("Trading Universe"))

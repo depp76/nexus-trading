@@ -234,3 +234,5 @@ src/
 | 2026-11-16 | Total Assets 툴바 한 줄(docs/ui.md 8.17): 통화 순환 버튼 통화(KRW/USD), 현재 총자산(실시간)·주간 손익을 툴바로, 입력 줄(날짜·이번 주·총자산)은 `AddRecordDialog`로(자동 채움·manual 규칙 그대로, 자정 갱신 타이머 삭제). Universe·History·Total Assets 툴바 버튼 **세 탭 공용 폭**(`ui.common.toolbar_button_width`, 실측 94px); History 시세 라벨은 시세(30일)/시세(전체)로 줄여 Universe 1348px. pytest 876, ruff 0건. |
 | 2026-11-16 | Total Assets 내보내기 삭제(사용자 결정): 툴바 버튼, `_on_export_clicked`(KRW+USD 전체 Excel/CSV), 그것만 쓰던 `openpyxl`(requirements.txt). 그래프 창 리포트의 CSV 내보내기는 그대로. |
 | 2026-11-16 | Strategy 실행 툴바를 다른 탭 방식으로(docs/ui.md 8.17): 시장 메뉴 버튼 → Universe 같은 토글 4개(KOSPI/KOSDAQ/NASDAQ/NYSE), 시장·조건·중지·실행·리포트 저장을 네 탭 공용 폭(94px)으로, 실행 라벨 "백테스트 실행" → "백테스트"(102px이 Universe를 1440px 창 밖으로 밀어서). pytest 877, ruff 0건. |
+| 2026-11-16 | Strategy 결과 **초기화**(docs/ui.md 8.19 결과 머리): 리포트 저장 앞 버튼, 확인 후 `clear_result()`로 실행 전 화면(결과·표·차트·경고 비움, 폼 유지), 결과 있을 때만·실행 중 잠금. `TestResetAfterRun` 4건, pytest 881. |
+| 2026-11-16 | 상위 탭 4개 한 폭(`EqualWidthTabBar`), Strategy "조건..." → "매매전략..."(버튼·대화상자 제목·오류 문구), 백테스트 뒤 아래 영역 고정: 결과 머리·선택 줄 자리 유지(`retainSizeWhenHidden`, BTN_H 한 줄), 결과 기준 한 줄+툴팁, KpiCard 배지 자리 유지 (docs/ui.md 8.17·8.19). pytest 884. |

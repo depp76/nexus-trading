@@ -114,7 +114,7 @@ Dev tooling is in `requirements-dev.txt`
 - **`src/ui/`**: `universe_tab.py` (`UniverseTab`), `history_tab.py` (`TradingHistoryTab`),
   `assets_tab.py` (`TradingRecordTab`), `strategy_tab.py` (`StrategyTab`: a `QStackedWidget` of the
   `STRATEGY_TABS` pages switched by each page's strategy selector; merges their `collect_threads_to_stop()`), `trend_following_tab.py`
-  (`TrendFollowingTab`: run toolbar (전략 selector | 시장 toggles KOSPI·KOSDAQ·NASDAQ·NYSE | 기간 | 조건... | 중지 백테스트, one line or two fixed lines by width; buttons at the shared toolbar width) + status line, rules and run conditions in `ui/dialogs/trend_conditions.py` `TrendConditionsDialog` (`TrendConditions`); docs/ui.md 8.19 -> result head (basis, "다음 실행에 적용", Save) ->
+  (`TrendFollowingTab`: run toolbar (전략 selector | 시장 toggles KOSPI·KOSDAQ·NASDAQ·NYSE | 기간 | 매매전략... | 중지 백테스트, one line or two fixed lines by width; buttons at the shared toolbar width) + status line, rules and run conditions in `ui/dialogs/trend_conditions.py` `TrendConditionsDialog` (`TrendConditions`); docs/ui.md 8.19 -> result head (basis, "다음 실행에 적용", Reset (`clear_result`), Save) ->
   `TrendFollowingResearchThread` -> variant/cost segments, KPI cards, NAV + drawdown chart,
   target-check card, result tabs (comparison, all metrics, monthly, trades,
   warnings), "Save Report" to `reports/`; docs/ui.md 8.10), `strategy_widgets.py` (that

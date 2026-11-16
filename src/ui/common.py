@@ -18,7 +18,7 @@ from collections.abc import Callable
 from PyQt6.QtCore import QObject, QEvent, Qt, QRect, QSize, QPoint
 from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QTableWidget, QHeaderView, QLabel, QFrame, QHBoxLayout, QVBoxLayout,
-    QWidget, QApplication, QGridLayout, QLayout, QSizePolicy,
+    QWidget, QApplication, QGridLayout, QLayout, QSizePolicy, QTabBar,
 )
 from PyQt6.QtGui import QFont, QPainter, QColor, QKeySequence
 
@@ -159,6 +159,20 @@ def fix_toolbar_widths(buttons) -> int:
     for b in buttons:
         b.setFixedWidth(width)
     return width
+
+
+class EqualWidthTabBar(QTabBar):
+    """A tab bar whose tabs all take the widest tab's width (the main
+    window's Trading Universe ~ Strategy tabs; user direction 2026-11-16,
+    docs/ui.md 8.17). Height and styling come from the normal size hint."""
+
+    def tabSizeHint(self, index: int):
+        size = super().tabSizeHint(index)
+        size.setWidth(max(super(EqualWidthTabBar, self).tabSizeHint(i).width() for i in range(self.count())))
+        return size
+
+    def minimumTabSizeHint(self, index: int):
+        return self.tabSizeHint(index)
 
 
 def button_row(*buttons: QPushButton, leading: tuple = ()) -> QHBoxLayout:
@@ -653,6 +667,12 @@ class KpiCard(QFrame):
         self.label = QLabel(label.upper())
         self.label.setObjectName("kpiLabel")
         self.badge = make_badge("na", "")
+        # The badge's place stays when it is hidden, so a card is as tall
+        # before a result as with one (user direction 2026-11-16: nothing
+        # under the Strategy cards moves after a run).
+        pol = self.badge.sizePolicy()
+        pol.setRetainSizeWhenHidden(True)
+        self.badge.setSizePolicy(pol)
         self.badge.hide()
         self.value = QLabel("-")
         self.value.setObjectName("kpiValue")

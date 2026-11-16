@@ -6,7 +6,7 @@ scenarios, target Sharpe) -> one background run (threads.strategy_threads) -> th
 screen of docs/ui_redesign_2026-11.md P1 (docs/ui.md 8.10):
 
   run toolbar (reports/strategy_run_settings_ui.md: 전략 | 시장 | 기간 |
-  조건... | 중지 백테스트, one line or two fixed lines by window width)
+  매매전략... | 중지 백테스트, one line or two fixed lines by window width)
   with its status line (summary or error | 홀드아웃 포함 · 개발 구간만) ->
   result head (basis line, "다음 실행에 적용", Save) -> variant and cost
   segments -> six KPI cards of the selected run -> NAV + drawdown chart
@@ -39,7 +39,7 @@ from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QComboBox, QPushButton,
     QDateEdit, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog,
-    QSplitter, QFrame, QDialog, QTabWidget, QScrollArea, QSizePolicy, QLayout,
+    QSplitter, QFrame, QDialog, QTabWidget, QMessageBox, QScrollArea, QSizePolicy, QLayout,
 )
 
 from matplotlib.figure import Figure
@@ -77,10 +77,11 @@ _ID_ROLE = Qt.ItemDataRole.UserRole + 1      # run id on every comparison-table 
 TAB_COMPARISON, TAB_ALL, TAB_MONTHLY, TAB_TRADES, TAB_WARNINGS = range(5)
 
 _HOLDOUT_CHIP = tr("홀드아웃 포함", "Includes hold-out")
+_TITLE = "Strategy"     # message boxes are titled with the tab name (docs/ui.md 8.5)
 _DEV_START = date(2021, 1, 1)      # the development window's default start (spec 6-5)
 _GAP = 12               # between toolbar groups (strategy_run_settings_ui.md 1)
 _DATE_ERROR = tr("시작일이 종료일보다 앞이어야 합니다", "Start must be before End")
-_RULES_REQUIRED = tr("조건에서 규칙을 1개 이상 선택하세요", "Select at least one rule in Conditions")
+_RULES_REQUIRED = tr("매매전략에서 규칙을 1개 이상 선택하세요", "Select at least one rule in Trading Strategy")
 _HOLDOUT_NOTE = tr(f"홀드아웃 구간({DEV_END:%Y-%m-%d} 이후)이 포함된 결과입니다. 스펙 6-5의 홀드아웃은 이 실행으로 열린 것으로 "
                    "봐야 합니다 (trend_following.md 9-23).",
                    f"This result includes the hold-out (after {DEV_END:%Y-%m-%d}). Treat the spec 6-5 hold-out "
@@ -195,6 +196,16 @@ class _RunToolbar(QWidget):
         return QSize(self.one_line_width(), size.height())
 
 
+def _reserve_place(box: QWidget) -> None:
+    """One BTN_H line that keeps its place while hidden: the result head and
+    the selector row appear with a result, and the cards, chart and result
+    tabs under them must not move when they do (user direction 2026-11-16)."""
+    box.setFixedHeight(BTN_H)
+    pol = box.sizePolicy()
+    pol.setRetainSizeWhenHidden(True)
+    box.setSizePolicy(pol)
+
+
 def _repolish(w: QWidget) -> None:
     w.style().unpolish(w)
     w.style().polish(w)
@@ -217,7 +228,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._result: ResearchResult | None = None
-        # The rules and run conditions ("조건..."); no rule is chosen at first.
+        # The rules and run conditions ("매매전략..."; renamed from "조건..." 2026-11-16); no rule is chosen at first.
         self.conditions = TrendConditions()
         # What "개발 구간만" changed, shown on the status line until the next date edit.
         self._range_note = ""
@@ -367,7 +378,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         pl.addWidget(self.end_edit)
 
         # 4. Conditions: the same place and label for every strategy.
-        self.conditions_btn = make_button(tr("조건...", "Conditions..."), on_click=self._on_conditions_clicked,
+        self.conditions_btn = make_button(tr("매매전략...", "Trading Strategy..."), on_click=self._on_conditions_clicked,
                                           tooltip=tr("규칙(A0~A5, B, C1~C3)과 종목·보유·비용·평가 조건을 고릅니다",
                                                      "Choose the rules (A0-A5, B, C1-C3) and the universe, "
                                                      "holding, cost and evaluation conditions"))
@@ -387,11 +398,19 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
                                     tooltip=tr("지금 표시 중인 결과(현재 결과 기준 줄)를 reports/에 저장합니다",
                                                "Save the shown result (the basis line above) to reports/"))
         self.save_btn.setEnabled(False)
+        # Back to the empty screen after a run (user direction 2026-11-16):
+        # also on the result head, so it exists only while a result is shown.
+        self.reset_btn = make_button(tr("초기화", "Reset"), on_click=self._on_reset_clicked,
+                                     tooltip=tr("표시 중인 결과를 지우고 실행 전 화면으로 돌아갑니다. "
+                                                "시장·기간·매매전략은 그대로 둡니다.",
+                                                "Clear the shown result and go back to the screen before a run; "
+                                                "markets, period and trading strategy stay."))
+        self.reset_btn.setEnabled(False)
 
         # One button width with the other tabs' toolbars (user direction
         # 2026-11-16; the labels are registered at the bottom of this module).
         fix_toolbar_widths([*self.market_buttons.values(), self.conditions_btn, self.stop_btn, self.run_btn,
-                            self.save_btn])
+                            self.reset_btn, self.save_btn])
         self.toolbar = _RunToolbar(self.strategy_combo, self.market_box, self.period_box,
                                    self.conditions_btn, self.actions_box)
         v.addWidget(self.toolbar)
@@ -541,6 +560,8 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         for w in (*self.market_buttons.values(), self.start_edit, self.end_edit, self.conditions_btn,
                   self.dev_only_btn):
             w.setEnabled(not self._running)
+        if hasattr(self, "reset_btn"):
+            self.reset_btn.setEnabled(self._result is not None and not self._running)
 
     def _build_selector_row(self) -> QWidget:
         """Variant segments (one per run id of the shown cost) and the cost
@@ -584,20 +605,23 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.cost_seg.selected.connect(self._on_cost_picked)
         row.addWidget(self.cost_seg)
         row.addStretch()
+        _reserve_place(box)
         box.setVisible(False)
         return box
 
     def _build_result_head(self) -> QWidget:
         """Under the card: what the shown result was computed with (from the
         result, never the form), "다음 실행에 적용" when the form has moved on,
-        and 리포트 저장 on the right. Hidden until a result exists."""
+        and 초기화 · 리포트 저장 on the right. Hidden until a result exists."""
         box = QWidget()
         row = QHBoxLayout(box)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(10)
         self.basis_lbl = QLabel("")
         self.basis_lbl.setObjectName("resultBasis")
-        self.basis_lbl.setWordWrap(True)
+        # One line, cut when long (the whole text on the tooltip): a wrapped
+        # second line would push the cards and result tabs down.
+        self.basis_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.pending_lbl = QLabel(tr("다음 실행에 적용", "Applies to next run"))
         self.pending_lbl.setObjectName("warn")
         self.pending_lbl.setToolTip(tr("실행 설정이 지금 결과와 다릅니다. 바뀐 값은 다음 백테스트 실행에 적용됩니다.",
@@ -606,7 +630,9 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.pending_lbl.setVisible(False)
         row.addWidget(self.basis_lbl, 1)
         row.addWidget(self.pending_lbl)
+        row.addWidget(self.reset_btn)
         row.addWidget(self.save_btn)
+        _reserve_place(box)
         box.setVisible(False)
         self.result_head = box
         return box
@@ -872,6 +898,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             return
         self._result = result
         self.save_btn.setEnabled(True)
+        self.reset_btn.setEnabled(True)
         self.set_target_sharpe(self._pending_target_sharpe)
         self.populate(result)
         self._update_basis()
@@ -885,6 +912,55 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.status_lbl.setText(tr(
             f"완료 {result.created_at:%H:%M:%S} · 실행 {n_runs}개 · 종목 {n_names}개 · {window}{skipped}",
             f"Done {result.created_at:%H:%M:%S} · {n_runs} runs · {n_names} names · {window}{skipped}"))
+
+    def _on_reset_clicked(self):
+        """초기화: asks first (a run can take minutes), then clear_result()."""
+        if self._result is None or self._running:
+            return
+        answer = QMessageBox.question(
+            self, _TITLE, tr("표시 중인 백테스트 결과를 지우고 처음 화면으로 돌아갈까요?\n"
+                             "저장하지 않은 결과는 다시 실행해야 볼 수 있습니다.",
+                             "Clear the shown backtest result and go back to the start screen?\n"
+                             "An unsaved result needs another run to see again."),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if answer == QMessageBox.StandardButton.Yes:
+            self.clear_result()
+
+    def clear_result(self):
+        """The screen before any run: no result, empty cards, tables, chart and
+        warnings, result head and selector row hidden. The form (markets,
+        period, conditions) is left as it is."""
+        if self._running:
+            return
+        self._result = None
+        self._mult, self._sel_id, self._sel_ids = None, None, []
+        self.save_btn.setEnabled(False)
+        self.reset_btn.setEnabled(False)
+        self.set_target_sharpe(DEFAULT_TARGET_SHARPE)
+        self.selector_row.setVisible(False)
+        self.kpi_row.clear()
+        self.target_card.clear()
+        self.compare_table.setRowCount(0)
+        self.table.setRowCount(0)
+        fill_monthly(self.monthly_table, None)
+        self.trades_table._empty_hint.text = _TRADES_EMPTY
+        self.trades_view.set_trades([])
+        self.trades_detail_btn.setEnabled(False)
+        self._chart_series = []
+        self._draw_empty_chart()
+        self._update_readout(None)
+        self.canvas.draw_idle()
+        self.warn_lbl.setText(tr("경고 없음.", "No warnings."))
+        self.result_tabs.setTabText(TAB_WARNINGS, tr("경고 (0)", "Warnings (0)"))
+        self.result_tabs.setProperty("warn", False)
+        bar = self.result_tabs.tabBar()
+        bar.style().unpolish(bar)
+        bar.style().polish(bar)
+        self.result_tabs.setCurrentIndex(TAB_COMPARISON)
+        self._update_basis()
+        self._update_pending()
+        self._update_run_state()
+        self.status_lbl.setText(tr("준비됨", "Ready"))
 
     def set_target_sharpe(self, target: float):
         """Judge the shown result against `target` (cards, target check,
@@ -1089,6 +1165,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
     def _update_basis(self):
         text = self.basis_text()
         self.basis_lbl.setText(text)
+        self.basis_lbl.setToolTip(text)
         self.result_head.setVisible(bool(text))
 
     def _form_key(self) -> tuple:
@@ -1343,6 +1420,6 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
 # Every label this tab's toolbar buttons can show (the toolbar button width
 # shared with Universe, History and Total Assets; ui.common.toolbar_button_width).
 register_toolbar_labels(
-    *MARKETS, tr("조건...", "Conditions..."), tr("중지", "Stop"), tr("백테스트", "Backtest"),
-    tr("리포트 저장", "Save Report"),
+    *MARKETS, tr("매매전략...", "Trading Strategy..."), tr("중지", "Stop"), tr("백테스트", "Backtest"),
+    tr("리포트 저장", "Save Report"), tr("초기화", "Reset"),
 )
