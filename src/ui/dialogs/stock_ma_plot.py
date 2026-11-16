@@ -66,7 +66,9 @@ class _PlotMixin:
 
         for key in ("vol", "div", "rsi"):
             available = key in self._panel_axes
-            default_on = available and (key == "vol" or (key == "div" and "Div" in _DEFAULT_SERIES))
+            # Volume and RSI open on (RSI since 2026-11-16, user direction);
+            # the divergence panel follows the Div series default.
+            default_on = available and (key in ("vol", "rsi") or (key == "div" and "Div" in _DEFAULT_SERIES))
             self._panel_on[key] = default_on
             btn = self._panel_buttons.get(key) or self._series_buttons.get("Div" if key == "div" else "")
             if btn is not None:
