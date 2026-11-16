@@ -93,14 +93,13 @@ class TestTabButtons(unittest.TestCase):
     def test_strategy_tab(self):
         from ui.trend_following_tab import TrendFollowingTab
         tab = TrendFollowingTab()
-        self._check(tab, "백테스트 실행")
+        self._check(tab, "백테스트")
         self.assertEqual(tab.stop_btn.objectName(), "")
 
     def test_assets_tab_has_no_delete_button(self):
         with patch("ui.assets_tab.trade_db.load_asset_records", return_value=[]), \
              patch("ui.assets_tab.trade_db.save_asset_records"), \
-             patch("ui.assets_tab.TradingRecordTab._start_metrics_preload"), \
-             patch("ui.assets_tab.TradingRecordTab._schedule_daily_sync"):
+             patch("ui.assets_tab.TradingRecordTab._start_metrics_preload"):
             from ui.assets_tab import TradingRecordTab
             tab = TradingRecordTab()
             self._check(tab, "기록 추가")
@@ -110,10 +109,9 @@ class TestTabButtons(unittest.TestCase):
             messages = []
             tab.status_message.connect(messages.append)
             with patch("ui.assets_tab.QMessageBox.information") as info:
-                tab._on_export_clicked()
                 tab._show_graph()
             info.assert_not_called()
-            self.assertEqual(len(messages), 2, messages)
+            self.assertEqual(len(messages), 1, messages)
 
 
 

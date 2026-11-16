@@ -65,10 +65,10 @@ class TestHistoryToolbar(unittest.TestCase):
         tab._group_btn.click()
         self.assertEqual((tab._group_btn.text(), tab._group_btn.isChecked(), tab._sort_by_date),
                          ("보기(상태별)", False, False))
-        self.assertEqual((tab._stale_btn.text(), tab._stale_btn.isChecked()), ("시세(30일 숨김)", False))
+        self.assertEqual((tab._stale_btn.text(), tab._stale_btn.isChecked()), ("시세(30일)", False))
         tab._stale_btn.click()
         self.assertEqual((tab._stale_btn.text(), tab._stale_btn.isChecked(), tab._hide_stale_closed),
-                         ("시세(모두 표시)", True, False))
+                         ("시세(전체)", True, False))
 
     def test_every_toolbar_button_has_one_width_that_fits_every_label(self):
         tab = self.tab

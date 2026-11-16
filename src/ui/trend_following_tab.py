@@ -6,7 +6,7 @@ scenarios, target Sharpe) -> one background run (threads.strategy_threads) -> th
 screen of docs/ui_redesign_2026-11.md P1 (docs/ui.md 8.10):
 
   run toolbar (reports/strategy_run_settings_ui.md: 전략 | 시장 | 기간 |
-  조건... | 중지 백테스트 실행, one line or two fixed lines by window width)
+  조건... | 중지 백테스트, one line or two fixed lines by window width)
   with its status line (summary or error | 홀드아웃 포함 · 개발 구간만) ->
   result head (basis line, "다음 실행에 적용", Save) -> variant and cost
   segments -> six KPI cards of the selected run -> NAV + drawdown chart
@@ -37,9 +37,9 @@ from html import escape
 from PyQt6.QtCore import Qt, QDate, QSize
 from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QComboBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QComboBox, QPushButton,
     QDateEdit, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog,
-    QSplitter, QFrame, QDialog, QTabWidget, QScrollArea, QSizePolicy, QLayout, QMenu, QWidgetAction,
+    QSplitter, QFrame, QDialog, QTabWidget, QScrollArea, QSizePolicy, QLayout,
 )
 
 from matplotlib.figure import Figure
@@ -55,7 +55,8 @@ from threads.strategy_threads import TrendFollowingResearchThread, CANCELLED_MES
 from ui.dialogs.trend_conditions import TrendConditions, TrendConditionsDialog
 from ui.common import (
     create_font, make_button, setup_table, make_footer_label, install_table_keys, ThreadOwnerMixin,
-    TAB_MARGINS, TAB_SPACING, FONT_BODY, FONT_CAPTION, BTN_H, remember_splitter,
+    TAB_MARGINS, TAB_SPACING, FONT_BODY, BTN_H, remember_splitter,
+    fix_toolbar_widths, register_toolbar_labels,
 )
 from ui.colors import LOSS, WARN, SERIES_BENCH, SERIES_TARGET, DRAWDOWN_ALPHA, SERIES_PALETTE
 from ui.theme import TEXT, TEXT_MUTED, TEXT_FAINT, TEXT_EMPTY, LINE
@@ -194,39 +195,6 @@ class _RunToolbar(QWidget):
         return QSize(self.one_line_width(), size.height())
 
 
-class _MarketMenu(QMenu):
-    """The markets popup: a check per market and the KRW market-cap note.
-    Checking keeps it open (the checks live in one QWidgetAction)."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        panel = QWidget()
-        col = QVBoxLayout(panel)
-        col.setContentsMargins(10, 8, 10, 8)
-        col.setSpacing(6)
-        self.checks: dict[str, QCheckBox] = {}
-        for m in MARKETS:
-            cb = QCheckBox(m)
-            self.checks[m] = cb
-            col.addWidget(cb)
-        note = QLabel(tr("여러 시장을 고르면 선택한 시장 전체를\n원화 시가총액 합산 순위로 종목을 고릅니다.",
-                         "With several markets, names are picked from\none KRW market-cap ranking of all of them."))
-        note.setObjectName("muted")
-        note.setFont(create_font(FONT_CAPTION))
-        col.addWidget(note)
-        action = QWidgetAction(self)
-        action.setDefaultWidget(panel)
-        self.addAction(action)
-
-
-def _market_summary(markets) -> str:
-    return markets[0] if len(markets) == 1 else _plus_others(markets[0], len(markets) - 1)
-
-
-def _plus_others(market: str, n: int) -> str:
-    return tr(f"{market} 외 {n}", f"{market} +{n}")
-
-
 def _repolish(w: QWidget) -> None:
     w.style().unpolish(w)
     w.style().polish(w)
@@ -353,17 +321,24 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.strategy_combo.setToolTip(tr("백테스트할 전략", "Strategy to backtest"))
         self.set_strategy_choices([_STRATEGY_NAME], 0)
 
-        # 2. Markets (spec 9-25): checks in a popup, one summary on the button.
-        self.market_menu = _MarketMenu(self)
-        self.market_buttons = self.market_menu.checks
-        self.market_buttons["KOSPI"].setChecked(True)
-        for m, cb in self.market_buttons.items():
-            cb.toggled.connect(lambda checked, m=m: self._on_market_toggled(m, checked))
-        self.market_btn = make_button("KOSPI")
-        self.market_btn.setMenu(self.market_menu)
-        fm = self.market_btn.fontMetrics()
-        longest = max(fm.horizontalAdvance(t) for m in MARKETS for t in (m, _plus_others(m, len(MARKETS) - 1)))
-        self.market_btn.setFixedWidth(longest + 48)        # room for the menu arrow; never follows the choice
+        # 2. Markets (spec 9-25): one toggle per market, any combination, at
+        # least one -- the Universe market toggles' look (user direction
+        # 2026-11-16, docs/ui.md 8.17; it was a menu button with checks).
+        self.market_buttons: dict[str, QPushButton] = {}
+        self.market_box = QWidget()
+        ml = QHBoxLayout(self.market_box)
+        ml.setContentsMargins(0, 0, 0, 0)
+        ml.setSpacing(6)
+        for m in MARKETS:
+            btn = make_button(m, checkable=True, checked=(m == "KOSPI"),
+                              tooltip=tr(f"{m}: 켜면 이 시장 종목도 백테스트 유니버스에 넣습니다. 여러 시장을 고르면 "
+                                         "선택한 시장 전체를 원화 시가총액 합산 순위로 종목을 고릅니다. 최소 한 시장은 켜져 있어야 합니다.",
+                                         f"{m}: when on, this market's names join the backtest universe. With several "
+                                         "markets, names are picked from one KRW market-cap ranking of all of them. "
+                                         "At least one market must stay on."))
+            btn.toggled.connect(lambda checked, m=m: self._on_market_toggled(m, checked))
+            self.market_buttons[m] = btn
+            ml.addWidget(btn)
 
         # 3. Window: two dates of one width side by side, the short label left.
         # The window ends today by default; past DEV_END is the hold-out
@@ -400,7 +375,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         # 5. Run control, right: both places exist before any run; only enabled flips.
         self.stop_btn = make_button(tr("중지", "Stop"), on_click=self._on_stop_clicked)
         self.stop_btn.setEnabled(False)
-        self.run_btn = make_button(tr("백테스트 실행", "Run Backtest"), "primary", self._on_run_clicked, tooltip=self._run_tooltip)
+        self.run_btn = make_button(tr("백테스트", "Backtest"), "primary", self._on_run_clicked, tooltip=self._run_tooltip)
         self.actions_box = QWidget()
         al = QHBoxLayout(self.actions_box)
         al.setContentsMargins(0, 0, 0, 0)
@@ -413,7 +388,11 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
                                                "Save the shown result (the basis line above) to reports/"))
         self.save_btn.setEnabled(False)
 
-        self.toolbar = _RunToolbar(self.strategy_combo, self.market_btn, self.period_box,
+        # One button width with the other tabs' toolbars (user direction
+        # 2026-11-16; the labels are registered at the bottom of this module).
+        fix_toolbar_widths([*self.market_buttons.values(), self.conditions_btn, self.stop_btn, self.run_btn,
+                            self.save_btn])
+        self.toolbar = _RunToolbar(self.strategy_combo, self.market_box, self.period_box,
                                    self.conditions_btn, self.actions_box)
         v.addWidget(self.toolbar)
         v.addWidget(self._build_status_line())
@@ -463,7 +442,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
 
     def _set_tab_order(self):
         """전략 -> 시장 -> 시작일 -> 종료일 -> 조건 -> 실행 (proposal 1)."""
-        chain = [self.strategy_combo, self.market_btn, self.start_edit, self.end_edit, self.conditions_btn,
+        chain = [self.strategy_combo, *self.market_buttons.values(), self.start_edit, self.end_edit, self.conditions_btn,
                  self.run_btn, self.stop_btn, self.dev_only_btn]
         for a, b in zip(chain, chain[1:]):
             QWidget.setTabOrder(a, b)
@@ -479,9 +458,6 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         if not checked and not self.selected_markets():
             self.market_buttons[market].setChecked(True)     # at least one market stays selected
             return
-        markets = self.selected_markets()
-        self.market_btn.setText(_market_summary(markets))
-        self.market_btn.setToolTip(", ".join(markets))
         self._on_form_changed()
 
     def includes_holdout(self) -> bool:
@@ -562,7 +538,8 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             tip = " · ".join(errors.values()) + "\n\n" + tip
         self.run_btn.setToolTip(tip)
         # A run's inputs are fixed while it goes; switching strategy stays possible.
-        for w in (self.market_btn, self.start_edit, self.end_edit, self.conditions_btn, self.dev_only_btn):
+        for w in (*self.market_buttons.values(), self.start_edit, self.end_edit, self.conditions_btn,
+                  self.dev_only_btn):
             w.setEnabled(not self._running)
 
     def _build_selector_row(self) -> QWidget:
@@ -1361,3 +1338,11 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
 
     def default_window(self) -> tuple[date, date]:
         return self.start_edit.date().toPyDate(), self.end_edit.date().toPyDate()
+
+
+# Every label this tab's toolbar buttons can show (the toolbar button width
+# shared with Universe, History and Total Assets; ui.common.toolbar_button_width).
+register_toolbar_labels(
+    *MARKETS, tr("조건...", "Conditions..."), tr("중지", "Stop"), tr("백테스트", "Backtest"),
+    tr("리포트 저장", "Save Report"),
+)

@@ -39,6 +39,7 @@ from ui.common import (
     _fmt_num_edit, ThreadOwnerMixin,
     BTN_H, make_button, setup_table, make_footer_label, TAB_MARGINS, TAB_SPACING,
     KpiStrip, install_table_keys, clear_selection_on_outside_click,
+    fix_toolbar_widths, register_toolbar_labels,
 )
 from ui.colors import PROFIT, LOSS
 from ui.history_calc import compute_pl_fields, build_monthly_rows, summarize_positions
@@ -80,9 +81,11 @@ _TITLE = "Trading History"
 _PERIOD_STATES = (("All", tr("기간(전체)", "Period (All)")), ("1M", tr("기간(1개월)", "Period (1M)")),
                   ("3M", tr("기간(3개월)", "Period (3M)")), ("YTD", tr("기간(올해)", "Period (YTD)")))
 _GROUP_STATES = (("status", tr("보기(상태별)", "View (Status)")), ("month", tr("보기(월별)", "View (Month)")))
-_STALE_STATES = ((True, tr("시세(30일 숨김)", "Prices (30d hidden)")), (False, tr("시세(모두 표시)", "Prices (All)")))
+# Short labels (2026-11-16): "시세(30일 숨김)" (110px) set the toolbar width
+# shared by all three tabs and pushed the Universe toolbar past 1440px; the
+# tooltip spells the 30-day rule out.
+_STALE_STATES = ((True, tr("시세(30일)", "Prices (30d)")), (False, tr("시세(전체)", "Prices (All)")))
 _GROUP_GAP = 12      # between toolbar groups (docs/ui.md 8.17: 12~16px)
-_MIN_BTN_W = 80      # floor of the one shared toolbar button width
 
 
 class TradingHistoryTab(ThreadOwnerMixin, QWidget):
@@ -253,8 +256,8 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         # docs/ui.md 3.5: the 30-day rule used to be hardcoded with no UI
         # trace of it, so a blank current-price cell had no explanation.
         self._stale_btn = self._cycle_button(
-            _STALE_STATES, tr("매도 후 30일이 지난 거래의 현재가를 숨기거나 모두 표시합니다",
-                              "Hide the current price of trades closed more than 30 days ago, or show all"),
+            _STALE_STATES, tr("시세(30일): 매도 후 30일이 지난 거래의 현재가를 숨깁니다 / 시세(전체): 모두 표시합니다",
+                              "Prices (30d): hide the current price of trades closed more than 30 days ago / Prices (All): show all"),
             lambda: self._on_stale_toggle_changed(not self._hide_stale_closed))
         for btn in (self._period_btn, self._group_btn, self._stale_btn):
             row.addWidget(btn)
@@ -286,19 +289,11 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         return values[(values.index(current) + 1) % len(values)] if current in values else values[0]
 
     def _unify_button_widths(self) -> None:
-        """One width for every toolbar button: the widest label any of them
-        can show (every cycle label included), never below _MIN_BTN_W."""
-        buttons = [self._period_btn, self._group_btn, self._stale_btn, self._summary_btn,
-                   self._fetch_dep_btn, self._reload_btn, self._add_trade_btn]
-        width = _MIN_BTN_W
-        for b in buttons:
-            current = b.text()
-            for label in getattr(b, "_cycle_labels", [current]):
-                b.setText(label)
-                width = max(width, b.sizeHint().width())
-            b.setText(current)
-        for b in buttons:
-            b.setFixedWidth(width)
+        """The one toolbar width shared with Universe and Total Assets
+        (ui.common.toolbar_button_width; this tab's labels, every cycle label
+        included, are registered at the bottom of this module)."""
+        fix_toolbar_widths([self._period_btn, self._group_btn, self._stale_btn, self._summary_btn,
+                            self._fetch_dep_btn, self._reload_btn, self._add_trade_btn])
 
     def _sync_cycle_buttons(self) -> None:
         """Label and checked state of the three cycle buttons from the current
@@ -1214,3 +1209,12 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             self._refresh_summary()
             self._start_price_fetch()
             self._apply_filter()
+
+
+# Every label this tab's toolbar buttons can show (the shared toolbar width,
+# ui.common.toolbar_button_width).
+register_toolbar_labels(
+    *(label for states in (_PERIOD_STATES, _GROUP_STATES, _STALE_STATES) for _, label in states),
+    tr("종목별 요약", "Summary"), tr("예수금 조회", "Fetch Deposit"), tr("다시 읽기", "Reload"),
+    tr("거래 추가", "Add Trade"),
+)

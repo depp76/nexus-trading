@@ -65,6 +65,8 @@ from ui.common import (
     make_footer_label,
     TAB_MARGINS,
     TAB_SPACING,
+    fix_toolbar_widths,
+    register_toolbar_labels,
 )
 
 # Message boxes are titled with the tab name (docs/ui.md 8.5).
@@ -278,25 +280,13 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         return make_button(text, width=cls._FILTER_BTN_W, checkable=True, checked=checked)
 
     def _unify_button_widths(self) -> None:
-        """Give every push button on this tab's toolbar rows one width: the
-        widest label any of them can show (incl. all three status labels and
-        "필터 (n)"), never below _FILTER_BTN_W, so no label change resizes a
-        button (user direction 2026-11-16)."""
-        variants = {
-            self.tg_filter_btn: [label for _, label in self._STATUS_FILTER_STATES],
-            self.filters_btn: [tr("필터", "Filters"), tr("필터 (99)", "Filters (99)")],
-        }
-        buttons = [*self._market_buttons.values(), self.tg_filter_btn, self.filters_btn,
-                   self.add_ticker_btn, self.trend_score_btn, self.refresh_btn]
-        width = self._FILTER_BTN_W
-        for b in buttons:
-            current = b.text()
-            for label in variants.get(b, [current]):
-                b.setText(label)
-                width = max(width, b.sizeHint().width())
-            b.setText(current)
-        for b in buttons:
-            b.setFixedWidth(width)
+        """Give every toolbar button the one width shared with the History
+        and Total Assets toolbars (ui.common.toolbar_button_width; user
+        direction 2026-11-16): the widest label any of them can show, so no
+        label change resizes a button. This tab's labels are registered at
+        the bottom of this module."""
+        fix_toolbar_widths([*self._market_buttons.values(), self.tg_filter_btn, self.filters_btn,
+                            self.add_ticker_btn, self.trend_score_btn, self.refresh_btn])
 
     # ---Markets (docs/ui.md 2.1) ---
     def selected_markets(self) -> list:
@@ -1143,3 +1133,13 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             self.refresh_btn.setEnabled(True)
             # a market switched on while the refresh ran
             self._fetch_missing_markets(only=self._markets - getattr(self, "_refresh_markets", self._markets))
+
+
+# Every label this tab's toolbar buttons can show (the shared toolbar width,
+# ui.common.toolbar_button_width): market toggles, the status cycle, "필터 (n)".
+register_toolbar_labels(
+    *(UniverseTab._MARKET_BUTTON_TEXT.get(m, label).replace("&", "&&") for m, label in MARKETS.items()),
+    *(label for _, label in UniverseTab._STATUS_FILTER_STATES),
+    tr("필터", "Filters"), tr("필터 (99)", "Filters (99)"),
+    tr("종목 추가", "Add Ticker"), tr("추세 점수", "Trend Score"), tr("새로고침", "Refresh"),
+)

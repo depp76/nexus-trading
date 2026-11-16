@@ -158,8 +158,9 @@ class TestTrendFollowingTab(unittest.TestCase):
         tab.set_conditions(TrendConditions(variant_ids=("A0",), cost_choice=1))
         self.assertEqual(tab.build_request().cost_multipliers, (1.0,))
         self.assertIn("비용 1배만", tab.status_summary())
-        self.assertIs(tab.market_btn.menu(), tab.market_menu)
-        self.assertEqual(tab.market_btn.text(), "KOSPI")
+        # Markets are Universe-style toggles (2026-11-16), KOSPI on by default.
+        self.assertEqual([(b.text(), b.isChecked()) for b in tab.market_buttons.values()],
+                         [("KOSPI", True), ("KOSDAQ", False), ("NASDAQ", False), ("NYSE", False)])
     def test_skipped_variants_and_warnings_are_shown_without_saving(self):
         """review_codex.md S1/S3: a run that could not load flows names the
         skipped variants and shows every warning in the tab."""
@@ -485,10 +486,10 @@ class TestResultScreen(unittest.TestCase):
         self.assertEqual(tab.table.rowCount(), len(self.result.runs))
 
     def test_toolbar_order_and_buttons(self):
-        """전략 · 시장 · 기간 · 조건 ... 중지 백테스트 실행 on one line when wide."""
+        """전략 · 시장 · 기간 · 조건 ... 중지 백테스트 on one line when wide."""
         tab = TrendFollowingTab()
         self.assertEqual(tab.strategy_combo.currentText(), "추세추종")
-        self.assertEqual(tab.run_btn.text(), "백테스트 실행")
+        self.assertEqual(tab.run_btn.text(), "백테스트")
         self.assertEqual(tab.run_btn.objectName(), "primary")
         self.assertEqual(tab.stop_btn.objectName(), "")
         tab.show()
@@ -498,7 +499,7 @@ class TestResultScreen(unittest.TestCase):
         if tab.toolbar.width() >= tab.toolbar.one_line_width():
             self.assertTrue(tab.toolbar.one_line)
             xs = [w.mapTo(tab, w.rect().topLeft()).x() for w in
-                  (tab.strategy_combo, tab.market_btn, tab.start_edit, tab.end_edit, tab.conditions_btn,
+                  (tab.strategy_combo, *tab.market_buttons.values(), tab.start_edit, tab.end_edit, tab.conditions_btn,
                    tab.stop_btn, tab.run_btn)]
             self.assertEqual(xs, sorted(xs))
             ys = {w.mapTo(tab, w.rect().center()).y() for w in (tab.strategy_combo, tab.start_edit, tab.run_btn)}
@@ -515,7 +516,8 @@ class TestResultScreen(unittest.TestCase):
                 break
         def pos(x):
             return chain.index(x)
-        order = [tab.strategy_combo, tab.market_btn, tab.start_edit, tab.end_edit, tab.conditions_btn, tab.run_btn]
+        order = [tab.strategy_combo, *tab.market_buttons.values(), tab.start_edit, tab.end_edit, tab.conditions_btn,
+                 tab.run_btn]
         self.assertEqual([pos(x) for x in order], sorted(pos(x) for x in order))
     def test_benchmarks_are_a_separate_segment_group(self):
         tab = TrendFollowingTab()
@@ -644,7 +646,7 @@ class TestWindowEndAndFormLayout(unittest.TestCase):
         tab = TrendFollowingTab()
         tab.show()
         self._settle(tab, 1100)
-        watched = (tab.strategy_combo, tab.market_btn, tab.start_edit, tab.end_edit, tab.conditions_btn,
+        watched = (tab.strategy_combo, *tab.market_buttons.values(), tab.start_edit, tab.end_edit, tab.conditions_btn,
                    tab.stop_btn, tab.run_btn, tab.kpi_row)
 
         def geoms():
@@ -666,12 +668,12 @@ class TestWindowEndAndFormLayout(unittest.TestCase):
         _FakeThread.instances.clear()
         with patch("ui.trend_following_tab.TrendFollowingResearchThread", _FakeThread):
             tab._on_run_clicked()
-        for w in (tab.market_btn, tab.start_edit, tab.end_edit, tab.conditions_btn):
+        for w in (*tab.market_buttons.values(), tab.start_edit, tab.end_edit, tab.conditions_btn):
             self.assertFalse(w.isEnabled())
         self.assertTrue(tab.strategy_combo.isEnabled())
         self.assertTrue(tab.stop_btn.isEnabled())
         _FakeThread.instances[0].finished.emit(None, "boom")
-        for w in (tab.market_btn, tab.start_edit, tab.end_edit, tab.conditions_btn):
+        for w in (*tab.market_buttons.values(), tab.start_edit, tab.end_edit, tab.conditions_btn):
             self.assertTrue(w.isEnabled())
     def test_checked_toggles_lose_the_accent_outline(self):
         from ui.theme import app_qss, ACCENT, LINE_STRONG
@@ -744,12 +746,11 @@ class TestMarketChoice(unittest.TestCase):
         tab.market_buttons["NASDAQ"].click()
         tab.market_buttons["KOSDAQ"].click()
         self.assertEqual(tab.build_request().markets, ("KOSPI", "KOSDAQ", "NASDAQ"))
-        self.assertEqual(tab.market_btn.text(), "KOSPI 외 2")
-        self.assertEqual(tab.market_btn.toolTip(), "KOSPI, KOSDAQ, NASDAQ")
+        self.assertEqual([m for m, b in tab.market_buttons.items() if b.isChecked()], ["KOSPI", "KOSDAQ", "NASDAQ"])
         self.assertIn("KOSPI+KOSDAQ+NASDAQ 원화 시총 합산", tab.status_summary())
         tab.market_buttons["NASDAQ"].click()
         tab.market_buttons["KOSDAQ"].click()
-        self.assertEqual(tab.market_btn.text(), "KOSPI")
+        self.assertEqual(tab.selected_markets(), ("KOSPI",))
         self.assertNotIn("합산", tab.status_summary())
 
     def test_the_last_market_cannot_be_unticked(self):
@@ -1171,3 +1172,18 @@ class TestStrategyTab(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestToolbarLikeTheOtherTabs(unittest.TestCase):
+    """User direction 2026-11-16 (docs/ui.md 8.17): the run toolbar's buttons
+    (market toggles, Conditions, Stop, Run) and Save Report share the one
+    toolbar width of Universe / History / Total Assets."""
+
+    def test_shared_width(self):
+        from ui.common import toolbar_button_width
+        tab = TrendFollowingTab()
+        buttons = [*tab.market_buttons.values(), tab.conditions_btn, tab.stop_btn, tab.run_btn, tab.save_btn]
+        self.assertEqual({b.width() for b in buttons}, {toolbar_button_width()})
+        for b in buttons:
+            self.assertGreaterEqual(b.width(), b.sizeHint().width(), b.text())
+            self.assertIsNone(b.menu())

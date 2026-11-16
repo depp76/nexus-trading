@@ -5,7 +5,6 @@ Contains:
   TradingRecordTab
 """
 from i18n import tr
-import csv
 import logging
 import math
 import datetime as _dt
@@ -13,10 +12,10 @@ from datetime import datetime
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
-    QLineEdit, QLabel, QHeaderView, QComboBox, QMessageBox,
-    QInputDialog, QFileDialog, QMenu, QSplitter, QFrame,
+    QLabel, QHeaderView, QMessageBox,
+    QInputDialog, QMenu, QSplitter, QFrame,
 )
-from PyQt6.QtCore import Qt, QTimer, QSettings, pyqtSignal
+from PyQt6.QtCore import Qt, QSettings, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QKeySequence, QShortcut
 
 import matplotlib.dates as mdates
@@ -27,7 +26,7 @@ import trade_db
 from threads.fetch_threads import AssetMetricsPreloadThread, AssetReportThread
 from ui.table_headers import GroupedHeaderView
 from ui.table_items import ColSpec, NumericItem
-from ui.dialogs import TotalAssetsGraphDialog, AssetsReportDialog
+from ui.dialogs import TotalAssetsGraphDialog, AssetsReportDialog, AddRecordDialog
 from ui.assets_report import report_dates, build_report
 from ui.colors import PROFIT, LOSS
 from ui.theme import ACCENT, TEXT, TEXT_SUB, TEXT_MUTED
@@ -62,12 +61,17 @@ class _AssetsTable(QTableWidget):
 from ui.common import (
     FONT_BODY,
     create_font, ThreadOwnerMixin, make_button, setup_table, TAB_MARGINS, TAB_SPACING,
-    install_table_keys, remember_splitter,
+    install_table_keys, remember_splitter, fix_toolbar_widths, register_toolbar_labels,
 )
 
 
 # Message boxes are titled with the tab name (docs/ui.md 8.5).
 _TITLE = "Total Assets"
+
+# The currency cycle button (user direction 2026-11-16, like History's cycle
+# buttons): (value, label), the first is the default and shows unchecked.
+_CURRENCY_STATES = (("KRW", tr("통화(KRW)", "Currency (KRW)")), ("USD", tr("통화(USD)", "Currency (USD)")))
+_GROUP_GAP = 12      # between toolbar groups (docs/ui.md 8.17: 12~16px)
 
 
 # ---Pure maths behind TradingRecordTab._compute_records_metrics (docs/ui.md 4) ---
@@ -235,11 +239,9 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self._metrics_fetched_at = None
         self._currency = "KRW"          # docs/ui.md 4.3 toggle
         self._current_live_asset = 0.0
-        self._asset_edit_manual = False  # user typed over the auto-filled value (docs/ui.md 4.5)
+        self._add_dlg = None             # the open AddRecordDialog (gets live updates)
         self._build_ui()
         self._load_records()
-        self._extend_date_combo_for_history()
-        self._schedule_daily_sync()
         self._start_metrics_preload()
 
     # ---UI ---
@@ -247,38 +249,61 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         root = QVBoxLayout(self)
         root.setSpacing(TAB_SPACING)
         root.setContentsMargins(*TAB_MARGINS)
-
-        header_row = self._build_header_row()
-        root.addLayout(header_row)
+        # Order (docs/ui.md 8.17, 2026-11-16): one toolbar row -> trend chart
+        # -> weekly table. The record input moved into AddRecordDialog.
+        root.addLayout(self._build_toolbar())
         self._build_inline_chart()
-        # Order (docs/ui.md 8.16): header (currency, rate, graph, export) ->
-        # live total + record input -> trend chart -> weekly table.
-        root.addLayout(self._build_controls_row(header_row))
         self._build_table()
         root.addWidget(self._build_chart_table_splitter(), 1)
 
-    def _build_header_row(self) -> QHBoxLayout:
-        """Header row: currency toggle + USD/KRW rate (docs/ui.md 4.1/4.3).
-        Graph/Export are appended later by _add_header_actions()."""
-        header_row = QHBoxLayout()
-        lbl_currency = QLabel(tr("통화:", "Currency:"))
-        lbl_currency.setFont(create_font(FONT_BODY, style_name="Semilight"))
-        header_row.addWidget(lbl_currency)
-
-        self._currency_combo = QComboBox()
-        self._currency_combo.setFont(create_font(FONT_BODY, style_name="Semilight"))
-        self._currency_combo.addItems(["KRW", "USD"])
-        self._currency_combo.setFixedWidth(90)
-        self._currency_combo.currentTextChanged.connect(self._on_currency_changed)
-        header_row.addWidget(self._currency_combo)
-
-        header_row.addSpacing(12)
+    def _build_toolbar(self) -> QHBoxLayout:
+        """The tab's one toolbar row (user direction 2026-11-16, like Universe
+        and History): currency cycle, USD/KRW rate | the live figures |
+        Graph, and Add Record (the primary) last (Export was removed by
+        user direction 2026-11-16). Every button has
+        the width shared with the other tabs' toolbars."""
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        self._currency_btn = make_button(
+            _CURRENCY_STATES[0][1], checkable=True,
+            tooltip=tr("누를 때마다 표와 차트의 통화가 KRW ↔ USD로 바뀝니다",
+                       "Each click switches the table and chart between KRW and USD"),
+            on_click=self._on_currency_clicked)
+        row.addWidget(self._currency_btn)
+        row.addSpacing(_GROUP_GAP)
         self._rate_lbl = QLabel("USD/KRW: -")
         self._rate_lbl.setFont(create_font(FONT_BODY, style_name="Semilight"))
         self._rate_lbl.setStyleSheet(f"color: {TEXT_MUTED};")
-        header_row.addWidget(self._rate_lbl)
-        header_row.addStretch()
-        return header_row
+        row.addWidget(self._rate_lbl)
+        row.addSpacing(_GROUP_GAP)
+
+        # The live figures are read-only, not a saved record: their own
+        # group behind a divider (docs/ui.md 8.16).
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.VLine)
+        divider.setObjectName("kpiDivider")
+        row.addWidget(divider)
+        row.addSpacing(8)
+        live_asset_title, live_diff_title = self._build_live_labels()
+        row.addWidget(live_asset_title)
+        row.addWidget(self.live_asset_lbl)
+        row.addSpacing(_GROUP_GAP)
+        row.addWidget(live_diff_title)
+        row.addWidget(self.live_diff_lbl)
+        row.addStretch()
+
+        self._graph_btn = make_button(tr("그래프", "Graph"), on_click=self._show_graph)
+        # Add Record is this tab's one primary action (docs/ui.md 1.6 / 8.1),
+        # last. Delete lives on the table's right-click menu and the Delete
+        # key, as in the other tabs -- never an always-visible button.
+        self._add_btn = make_button(tr("기록 추가", "Add Record"), "primary", self._on_add_record_clicked,
+                                    tooltip=tr("주(금요일)와 총자산을 골라 주간 기록을 추가하거나 바꿉니다",
+                                               "Add or replace a weekly record: pick the week (Friday) and the total"))
+        row.addWidget(self._graph_btn)
+        row.addSpacing(_GROUP_GAP)
+        row.addWidget(self._add_btn)
+        fix_toolbar_widths([self._currency_btn, self._graph_btn, self._add_btn])
+        return row
 
     def _build_inline_chart(self):
         """Inline chart (docs/ui.md 4.4): always-visible weekly trend,
@@ -292,25 +317,6 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self._chart_canvas.setMinimumHeight(120)
         self._chart_canvas.setToolTip(tr("더블클릭하면 상세 주간 그래프가 열립니다", "Double-click for the detailed weekly graph"))
         self._chart_canvas.mpl_connect("button_press_event", self._on_chart_clicked)
-
-    def _build_entry_widgets(self):
-        """The record being entered: the Friday-date combo and the Total
-        Assets input."""
-        self._date_combo = QComboBox()
-        self._date_combo.setFont(create_font(FONT_BODY, style_name="Semilight"))
-        self._date_combo.setFixedWidth(150)
-        self._date_combo_start_year = None
-        self._rebuild_date_combo()
-        self._date_combo.currentIndexChanged.connect(self._on_date_combo_changed)
-
-        self._asset_edit = QLineEdit()
-        self._asset_edit.setFont(create_font(FONT_BODY, style_name="Semilight"))
-        self._asset_edit.setPlaceholderText(tr("자동 입력", "Total Assets (auto-filled)"))
-        self._asset_edit.setMinimumWidth(160)
-        self._asset_edit.setMaximumWidth(180)
-        self._asset_edit.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self._asset_edit.textEdited.connect(self._fmt_asset_input)
-        self._asset_edit.textEdited.connect(self._on_asset_edit_user_typed)
 
     def _build_live_labels(self) -> tuple:
         """The live (read-only) figures: returns their two caption labels;
@@ -340,71 +346,11 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self.live_diff_lbl.setMinimumWidth(150)
         return live_asset_title, live_diff_title
 
-    def _build_controls_row(self, header_row: QHBoxLayout) -> QHBoxLayout:
-        """Controls bar: record input, then the live figures, then Add Record.
-        Also puts Graph/Export on `header_row` (see _add_header_actions)."""
-        ctrl = QHBoxLayout()
-
-        self._build_entry_widgets()
-
-        # Add Record is this tab's one primary action (docs/ui.md 1.6 / 8.1);
-        # This Week/Graph/Export are secondary utilities and stay neutral.
-        # Delete lives on the table's right-click menu and the Delete key, as
-        # in the other tabs -- never an always-visible button.
-        add_btn = make_button(tr("기록 추가", "Add Record"), "primary", self._add_record)
-        today_btn = make_button(tr("이번 주", "This Week"), on_click=self._select_latest_week)
-
-        lbl_date = QLabel(tr("날짜:", "Date:"))
-        lbl_date.setFont(create_font(FONT_BODY, style_name="Semilight"))
-        lbl_assets = QLabel(tr("총자산:", "Total Assets:"))
-        lbl_assets.setFont(create_font(FONT_BODY, style_name="Semilight"))
-
-        live_asset_title, live_diff_title = self._build_live_labels()
-
-        ctrl.setSpacing(6)
-        ctrl.addWidget(lbl_date)
-        ctrl.addWidget(self._date_combo)
-        ctrl.addWidget(today_btn)
-        ctrl.addSpacing(14)
-        ctrl.addWidget(lbl_assets)
-        ctrl.addWidget(self._asset_edit)
-        ctrl.addSpacing(14)
-        # The live figures are read-only and not part of the record being
-        # entered: their own group, set apart by a divider.
-        divider = QFrame()
-        divider.setFrameShape(QFrame.Shape.VLine)
-        divider.setObjectName("kpiDivider")
-        ctrl.addWidget(divider)
-        ctrl.addSpacing(8)
-        ctrl.addWidget(live_asset_title)
-        ctrl.addWidget(self.live_asset_lbl)
-        ctrl.addSpacing(12)
-        ctrl.addWidget(live_diff_title)
-        ctrl.addWidget(self.live_diff_lbl)
-
-        self._add_header_actions(header_row)
-
-        # Actions on the right, the primary last (docs/ui.md 8.4).
-        ctrl.addStretch()
-        ctrl.addWidget(add_btn)
-        return ctrl
-
-    def _add_header_actions(self, header_row: QHBoxLayout):
-        """Graph/Export sit on the header row, right-aligned above the chart
-        they belong to: all on one controls row the tab needed ~1,540px
-        and ran past the screen edge (user report 2026-10-15)."""
-        graph_btn = make_button(tr("그래프", "Graph"), on_click=self._show_graph)
-        header_row.addWidget(graph_btn)
-
-        export_btn = make_button(tr("내보내기", "Export"), on_click=self._on_export_clicked,
-                                 tooltip=tr("총자산 기록 표를 Excel 또는 CSV로 내보냅니다", "Export the asset snapshot table to Excel or CSV"))
-        header_row.addWidget(export_btn)
-
     def _build_table(self):
         """Table (docs/ui.md 4.2/4.5: one spec -- label/min-width/weight --
         instead of a separate _COLS_SUB list and a flat widths=[...] list)."""
         self._table = _AssetsTable(self._stretch_columns)
-        setup_table(self._table, empty_text=tr("주간 기록이 없습니다 -- 주를 고르고 기록 추가를 누르세요", "No weekly records yet -- pick a week and Add Record"))
+        setup_table(self._table, empty_text=tr("주간 기록이 없습니다 -- 기록 추가를 누르세요", "No weekly records yet -- click Add Record"))
         self._table.setColumnCount(len(self._COLUMNS))
 
         self._grouped_hdr = GroupedHeaderView(
@@ -449,9 +395,6 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self._splitter = splitter
         return splitter
 
-    def _select_latest_week(self):
-        self._date_combo.setCurrentIndex(self._date_combo.count() - 1)
-
     def _on_table_context_menu(self, pos):
         if not self._table.selectedIndexes():
             return
@@ -492,39 +435,23 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
     # the new language and carries this state over. Plain values only (the
     # ui classes themselves are re-imported).
     def export_state(self) -> dict:
-        return {"currency": self._currency_combo.currentText()}
+        return {"currency": self._currency}
 
     def import_state(self, state: dict) -> None:
-        self._currency_combo.setCurrentText(state["currency"])
+        self._on_currency_changed(state["currency"])
+
+    def _on_currency_clicked(self, _checked: bool = False):
+        self._on_currency_changed("USD" if self._currency == "KRW" else "KRW")
 
     def _on_currency_changed(self, text: str):
         self._currency = text
+        self._currency_btn.setText(dict(_CURRENCY_STATES).get(text, _CURRENCY_STATES[0][1]))
+        self._currency_btn.setChecked(text != _CURRENCY_STATES[0][0])
         self._grouped_hdr.set_sub_labels(self._current_sub_labels())
         self._refresh_table()  # also redraws the inline chart for the new currency
 
     def _update_rate_label(self, rate: float):
         self._rate_lbl.setText(f"USD/KRW: {rate:,.1f}" if rate > 0 else "USD/KRW: -")
-
-    def _on_date_combo_changed(self, _index):
-        self._asset_edit_manual = False
-        self._maybe_autofill_asset_edit()
-
-    def _on_asset_edit_user_typed(self, _text):
-        self._asset_edit_manual = True
-
-    def _maybe_autofill_asset_edit(self):
-        """Auto-fill Total Assets from the live position total (docs/ui.md
-        4.5) -- only for the latest (current) Friday, and only while the
-        user hasn't typed over it; a historical date or a user-edited value
-        is left alone."""
-        is_latest = (
-            self._date_combo.count() > 0
-            and self._date_combo.currentIndex() == self._date_combo.count() - 1
-        )
-        if not is_latest or self._asset_edit_manual:
-            return
-        if self._current_live_asset > 0:
-            self._asset_edit.setText(f"{self._current_live_asset:,.0f}")
 
     # ---Friday date helpers ---
     @staticmethod
@@ -547,81 +474,16 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
             cur += _dt.timedelta(weeks=1)
         return results
 
-    def _rebuild_date_combo(self, start_year: int | None = None):
-        """(Re)populate the Friday-date combo from `start_year` (default:
-        the current year), storing each item's ISO date as userData so
-        _selected_date() can read it back in O(1) instead of regenerating
-        and zipping the whole list on every call."""
-        self._date_combo_start_year = start_year or _dt.date.today().year
-        self._date_combo.blockSignals(True)
-        self._date_combo.clear()
-        for label, iso_date in self._friday_dates(self._date_combo_start_year):
-            self._date_combo.addItem(label, iso_date)
-        if self._date_combo.count() > 0:
-            self._date_combo.setCurrentIndex(self._date_combo.count() - 1)
-        self._date_combo.blockSignals(False)
-
-    def _extend_date_combo_for_history(self):
-        """The combo defaults to the current year (docs/ui.md 4.1); extend
-        it back to the earliest year actually present in the loaded records
-        so a user tracking assets since a prior year can still select those
-        historical weeks to edit (review_agy.md #3 -- previously such dates
-        weren't selectable at all)."""
+    def _record_fridays(self) -> list[tuple[str, str]]:
+        """The Fridays AddRecordDialog offers: from W01 of the current year,
+        or of the earliest year in the records so a past week can still be
+        re-recorded (review_agy.md #3), to today."""
         years = []
         for r in self._records:
-            try:
-                years.append(_dt.datetime.strptime(r["date"], "%Y-%m-%d").date().year)
-            except Exception:
-                continue
-        if not years:
-            return
-        earliest = min(years)
-        if earliest < self._date_combo_start_year:
-            self._rebuild_date_combo(earliest)
-
-    def _selected_date(self) -> str:
-        """Return the ISO date string for the currently selected combo item."""
-        data = self._date_combo.currentData()
-        return str(data) if data else ""
-
-    def _sync_friday_combo(self):
-        """Append any newly available Friday dates to the combo (called daily at midnight)."""
-        all_dates = self._friday_dates(self._date_combo_start_year)
-        existing_count = self._date_combo.count()
-        if len(all_dates) > existing_count:
-            was_at_latest = (self._date_combo.currentIndex() == existing_count - 1)
-            for label, iso_date in all_dates[existing_count:]:
-                self._date_combo.addItem(label, iso_date)
-            # Auto-advance only if the user was already on the last item
-            if was_at_latest:
-                self._date_combo.setCurrentIndex(self._date_combo.count() - 1)
-        # Re-schedule for the next midnight
-        self._schedule_daily_sync()
-
-    def _schedule_daily_sync(self):
-        """Start a one-shot timer that fires 5 s after the next midnight."""
-        now = _dt.datetime.now()
-        tomorrow_midnight = (now + _dt.timedelta(days=1)).replace(
-            hour=0, minute=0, second=5, microsecond=0
-        )
-        ms = int((tomorrow_midnight - now).total_seconds() * 1000)
-        self._sync_timer = QTimer(self)
-        self._sync_timer.setSingleShot(True)
-        self._sync_timer.timeout.connect(self._sync_friday_combo)
-        self._sync_timer.start(ms)
-
-    # ---Format helper ---
-    def _fmt_asset_input(self, text: str):
-        raw = text.replace(',', '').strip()
-        if raw.isdigit() and raw:
-            formatted = f"{int(raw):,}"
-            if formatted != text:
-                pos = self._asset_edit.cursorPosition()
-                delta = len(formatted) - len(text)
-                self._asset_edit.blockSignals(True)
-                self._asset_edit.setText(formatted)
-                self._asset_edit.setCursorPosition(max(0, pos + delta))
-                self._asset_edit.blockSignals(False)
+            d = _safe_parse_date(r.get("date", ""))
+            if d is not None:
+                years.append(d.year)
+        return self._friday_dates(min([_dt.date.today().year, *years]))
 
     # ---SQLite asset_records load/save ---
     def _load_records(self):
@@ -666,26 +528,22 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         return any(r["date"] not in self._date_metrics_cache for r in self._records)
 
     # ---CRUD ---
-    def _add_record(self):
-        date_str = self._selected_date()
-        raw_amt  = self._asset_edit.text().replace(',', '').strip()
-        if not date_str:
-            QMessageBox.warning(self, _TITLE, tr("금요일을 선택하세요.", "Select a Friday."))
-            return
+    def _on_add_record_clicked(self):
+        """기록 추가 (user direction 2026-11-16): the week and total in a
+        dialog; it auto-fills the latest Friday from the live total (4.5)."""
+        existing = {r["date"]: r["total"] for r in self._records}
+        dlg = AddRecordDialog(self._record_fridays(), self._current_live_asset, existing, self)
+        self._add_dlg = dlg
         try:
-            total = float(raw_amt)
-        except ValueError:
-            total = math.nan
-        if not math.isfinite(total):  # float() takes "nan"/"inf" (review_codex.md #6)
-            QMessageBox.warning(self, _TITLE, tr("총자산은 숫자로 입력하세요.", "Total Assets must be a number."))
-            return
+            accepted = dlg.exec() == AddRecordDialog.DialogCode.Accepted
+        finally:
+            self._add_dlg = None
+        if accepted:
+            self._save_record(*dlg.values())
 
-        # docs/ui.md 4.5: the value was auto-filled from the live position
-        # total unless the user typed over it (or there was nothing to
-        # auto-fill, e.g. a historical date) -- flag it for later comparison.
-        is_manual = self._asset_edit_manual
-
-        # Update if same date exists, otherwise append
+    def _save_record(self, date_str: str, total: float, is_manual: bool):
+        """Add the week's record or replace it. `is_manual`: the value was
+        typed rather than auto-filled from the live total (docs/ui.md 4.5)."""
         for r in self._records:
             if r["date"] == date_str:
                 r["total"] = total
@@ -697,8 +555,6 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self._records.sort(key=lambda r: r["date"])
         self._save_records()
         self._refresh_table()
-        self._asset_edit.clear()
-        self._asset_edit_manual = False
 
     def _delete_selected(self):
         # Same visual-row-vs-self._records mismatch as
@@ -847,90 +703,6 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
             QMessageBox.information(parent, _TITLE, tr("기록된 기간에 거래일이 없습니다.", "No trading days in the recorded period."))
             return
         AssetsReportDialog(rows, parent).exec()
-
-    # ---Export (review.md 2-2) ---
-    # Always the full KRW+USD dump regardless of the on-screen currency
-    # toggle (docs/ui.md 4.3): export is a complete data backup/analysis
-    # artifact, not a screenshot of the current view. Built from
-    # _compute_records_metrics() directly rather than scraping self._table,
-    # since the table now only ever shows one currency's 10 columns.
-    _EXPORT_HEADERS = [
-        "Date", "KOSPI", "KOSPI Weekly %", "KOSPI Cumulative %",
-        "Total Assets", "Weekly P/L", "Weekly P/L %", "Cumulative P/L", "Cumulative P/L %",
-        "USD/KRW", "Total Assets ($)", "Weekly P/L ($)", "Weekly P/L (%) [$]",
-        "Cumulative P/L ($)", "Cumulative P/L (%) [$]",
-        "Excess Return (%p)", "Excess Return (%p) [$]", "Manual",
-    ]
-
-    @staticmethod
-    def _export_fmt(val, fmt="{:,.0f}") -> str:
-        return "" if val is None else fmt.format(val)
-
-    def _on_export_clicked(self):
-        metrics = self._compute_records_metrics()
-        if not metrics:
-            self.status_message.emit(tr("내보내기: 아직 내보낼 기록이 없습니다", "Export: no records to export yet"))
-            return
-
-        default_name = f"total_assets_{datetime.now().strftime('%Y%m%d')}.xlsx"
-        path, selected_filter = QFileDialog.getSaveFileName(
-            self, tr("총자산 내보내기", "Export Total Assets"), default_name,
-            tr("Excel 통합 문서 (*.xlsx);;CSV 파일 (*.csv)", "Excel Workbook (*.xlsx);;CSV File (*.csv)"),
-        )
-        if not path:
-            return
-
-        want_csv = "csv" in selected_filter.lower() or path.lower().endswith(".csv")
-        if want_csv and not path.lower().endswith(".csv"):
-            path += ".csv"
-        elif not want_csv and not path.lower().endswith(".xlsx"):
-            path += ".xlsx"
-
-        f = self._export_fmt
-        rows = []
-        for m in metrics:
-            rows.append([
-                m["date"],
-                f(m["kospi_close"]) if m["kospi_close"] else "",
-                f(m["kospi_weekly_pct"], "{:+.2f}%"),
-                f(m["kospi_cum_pct"], "{:+.2f}%"),
-                f(m["total_krw"]),
-                f(m["weekly_amt_krw"], "{:+,.0f}"),
-                f(m["weekly_pct_krw"], "{:+.2f}%"),
-                f(m["cum_amt_krw"], "{:+,.0f}"),
-                f(m["cum_pct_krw"], "{:+.2f}%"),
-                f(m["usd_rate"], "{:,.1f}") if m["usd_rate"] else "",
-                f(m["total_usd"]) if m["total_usd"] else "",
-                f(m["weekly_amt_usd"], "{:+,.0f}"),
-                f(m["weekly_pct_usd"], "{:+.2f}%"),
-                f(m["cum_amt_usd"], "{:+,.0f}"),
-                f(m["cum_pct_usd"], "{:+.2f}%"),
-                f(m["excess_pct_krw"], "{:+.2f}%"),
-                f(m["excess_pct_usd"], "{:+.2f}%"),
-                "Yes" if m["manual"] else "",
-            ])
-
-        try:
-            if want_csv:
-                with open(path, "w", newline="", encoding="utf-8-sig") as f:
-                    writer = csv.writer(f)
-                    writer.writerow(self._EXPORT_HEADERS)
-                    writer.writerows(rows)
-            else:
-                from openpyxl import Workbook
-                wb = Workbook()
-                ws = wb.active
-                ws.title = "Total Assets"
-                ws.append(self._EXPORT_HEADERS)
-                for row in rows:
-                    ws.append(row)
-                wb.save(path)
-        except Exception as e:
-            logger.warning("Total assets export failed: %s", e, exc_info=True)
-            QMessageBox.warning(self, _TITLE, tr(f"내보내지 못했습니다:\n{e}", f"Failed to export:\n{e}"))
-            return
-
-        self.status_message.emit(tr(f"{len(rows)}행을 {path}(으)로 내보냈습니다", f"Exported {len(rows)} row(s) to {path}"))
 
     def _on_cell_double_clicked(self, row, col):
         # COL_TOTAL_ASSETS is "Total Assets" (docs/ui.md 4.2) in both the old
@@ -1175,7 +947,8 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
     def update_live_asset(self, current_total: float):
         self._current_live_asset = current_total
         self._update_live_asset_labels()
-        self._maybe_autofill_asset_edit()
+        if self._add_dlg is not None:
+            self._add_dlg.set_live_total(current_total)
 
     def _update_live_asset_labels(self):
         
@@ -1201,3 +974,11 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         else:
             self.live_diff_lbl.setText("-")
             self.live_diff_lbl.setStyleSheet(f"color:{TEXT};")
+
+
+# Every label this tab's toolbar buttons can show (the shared toolbar width,
+# ui.common.toolbar_button_width).
+register_toolbar_labels(
+    *(label for _, label in _CURRENCY_STATES),
+    tr("그래프", "Graph"), tr("기록 추가", "Add Record"),
+)
