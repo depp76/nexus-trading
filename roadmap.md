@@ -244,3 +244,4 @@ src/
 | 2026-11-16 | MA 차트 표시 행(docs/ui.md 8.21 개정): 버튼 한 폭, 묶음 제목, [이동평균 MA10·MA20·MA50(·동일가중)] [보조지표 이격도·거래량·RSI + 기간 한 묶음]. 종가 버튼 삭제(종가 선 항상 표시), MA5 삭제(`_MA_KEYS`). |
 | 2026-11-16 | MA 차트 RSI 패널을 기본으로 켬(거래량·이격도·RSI 모두 켠 채로 열림; docs/ui.md MA 차트 패널 토글). |
 | 2026-11-16 | 앱 제목 NEXUS → Nexus Trading. Strategy 매매 내역 탭: 검색·청산 사유 필터 삭제, 요약 줄 오른쪽 끝에 '자세히'(이전 '크게 보기'); 팝업은 필터 유지(`StrategyTradesView(filters=False)`). |
+| 2026-11-16 | 갱신 상태(자동 갱신·최근 갱신)와 국기 버튼을 제목 줄에서 상위 탭 줄 오른쪽 끝으로(Trading Universe 탭과 같은 높이, `QTabWidget.setCornerWidget`; docs/ui.md 8.17 헤더 갱신 상태). |
