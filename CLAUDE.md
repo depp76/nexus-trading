@@ -30,9 +30,10 @@ ten were discarded, and the 2025 hold-out had not been opened as of that record.
 `allow_holdout=True` and is labelled as including the hold-out (spec 9-23); running one
 counts as opening it. The scoring mode also feeds the
 Trading Universe tab's "전략 신호" button (was "Trend Score", C1 only; since 2026-11-16 a menu picks any
-variant A0-C3 and `universe_signals.pick_signals` lists its buy candidates / exit signals with the backtest's own
-signal code, spec 9-29), which pins the Top 10 / Bottom 10 to the top
-of its table (`TrendScoreThread`; Top rows, then Bottom rows, then the rest in the default
+variant A0-C3 and `signal_provider.pick_signals` lists its buy candidates / exit signals with the backtest's own
+signal code, spec 9-29; both it and the MA chart's "전략 점검" combo (`ui/strategy_check_section.py`,
+`signal_provider.check_stock` per stock, `StrategyCheckThread`) go through `src/strategy/signal_api.py`), which pins the Top 10 / Bottom 10 to the top
+of its table (`SignalPicksThread`; Top rows, then Bottom rows, then the rest in the default
 order, with a `Top n (score)` / `Bottom n (score)` tag in the identity cell; the checkable
 button unpins on the second click; decisions in spec 9-4). Validation reruns use saved dataset
 snapshots and the headless runner (`python -m strategy.trend_following.run`), not the UI.
@@ -77,6 +78,9 @@ Dev tooling is in `requirements-dev.txt`
 
 ## Architecture
 
+- **`src/strategy/`**: `registry.py` (the one strategy list), `signal_api.py` (current-signal seam:
+  provider protocol, result types, `SignalCache`), `common/` (strategy-agnostic `PriceBook` and the
+  daily-price / flow loader) and one sub-package per strategy.
 - **`src/strategy/trend_following/`** (spec `trend_following.md` v06 in the same folder,
   facade `strategy.trend_following`): `config.py` (`SPEC_VERSION`, `StrategyParams`, `VARIANTS`
   A0-A5/B and C1-C3, `COST_MULTIPLIERS`, `PERIODS`, `E2_NEIGHBORS`, benchmark ETF codes), `costs.py` (`CostModel`/`TradeCost`,
@@ -100,7 +104,7 @@ Dev tooling is in `requirements-dev.txt`
   `schedule.py` (`weekly_check_dates`: the weekly check days ahead of time from the KRX calendar,
   no engine/UI caller yet; 9-20), `snapshot.py` (`save_snapshot`/`load_snapshot` of a `Dataset` under `cache/snapshots/` with a
   SHA-256 manifest, for byte-identical reruns), `run.py` (headless CLI: `--build-snapshot`,
-  `--snapshot`, `--factor-ic`, `--robustness`, `--variants`, ...), `raw_check.py` (A5 sample check
+  `--snapshot`, `--factor-ic`, `--robustness`, `--variants`, ...), `signal_provider.py` (its `PROVIDER`: `pick_signals` / `check_stock`, spec 9-29), `raw_check.py` (A5 sample check
   of split-adjusted vs unadjusted prices), `variant_info.py` (`describe_variant`: each matrix
   row's rules in Korean, built from the `Variant` flags and `StrategyParams`). The
   Strategy tab runs the research matrix; its variants are picked in `TrendConditionsDialog` (a `VariantPickerDialog` plus the run conditions)
@@ -115,16 +119,18 @@ Dev tooling is in `requirements-dev.txt`
   logging setup (root INFO; `app.log` gets INFO and above, the console WARNING and above).
 - **`src/ui/`**: `universe_tab.py` (`UniverseTab`), `history_tab.py` (`TradingHistoryTab`),
   `assets_tab.py` (`TradingRecordTab`), `strategy_tab.py` (`StrategyTab`: a `QStackedWidget` of the
-  `STRATEGY_TABS` pages switched by each page's strategy selector; merges their `collect_threads_to_stop()`), `trend_following_tab.py`
+  `STRATEGY_TABS` pages (built from `strategy.registry.STRATEGIES`) switched by each page's strategy selector; merges their `collect_threads_to_stop()`), `trend_following_tab.py`
   (`TrendFollowingTab`: run toolbar (전략 selector | 시장 toggles KOSPI·KOSDAQ·NASDAQ·NYSE | 기간 | 매매전략... | 중지 백테스트, one line or two fixed lines by width; buttons at the shared toolbar width) + status line, rules and run conditions in `ui/dialogs/trend_conditions.py` `TrendConditionsDialog` (`TrendConditions`); docs/ui.md 8.19 -> result head (basis, "다음 실행에 적용", Reset (`clear_result`), Save) ->
   `TrendFollowingResearchThread` -> variant/cost segments, KPI cards, NAV + drawdown chart,
   target-check card, result tabs (comparison, all metrics, monthly, trades,
   warnings), "Save Report" to `reports/`; docs/ui.md 8.10), `strategy_widgets.py` (that
   screen's widgets: `KpiRow`, `TargetCheckCard`, `SharpeBarDelegate`, `SegmentRow`, table
   fillers, `DEFAULT_TARGET_SHARPE` (1.0; the run's target comes from the form)/`TARGET_MDD`; the trade list shared by the tab and its popup is
-  `dialogs/strategy_trades.py` `StrategyTradesView`), `trend_score_section.py` (`TrendScoreSection`: the
-  MA chart dialog's block with the last Trend Score run's breakdown and gate for a KOSPI/KOSDAQ name;
-  `UniverseTab._last_recommendation` is passed in through `StockMaDialog(trend_rec=...)`),
+  `dialogs/strategy_trades.py` `StrategyTradesView`), `strategy_check_section.py` (`StrategyCheckSection`: the
+  MA chart dialog's "전략 점검" block -- a combo of the variants that apply to the stock's market and the
+  generic `signal_api.StockCheck` drawn as verdict, score line, metric cards and condition badges; the
+  Universe tab passes a `SignalContext` (its rows, its `SignalCache`, the pinned variant) through
+  `StockMaDialog(signal_ctx=...)`),
   `widgets.py` (since 2026-11-15 only a re-export of: `table_items.py` `ColSpec`/`NumericItem`,
   `universe_columns.py` the Universe `COLUMNS`/`COL_*`, `universe_table.py` `StockTable`,
   `filter_popups.py` `FilterPopup`/`RangeFilterPopup`, `table_headers.py` `GroupedHeaderView`,
@@ -168,7 +174,7 @@ Dev tooling is in `requirements-dev.txt`
   `TickerValidateThread`, `AssetMetricsPreloadThread`, `AssetReportThread`, `AccountDepositThread`,
   `GeminiStockReportThread`, `AutoBackupThread`; `strategy_threads.py` holds
   `TrendFollowingResearchThread`, which loads the dataset and runs the research matrix, and
-  `TrendScoreThread`, the Universe tab's 2-5 scoring run).
+  `SignalPicksThread` / `StrategyCheckThread`, the `signal_api` universe run and one-stock check).
   Never call `data_fetcher` functions from a
   slot on the UI thread; add a thread class instead. Connect `finished` signals to bound
   methods, not closures, so Qt queues them onto the UI thread; when a slot needs per-request
@@ -268,7 +274,7 @@ not fixtures. Trading History principal/deposit/withdrawal live in `QSettings`
   `ui/dialogs/variant_picker.py` list labels) are Korean, and the tests assert those
   literals; their identifiers, comments and docstrings stay English. The same applies to
   the one-line explanations under the Strategy KPI cards and the Universe score cards
-  (`ui/strategy_widgets.py` `KPI_CARDS`, `ui/trend_score_section.py`) and the E2/A5 tooltip,
+  (`ui/strategy_widgets.py` `KPI_CARDS`, the C-row metric captions in `signal_provider.py`) and the E2/A5 tooltip,
   worded as in `docs/ui_redesign_2026-11.md` (2026-11-13).
   Third and broadest (user direction, 2026-11-13): **visible UI labels are Korean** for
   buttons, toolbar labels and placeholders, context menus, dialog buttons/titles/field labels
@@ -324,7 +330,13 @@ not fixtures. Trading History principal/deposit/withdrawal live in `QSettings`
   callers import strategy symbols from `strategy.<name>` directly, never via
   `data_fetcher`, and `data/` never imports `strategy`. Every strategy UI runs its work in
   a `QThread` under `src/threads/` and is signal generation / research only. There are no
-  strategy docs at the repo root.
+  strategy docs at the repo root. Since 2026-11-16 a strategy is listed once, in
+  `src/strategy/registry.py` (`STRATEGIES`: its Strategy tab page and its signal module); the
+  signal module exposes a `PROVIDER` implementing `strategy.signal_api.SignalProvider` (variants,
+  title, markets, needs_universe, labels, load, pick, check), which puts it in the Universe
+  "전략 신호" menu and the MA chart "전략 점검" combo. Screens never import a strategy package for
+  current signals; shared price structures and loaders live in `src/strategy/common/`
+  (`prices.py` `PriceBook`, `inputs.py` `load_daily_inputs`), which imports no strategy package.
 - `roadmap.md` is the running log of what was done and why (current-state summary, open long-term
   items, a priority matrix, and a dated change history). Add a row there for non-trivial changes.
   Finished sections (2, 3, 6, 7 — the "roadmap 2-4" / "6-1a" / "7-2c" that code comments cite) and the

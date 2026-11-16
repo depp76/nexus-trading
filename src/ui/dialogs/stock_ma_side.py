@@ -1,12 +1,12 @@
 """ui/dialogs/stock_ma_side.py — the MA chart dialog's right panel
 (ui/dialogs/stock_ma.py StockMaDialog): the investor net-buying table (KR
-stocks) or the WTI futures curve, the Trend Score block, the 'Company Info'
+stocks) or the WTI futures curve, the "전략 점검" block, the 'Company Info'
 button, and the geometry pass that lines the panel up with the dialog's
 button row and chart.
 
 Moved out of ui/dialogs/stock_ma.py (2026-11-15, code review #5). The dialog
 still exposes the pieces under its old attribute names (_right_panel,
-_right_layout, _right_title, _right_table, _right_gap, trend_section) and
+_right_layout, _right_title, _right_table, _right_gap, strategy_section) and
 keeps _align_right_panel as a thin wrapper around StockMaSidePanel.align.
 """
 from PyQt6.QtWidgets import QVBoxLayout, QPushButton, QLabel, QTableWidget, QTableWidgetItem, QHeaderView, QWidget
@@ -14,11 +14,9 @@ from PyQt6.QtCore import Qt, QPoint, QObject, QEvent
 from PyQt6.QtGui import QColor, QFont, QFontMetrics
 
 from i18n import tr
-from ui.trend_score_section import TrendScoreSection
+from ui.strategy_check_section import StrategyCheckSection, has_section
 from ui.common import create_font, setup_table, FONT_BODY
 from ui.colors import PROFIT, LOSS
-
-_TREND_SCORE_MARKETS = ("KOSPI", "KOSDAQ")     # what the Universe's Trend Score scores
 
 
 class _EqualColumns(QObject):
@@ -170,20 +168,22 @@ class StockMaSidePanel:
     `widget` is the plain QWidget the dialog adds to its splitter (the widget
     tree is the one the dialog used to build inline)."""
 
-    def __init__(self, ticker, market, investor_data, trend_rec, is_stock: bool):
+    def __init__(self, ticker, market, investor_data, is_stock: bool, name: str = "", signal_ctx=None):
         self._ticker = ticker
         self._market = market
+        self._name = name or ticker
+        self._signal_ctx = signal_ctx
+        self.strategy_section = None
         self.title = None       # first line of the panel, level with the button row
         self.table = None       # starts level with the chart's top edge
         self.gap = None         # spacer between the two, sized by align()
-        self.trend_section = None
-        self.widget, self.layout = self._build(investor_data or [], trend_rec, is_stock)
+        self.widget, self.layout = self._build(investor_data or [], is_stock)
 
-    def _build(self, inv: list, trend_rec, is_stock: bool):
+    def _build(self, inv: list, is_stock: bool):
         """Top to bottom (user direction 2026-11-15): the table's title level
         with the button row, the investor-flow table (KR stocks) or futures
-        curve (WTI) starting level with the chart's top edge, the Trend Score
-        block, the 'Company Info' button. `align` keeps the two alignments as
+        curve (WTI) starting level with the chart's top edge, the "전략 점검"
+        block (markets some registered strategy applies to), the 'Company Info' button. `align` keeps the two alignments as
         the button row wraps or the dialog resizes."""
         panel = QWidget()
         v = QVBoxLayout(panel)
@@ -207,13 +207,14 @@ class StockMaSidePanel:
             v.addWidget(self.gap)
             v.addWidget(self.table)
 
-        if self._market in _TREND_SCORE_MARKETS:
-            self.trend_section = TrendScoreSection(trend_rec, self._ticker)
+        if has_section(self._market):
+            # "전략 점검" (2026-11-16): a strategy combo and this stock's check under it.
+            self.strategy_section = StrategyCheckSection(self._ticker, self._name, self._market, self._signal_ctx)
             if self.table is not None:
                 v.addSpacing(12)
             else:
-                self.title = self.trend_section     # its title line goes level with the buttons
-            v.addWidget(self.trend_section)
+                self.title = self.strategy_section     # its title line goes level with the buttons
+            v.addWidget(self.strategy_section)
 
         if is_stock:
             fin_btn = QPushButton(tr("기업 정보", "Company Info"))
@@ -241,8 +242,8 @@ class StockMaSidePanel:
 
         first_line_mid = y_in_panel(buttons[0], buttons[0].height() // 2)
         title = self.title
-        if title is self.trend_section and title is not None:
-            title_h = title.layout().itemAt(0).widget().sizeHint().height()
+        if title is self.strategy_section and title is not None:
+            title_h = title.combo.sizeHint().height()
         else:
             title_h = title.sizeHint().height() if title is not None else 0
         top = max(0, first_line_mid - title_h // 2)

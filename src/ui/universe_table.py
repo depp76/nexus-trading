@@ -620,16 +620,16 @@ class StockTable(QTableWidget):
             # A pinned 전략 신호 row shows only its short tag ("A0 상위 3") next
             # to the name, so the name keeps the room (user direction
             # 2026-11-16); ticker and market move to the tooltip.
-            "meta": item['trend_rank'] if item.get('trend_rank')
+            "meta": item['signal_tag'] if item.get('signal_tag')
                     else f"{ticker} · {_market_label(item.get('market', ''))}",
             "status": status,
             "mode": mode,
         })
-        if item.get('trend_rank'):
+        if item.get('signal_tag'):
             # The pinned row's ticker, market and figure (RS, 52w-high
             # proximity or weekly score) on the tooltip (2026-11-16).
-            tip = f"{ticker} · {_market_label(item.get('market', ''))} · {item['trend_rank']}"
-            identity_item.setToolTip(tip + (f" · {item['trend_tip']}" if item.get('trend_tip') else ""))
+            tip = f"{ticker} · {_market_label(item.get('market', ''))} · {item['signal_tag']}"
+            identity_item.setToolTip(tip + (f" · {item['signal_tip']}" if item.get('signal_tip') else ""))
         self.setItem(row, COL_IDENTITY, identity_item)
 
     def _set_price_cells(self, row, price_text, price_raw, changes, mode):

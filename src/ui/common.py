@@ -835,7 +835,7 @@ def _mk_field_validator(edit: QLineEdit, check_fn: Callable[[str], bool], error_
 # ---------------------------------------------------------------------------
 def cancel_thread(thread) -> None:
     """Ask a worker that supports it (TrendFollowingResearchThread,
-    TrendScoreThread) to stop at its next check; a no-op for the rest."""
+    SignalPicksThread) to stop at its next check; a no-op for the rest."""
     cancel = getattr(thread, "cancel", None)
     if callable(cancel):
         try:

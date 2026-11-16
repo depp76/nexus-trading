@@ -464,7 +464,7 @@ class CostModel:
 | `data/flows.py`, `data/rates.py` | 5, 6-3 | 종목별 투자자 순매수 수집기(Naver frgn 페이지, `cache/investor_flows/` 캐시), CD91 수집기(ECOS API 키 → `cd91.csv` → 상수 3%) |
 | `ui/strategy_tab.py`, `ui/trend_following_tab.py`, `threads/strategy_threads.py` | 7 | Strategy 탭의 Trend Following 서브탭(폼 → 백그라운드 실행 → 스코어카드 표·NAV 차트·이벤트 스터디 표·리포트 저장) |
 | `variant_info.py`, `ui/dialogs/variant_picker.py` | 2, 3, 6-2 | 변형 선택 팝업(9-22): 목록에서 고른 변형의 규칙 설명을 `Variant` 플래그와 `StrategyParams` 값으로 조립해 표시 |
-| `ui/universe_tab.py`(Trend Score 버튼), `threads/strategy_threads.py::TrendScoreThread` | 2-5, 9-4 | Trading Universe의 KOSPI/KOSDAQ 행을 2-5로 채점해 지난 1주일 평균 총점 기준 상위 10·하위 10을 **Universe 표 맨 위에 고정**(상위 → 하위 → 나머지 기존 순서, 식별 셀에 `Top n (점수)` / `Bottom n (점수)` 태그); 버튼을 다시 누르면 기본 순서 복원 |
+| `ui/universe_tab.py`(전략 신호 버튼), `signal_provider.py`, `threads/strategy_threads.py::SignalPicksThread` | 2-5, 9-4 | Trading Universe의 KOSPI/KOSDAQ 행을 2-5로 채점해 지난 1주일 평균 총점 기준 상위 10·하위 10을 **Universe 표 맨 위에 고정**(상위 → 하위 → 나머지 기존 순서, 식별 셀에 `Top n (점수)` / `Bottom n (점수)` 태그); 버튼을 다시 누르면 기본 순서 복원 |
 
 ### 9-2. 구현 결정과 스펙 대비 차이 (다음 버전에서 재검토)
 
@@ -927,7 +927,7 @@ BM2·BM4와 개발 2구간(2021-22 / 2023-24)별 표, BM1 대비 알파·베타�
 ### 9-29. Universe "전략 신호": 변형 하나를 골라 오늘의 상위·하위 (2026-11-16)
 
 사용자 지시로 Trading Universe의 **Trend Score**(9-4, C1 점수만)를 **"전략 신호"** 버튼으로 바꿨다. 버튼 메뉴에서 A0~C3 중 하나를 고르면
-그 변형의 목록을 Universe 표 맨 위에 고정한다(최대 10개씩, 채우지 않음). 계산은 `universe_signals.pick_signals` — 백테스트와 같은
+그 변형의 목록을 Universe 표 맨 위에 고정한다(최대 10개씩, 채우지 않음). 계산은 `signal_provider.pick_signals` — 백테스트와 같은
 `signals.compute_features` / `scoring.compute_scores`를 마지막 거래일에 적용한다(화면 전용 규칙 없음).
 
 | 변형 | 상위 (매수 후보) | 하위 |
@@ -944,3 +944,25 @@ BM2·BM4와 개발 2구간(2021-22 / 2023-24)별 표, BM1 대비 알파·베타�
 - 고정된 행의 식별 칸은 이름 옆에 **짧은 꼬리표만**("A0 상위 1", "A0 이탈 2", "C1 하위 3") — 티커·시장과 정렬 기준 수치(RS, 52주 고가 근접도,
   주간 점수)는 툴팁으로 옮겨 이름이 잘리지 않게 했다.
 - J1(9-19) 판정상 채택 가능한 변형이 없으므로 상태 줄에 "연구용 신호이며 매매 권유가 아닙니다"를 함께 쓴다.
+- **MA 차트 "전략 점검"(2026-11-16, 사용자 결정: 콤보 · C는 "계산" 버튼 · 한 번에)**: 차트 오른쪽 칸의 "추세 점수"를 전략 콤보(A0~C3)로 바꿨다.
+  기본값은 Universe에 고정된 변형, 없으면 C1. `signal_provider.check_stock`이 한 종목의 마지막 거래일 조건을 같은 `compute_features`로 계산한다.
+  - A0~A5: 진입 조건(L1은 쓰는 행만 · 유동성 · 추세 3개 · 20일 돌파 · V · F)과 청산 조건(10일 저가 이탈, A5는 FX). 판정 "진입 신호"는
+    백테스트의 진입 마스크와 같고(L1 꺼짐은 "신규 매수 보류"로 덧붙임), 같은 날 Universe Top 목록과 종목별로 일치한다(테스트).
+  - B: 추세·유동성 조건과 52주 고가 근접도. 순위(상위 n, `max_positions` 이내면 "보유 대상")는 같은 변형의 유니버스 실행이 있을 때만.
+  - C1~C3: 점수가 유니버스 안 순위라 종목 하나로는 계산할 수 없다. 같은 변형의 유니버스 실행 결과(9-4 분해)를 보이고, 없으면 칸 안
+    "계산" 버튼이 Universe의 KR 행으로 실행한다. 결과는 Universe 탭과 공유(같은 변형 id 키, 새로고침이 새 시세를 가져오면 비움 — 고정된 실행은 유지).
+- **전략 신호 접점(같은 날, 사용자 지시 "새 전략이 Universe 여러 곳에서 쓰일 때 구조 검토 → 1~7 구현")**:
+  - `strategy/registry.py` `STRATEGIES`: 전략 목록은 여기 하나. 항목마다 신호 모듈(`signals`)과 Strategy 탭 페이지(`page`, "모듈:클래스"
+    문자열이라 전략 층이 `ui`를 import하지 않음). `ui.strategy_tab.STRATEGY_TABS`도 이 목록에서 만든다.
+  - `strategy/signal_api.py`: Universe "전략 신호"와 MA 차트 "전략 점검"은 전략 패키지를 직접 부르지 않고 여기만 거친다.
+    `SignalProvider`(variants · title · markets · needs_universe · labels · load · pick · check)와 결과 타입
+    (`SignalPicks`/`SignalName`/`ListLabels`/`StockCheck`/`CheckRow`/`Metric`), 유니버스 결과 공유 `SignalCache`(계산한 날에만 유효).
+    변형 id는 전략 사이에서 겹치면 안 된다(등록 시 오류).
+  - 화면에 쓰이는 문구(목록 꼬리표 "상위/하위/이탈", 상태 줄 설명, 시장 필터 이름)는 `labels(vid)`가, 적용 시장은 `markets(vid)`가 정한다.
+    이 패키지는 KOSPI/KOSDAQ — 다른 시장 종목의 MA 차트에는 칸이 없고 Universe 실행은 그 시장 행만 받는다.
+  - 종목 점검 결과는 화면 공통 `StockCheck`(판정 · 점수 줄 · 지표 카드 · 진입/청산 조건)로 그린다. C 행의 9-4 분해(주간 평균, 백분위 3개,
+    게이트 4개)도 이 형태로 바뀌어 전용 UI(`ui/trend_score_section.py`)는 삭제했다.
+  - 입력 데이터는 공용 모듈 `strategy/common/`: `prices.py`(`PriceBook`, `align_frame`, 수급 배열, 취소/진행 — `dataset.py`가 재수출),
+    `inputs.py`(`load_daily_inputs(items, index_ticker, need_flows)` → `DailyInputs`; 지수 티커를 받아 다른 시장의 달력도 쓸 수 있음).
+    전략은 `load(vid, items)`에서 필요한 것만 불러온다(이 패키지: KOSPI 달력 + F/FX 행만 수급).
+  - 새 전략: 패키지에 `PROVIDER`를 만들고 `STRATEGIES`에 항목 하나를 추가하면 Strategy 탭·Universe 메뉴·MA 차트 콤보에 함께 나타난다.
