@@ -176,7 +176,7 @@ class MainWindow(QMainWindow):
         auto-refresh and indicator timers and turns auto-refresh on."""
         header_layout = QHBoxLayout()
         # App title + subtitle (docs/ui.md 8.16): the largest text on screen.
-        title_label = QLabel("NEXUS")
+        title_label = QLabel("Nexus Trading")
         title_label.setObjectName("appTitle")
         title_label.setFont(create_font(FONT_TITLE, QFont.Weight.Bold))
         header_layout.addWidget(title_label)

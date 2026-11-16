@@ -243,3 +243,4 @@ src/
 | 2026-11-16 | Total Assets 그래프: 어느 마커에 올려도 그 주의 세 값(총자산·총자산($)·KOSPI)을 한 상자에(줄마다 계열 색, `AnnotationBbox`), 그 주의 세 마커를 함께 키움(docs/ui.md 4.4.1 #8). `tests/test_assets_graph.py` 9건. |
 | 2026-11-16 | MA 차트 표시 행(docs/ui.md 8.21 개정): 버튼 한 폭, 묶음 제목, [이동평균 MA10·MA20·MA50(·동일가중)] [보조지표 이격도·거래량·RSI + 기간 한 묶음]. 종가 버튼 삭제(종가 선 항상 표시), MA5 삭제(`_MA_KEYS`). |
 | 2026-11-16 | MA 차트 RSI 패널을 기본으로 켬(거래량·이격도·RSI 모두 켠 채로 열림; docs/ui.md MA 차트 패널 토글). |
+| 2026-11-16 | 앱 제목 NEXUS → Nexus Trading. Strategy 매매 내역 탭: 검색·청산 사유 필터 삭제, 요약 줄 오른쪽 끝에 '자세히'(이전 '크게 보기'); 팝업은 필터 유지(`StrategyTradesView(filters=False)`). |

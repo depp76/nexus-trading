@@ -64,9 +64,15 @@ def _num(text: str, key: float, color=None) -> NumericItem:
 class StrategyTradesView(QWidget):
     """Search + reason filter + table + summary line for a list of
     backtest.Trade objects. `on_activate(row, col)` runs on a double-click or
-    Enter; `extra_widgets` go at the right end of the filter bar."""
+    Enter; `extra_widgets` go at the right end of the top line.
 
-    def __init__(self, parent=None, *, empty_text: str = EMPTY_TEXT, on_activate=None, extra_widgets=()):
+    `filters=False` (the result screen's 매매 내역 tab, user direction
+    2026-11-16): no search box and no reason filter; the summary takes the
+    top line with `extra_widgets` (자세히) at its right end. The popup keeps
+    both filters."""
+
+    def __init__(self, parent=None, *, empty_text: str = EMPTY_TEXT, on_activate=None, extra_widgets=(),
+                 filters: bool = True):
         super().__init__(parent)
         self._trades: list = []
         self._names: dict = {}
@@ -77,23 +83,34 @@ class StrategyTradesView(QWidget):
         root.setSpacing(4)
         bar = QHBoxLayout()
         bar.setContentsMargins(0, 0, 0, 0)
+        # Built either way so the filter code has one path; without filters
+        # they are never shown and keep their "everything" value.
         self.search = QLineEdit()
         self.search.setPlaceholderText(tr("종목명 또는 티커 검색", "Search name or ticker"))
         self.search.setClearButtonEnabled(True)
         self.search.setMaximumWidth(260)
         self.search.textChanged.connect(self._apply_filter)
-        bar.addWidget(self.search)
         self.reason_combo = QComboBox()
         self.reason_combo.addItem(ALL_REASONS, "")
         self.reason_combo.currentIndexChanged.connect(self._apply_filter)
-        bar.addWidget(self.reason_combo)
-        bar.addStretch()
-        for w in extra_widgets:
-            bar.addWidget(w)
-        root.addLayout(bar)
-        # Summary on the line under the filter bar, above the table (docs/ui.md 8.17).
         self.summary_lbl = make_footer_label("")
-        root.addWidget(self.summary_lbl)
+        self.has_filters = filters
+        if filters:
+            bar.addWidget(self.search)
+            bar.addWidget(self.reason_combo)
+            bar.addStretch()
+            for w in extra_widgets:
+                bar.addWidget(w)
+            root.addLayout(bar)
+            # Summary on the line under the filter bar, above the table (docs/ui.md 8.17).
+            root.addWidget(self.summary_lbl)
+        else:
+            self.search.hide()
+            self.reason_combo.hide()
+            bar.addWidget(self.summary_lbl, 1)
+            for w in extra_widgets:
+                bar.addWidget(w)
+            root.addLayout(bar)
 
         self.table = setup_table(QTableWidget(0, len(COLUMNS)), empty_text=empty_text)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
