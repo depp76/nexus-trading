@@ -50,6 +50,7 @@ from ui.universe_views import (
 )
 from i18n import tr
 from ui.dialogs.stock_report import show_stock_report_result
+from ui.dialogs.add_ticker import AddTickerDialog
 from ui.ma_chart import StockMaLauncherMixin
 
 logger = logging.getLogger(__name__)
@@ -68,14 +69,6 @@ from ui.common import (
 
 # Message boxes are titled with the tab name (docs/ui.md 8.5).
 _TITLE = "Trading Universe"
-
-
-# Markets the "Add Ticker" row can add a single name from: (stored value, label).
-# One US choice (user decision 2026-11-15): the US lookup does not depend on the
-# exchange, and "NASDAQ"/"NYSE" next to the NASDAQ 100 / S&P 500 toggles read as
-# the same thing. Rows added earlier as "NASDAQ"/"NYSE" still load (any market
-# without a toggle always shows, universe_views.matches).
-ADD_TICKER_MARKETS = (("KOSPI", "KOSPI"), ("KOSDAQ", "KOSDAQ"), ("US", tr("미국", "US")))
 
 
 def _part_label(part: str) -> str:
@@ -108,6 +101,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._markets = set(DEFAULT_UNIVERSE_MARKETS)
         self._markets_pending = False     # a market was switched on while a fetch ran
         self._status_filter_idx = 0      # index into _STATUS_FILTER_STATES
+        self._add_market = "KOSPI"       # last market picked in the Add Ticker dialog
         self._ranges = {}                # Filters panel: column key -> [lo, hi] (docs/ui.md 8.9)
         # ticker -> (group 0=Top/1=Bottom, rank, label) of the pinned Trend
         # Score run; empty = default order (see _sort_all_data).
@@ -149,11 +143,10 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         # the theme's input/button heights; no per-widget font.
         bar = QHBoxLayout()
         self._build_filter_bar(bar)
-        add_row = self._build_add_row()
         self._build_action_buttons(bar)
+        self._unify_button_widths()
 
         universe_layout.addLayout(bar)
-        universe_layout.addLayout(add_row)
 
         self._build_table(universe_layout)
         self._build_footer(universe_layout)
@@ -170,16 +163,18 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
         self._build_market_buttons(bar)
 
-        # Status filter: one button cycling All (no filter) -> Held -> Target
-        # (user direction 2026-09-29; "All" label since 2026-11-14); fixed width
-        # so the label change never resizes it. All = unchecked, Held/Target = checked.
+        # Status filter: one button cycling 종목(전체) -> 종목(보유) -> 종목(관심)
+        # (user direction 2026-11-16; a bare "전체" next to the market toggles
+        # read as "all markets"). 전체 = unchecked, 보유/관심 = checked; the
+        # width fits the longest label, so a click never resizes it.
         self.tg_filter_btn = self._filter_button(self._STATUS_FILTER_STATES[0][1])
-        self.tg_filter_btn.setToolTip(tr("상태 필터: 전체 / 보유 / 관심", "Status filter: All / Held / Target"))
+        self.tg_filter_btn.setToolTip(tr("누를 때마다 종목(전체) → 종목(보유) → 종목(관심) 순으로 표의 행을 거릅니다",
+                                         "Each click cycles the rows shown: Stocks (All) -> (Held) -> (Target)"))
         self.tg_filter_btn.clicked.connect(self._on_status_filter_clicked)
         bar.addWidget(self.tg_filter_btn)
 
         # Numeric range filters and saved views (docs/ui.md 2.6 / 8.9).
-        bar.addSpacing(8)
+        bar.addSpacing(self._GROUP_GAP)
         self.filters_btn = make_button(tr("필터", "Filters"), checkable=True, on_click=self._open_range_filters)
         bar.addWidget(self.filters_btn)
         self.views_combo = QComboBox()
@@ -197,13 +192,13 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         # combination, at least one. A market that is on is fetched by a
         # refresh and shown; switching one on after a refresh fetches just
         # that market (user direction 2026-11-14; replaced the single-choice
-        # ALL/KOSPI/KOSDAQ filter). Index rows always show. The filter
-        # toggles share one size and one gap (user direction 2026-09-19).
-        bar.addSpacing(8)
+        # ALL/KOSPI/KOSDAQ filter). Index rows always show. Every toolbar
+        # button shares one width (_unify_button_widths, 2026-11-16).
+        bar.addSpacing(self._GROUP_GAP)
         self._market_buttons = {}
         for m, label in MARKETS.items():
-            btn = self._filter_button(label.replace("&", "&&"), checked=(m in DEFAULT_UNIVERSE_MARKETS))
-            btn.setFixedWidth(max(self._FILTER_BTN_W, btn.sizeHint().width()))   # "NASDAQ 100" is wider
+            text = self._MARKET_BUTTON_TEXT.get(m, label)
+            btn = self._filter_button(text.replace("&", "&&"), checked=(m in DEFAULT_UNIVERSE_MARKETS))
             btn.setToolTip(tr(f"{label}: 켜면 새로고침이 이 시장(상위 {UNIVERSE_MARKET_SIZES[m]}종목)을 받아 와 "
                               "표에 보여 줍니다. 최소 한 시장은 켜져 있어야 합니다.",
                               f"{label}: when on, Refresh fetches this market (top {UNIVERSE_MARKET_SIZES[m]} names) "
@@ -211,38 +206,16 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             btn.clicked.connect(lambda checked, mk=m: self._on_market_toggled(mk, checked))
             bar.addWidget(btn)
             self._market_buttons[m] = btn
-
-    def _build_add_row(self) -> QHBoxLayout:
-        # Add a ticker: its own row under the filters (docs/ui.md 8.17), so the
-        # first row is filters | analysis + primary. The market combo has no
-        # caption since 2026-11-15 (its tooltip says it is not the filter);
-        # NASDAQ / NYSE add single US names (rows of those markets have no
-        # toggle and always show, universe_views.matches).
-        add_row = QHBoxLayout()
-        add_row.setSpacing(6)
-        self.market_combo = QComboBox()
-        for value, label in ADD_TICKER_MARKETS:
-            self.market_combo.addItem(label, value)
-        self.market_combo.setMinimumWidth(100)
-        self.market_combo.setToolTip(tr("추가할 종목의 시장(위의 시장 필터와 별개)",
-                                         "Market of the ticker to add (separate from the market filter above)"))
-        self.market_combo.currentIndexChanged.connect(self._on_add_market_changed)
-        add_row.addWidget(self.market_combo)
-
-        self.ticker_input = QLineEdit()
-        self.ticker_input.setPlaceholderText(self._add_placeholder("KOSPI"))
-        self.ticker_input.setMinimumWidth(140)
-        self.ticker_input.setMaximumWidth(180)
-        self.ticker_input.returnPressed.connect(self.add_ticker)
-        add_row.addWidget(self.ticker_input)
-
-        self.add_ticker_btn = make_button(tr("종목 추가", "Add Ticker"), on_click=self.add_ticker)
-        add_row.addWidget(self.add_ticker_btn)
-        add_row.addStretch()
-        return add_row
+        bar.addSpacing(self._GROUP_GAP)   # markets | status filter
 
     def _build_action_buttons(self, bar: QHBoxLayout) -> None:
-        """Right end of the toolbar: Trend Score, then the primary Refresh."""
+        """Right end of the toolbar: Add Ticker, Trend Score, then the primary
+        Refresh. Add Ticker opens a small dialog (user direction 2026-11-16;
+        it was the toolbar's own second row)."""
+        self.add_ticker_btn = make_button(tr("종목 추가", "Add Ticker"), on_click=self._on_add_ticker_clicked)
+        self.add_ticker_btn.setToolTip(tr("유니버스에 없는 종목을 시장과 코드로 하나 추가합니다",
+                                          "Add one name that is not in the universe, by market and ticker"))
+        bar.addWidget(self.add_ticker_btn)
         # Weekly "trend + pullback" Top/Bottom recommendation
         # (trend_following.md 2-5; scoring.py via TrendScoreThread). Checked
         # while a run's Top/Bottom rows are pinned to the top of the table;
@@ -255,6 +228,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
                                            "restore the default order"))
         self.trend_score_btn.clicked.connect(self._on_trend_score_clicked)
         bar.addWidget(self.trend_score_btn)
+        bar.addSpacing(self._GROUP_GAP)   # analysis | primary action
 
         # Refresh is this tab's one primary action (docs/ui.md 1.6 / 8.1).
         self.refresh_btn = make_button(tr("새로고침", "Refresh"), "primary", self.refresh_data)
@@ -285,15 +259,44 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         universe_layout.addLayout(footer)
 
     _FILTER_BTN_W = 80
+    _GROUP_GAP = 12   # between toolbar groups (docs/ui.md 8.17: 12~16px)
+    # Shorter toggle text where the MARKETS label sets every toolbar button's
+    # width (user direction 2026-11-16: "NASDAQ 100" made the one-row toolbar
+    # 1558px wide). The tooltip and saved-view names keep the full label; the
+    # exchange-vs-index confusion of 2026-11-15 is gone since Add Ticker's
+    # market choice moved into its dialog (KOSPI / KOSDAQ / 미국).
+    _MARKET_BUTTON_TEXT = {"NASDAQ 100": "NASDAQ"}
     # (highlight status to show, button label): "" = no status filter. The
     # status values are the ones custom_settings.json stores ("On" = Held,
     # "Tg" = Target; docs/ui.md 1.7).
-    _STATUS_FILTER_STATES = (("", tr("전체", "All")), ("On", tr("보유", "Held")), ("Tg", tr("관심", "Target")))
+    _STATUS_FILTER_STATES = (("", tr("종목(전체)", "Stocks (All)")), ("On", tr("종목(보유)", "Stocks (Held)")),
+                             ("Tg", tr("종목(관심)", "Stocks (Target)")))
 
     @classmethod
     def _filter_button(cls, text: str, checked: bool = False) -> QPushButton:
         # checked state: ui/theme.py's QPushButton:checked rule
         return make_button(text, width=cls._FILTER_BTN_W, checkable=True, checked=checked)
+
+    def _unify_button_widths(self) -> None:
+        """Give every push button on this tab's toolbar rows one width: the
+        widest label any of them can show (incl. all three status labels and
+        "필터 (n)"), never below _FILTER_BTN_W, so no label change resizes a
+        button (user direction 2026-11-16)."""
+        variants = {
+            self.tg_filter_btn: [label for _, label in self._STATUS_FILTER_STATES],
+            self.filters_btn: [tr("필터", "Filters"), tr("필터 (99)", "Filters (99)")],
+        }
+        buttons = [*self._market_buttons.values(), self.tg_filter_btn, self.filters_btn,
+                   self.add_ticker_btn, self.trend_score_btn, self.refresh_btn]
+        width = self._FILTER_BTN_W
+        for b in buttons:
+            current = b.text()
+            for label in variants.get(b, [current]):
+                b.setText(label)
+                width = max(width, b.sizeHint().width())
+            b.setText(current)
+        for b in buttons:
+            b.setFixedWidth(width)
 
     # ---Markets (docs/ui.md 2.1) ---
     def selected_markets(self) -> list:
@@ -427,12 +430,15 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         return self._STATUS_FILTER_STATES[self._status_filter_idx][0]
 
     def _on_status_filter_clicked(self):
-        """Advance the status filter button: All -> Held -> Target -> All."""
-        self._status_filter_idx = (self._status_filter_idx + 1) % len(self._STATUS_FILTER_STATES)
-        status, label = self._STATUS_FILTER_STATES[self._status_filter_idx]
+        """Advance the status filter: 종목(전체) -> 종목(보유) -> 종목(관심) -> 종목(전체)."""
+        self._set_status_filter((self._status_filter_idx + 1) % len(self._STATUS_FILTER_STATES))
+        self.filter_table()
+
+    def _set_status_filter(self, idx: int):
+        self._status_filter_idx = idx
+        status, label = self._STATUS_FILTER_STATES[idx]
         self.tg_filter_btn.setText(label)
         self.tg_filter_btn.setChecked(bool(status))   # override the click's own toggle
-        self.filter_table()
 
     def load_custom_settings(self):
         self.custom_settings = {"added": [], "deleted": [], "highlights": {}}
@@ -507,18 +513,17 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.save_custom_settings()
         self.table.update_row_status(ticker, highlights.get(ticker, "-"))
 
-    @staticmethod
-    def _add_placeholder(market: str) -> str:
-        if market in ("KOSPI", "KOSDAQ"):
-            return tr("코드 예: 005930", "Ticker, e.g. 005930")
-        return tr("티커 예: AAPL", "Ticker, e.g. AAPL")
+    def _on_add_ticker_clicked(self):
+        dlg = AddTickerDialog(self._add_market, self)
+        if dlg.exec() != AddTickerDialog.DialogCode.Accepted:
+            return
+        market, ticker = dlg.values()
+        self._add_market = market
+        self.add_ticker(market, ticker)
 
-    def _on_add_market_changed(self, _index: int = 0):
-        self.ticker_input.setPlaceholderText(self._add_placeholder(self.market_combo.currentData()))
-
-    def add_ticker(self):
-        ticker = self.ticker_input.text().strip().upper()
-        market = self.market_combo.currentData()
+    def add_ticker(self, market: str, ticker: str):
+        """Fetch one name typed in the Add Ticker dialog and add it to the table."""
+        ticker = ticker.strip().upper()
         if not ticker:
             return
 
@@ -581,7 +586,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
                                                  f"'{ticker}' is already in the table."))
             return
 
-        target_market = result.get('market', '') or self.market_combo.currentData()
+        target_market = result.get('market', '') or self._add_market
         added_list = self.custom_settings.setdefault("added", [])
         if not any(x.get("ticker") == ticker for x in added_list):
             added_list.append({"market": target_market, "ticker": ticker})
@@ -595,7 +600,6 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._sort_all_data()
         self._reload_table()
         self.filter_table()  # restore filter state
-        self.ticker_input.clear()
         self.update_total_status(prefix=tr(f"'{result.get('name', ticker)}' ({ticker})을(를) 추가했습니다.",
                                                    f"Added '{result.get('name', ticker)}' ({ticker})."))
         self._save_universe_cache()
@@ -671,9 +675,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             self.set_markets(state["market"], refilter=False)
         self._status_filter_idx = next(
             (i for i, (s, _) in enumerate(self._STATUS_FILTER_STATES) if s == state["status"]), 0)
-        status, label = self._STATUS_FILTER_STATES[self._status_filter_idx]
-        self.tg_filter_btn.setText(label)
-        self.tg_filter_btn.setChecked(bool(status))
+        self._set_status_filter(self._status_filter_idx)
         self.search_input.blockSignals(True)
         self.search_input.setText(state["search"])
         self.search_input.blockSignals(False)

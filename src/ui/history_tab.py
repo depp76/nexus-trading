@@ -10,7 +10,7 @@ import datetime as _dt
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
-    QTableWidget, QLineEdit, QHeaderView, QComboBox, QMessageBox, QDialog, QInputDialog, QMenu,
+    QTableWidget, QLineEdit, QHeaderView, QPushButton, QMessageBox, QDialog, QInputDialog, QMenu,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSettings, QTimer
 from PyQt6.QtGui import QKeySequence, QShortcut
@@ -74,8 +74,15 @@ def _toolbar_hbox() -> QHBoxLayout:
 
 # Message boxes are titled with the tab name (docs/ui.md 8.5).
 _TITLE = "Trading History"
-# Period filter keys (1M/3M/YTD/All) -> button label; the keys stay what the filter code compares.
-_PERIOD_LABELS = {"All": tr("전체", "All")}
+# Toolbar cycle buttons (user direction 2026-11-16, like the Universe
+# 종목(전체) button): (value, label) in click order, the first is the default
+# and shows unchecked. The values stay what the filter code compares.
+_PERIOD_STATES = (("All", tr("기간(전체)", "Period (All)")), ("1M", tr("기간(1개월)", "Period (1M)")),
+                  ("3M", tr("기간(3개월)", "Period (3M)")), ("YTD", tr("기간(올해)", "Period (YTD)")))
+_GROUP_STATES = (("status", tr("보기(상태별)", "View (Status)")), ("month", tr("보기(월별)", "View (Month)")))
+_STALE_STATES = ((True, tr("시세(30일 숨김)", "Prices (30d hidden)")), (False, tr("시세(모두 표시)", "Prices (All)")))
+_GROUP_GAP = 12      # between toolbar groups (docs/ui.md 8.17: 12~16px)
+_MIN_BTN_W = 80      # floor of the one shared toolbar button width
 
 
 class TradingHistoryTab(ThreadOwnerMixin, QWidget):
@@ -215,126 +222,122 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         edit.textEdited.connect(lambda t, e=edit: _fmt_num_edit(e, t))
         return edit
 
-    def _build_controls_row(self) -> QVBoxLayout:
-        """The tab's one toolbar row (docs/ui.md 8.4): table filters on the
-        left -- holdings jump, company search, period, grouping, the 30-day
-        rule -- and actions on the right with Add Trade, the primary, last.
-        (Consolidated from two dashboard cards and a separate controls row on
-        2026-09-20; reordered to the shared filters-left/actions-right layout
-        on 2026-10-25.)"""
-        # Two rows (docs/ui.md 8.17): finding a stock | the actions with Add
-        # Trade last, then how the table is cut (period, grouping, stale
-        # prices). One row needed ~1,600px and squeezed the inputs.
-        rows = QVBoxLayout()
-        rows.setSpacing(6)
-        rows.setContentsMargins(0, 0, 0, 0)
+    def _build_controls_row(self) -> QHBoxLayout:
+        """The tab's one toolbar row (docs/ui.md 8.17, 2026-11-16 revision,
+        modelled on Trading Universe): live company search, then the three
+        cycle buttons for period / grouping / the 30-day rule | Summary,
+        Fetch Deposit, Reload, and Add Trade (the primary) last. Every button
+        has one width, so a cycle never resizes it."""
         row = _toolbar_hbox()
-        view_row = _toolbar_hbox()
+        self._search_edit = QLineEdit()
+        self._search_edit.setPlaceholderText(tr("종목명 또는 코드 검색", "Search name or ticker"))
+        self._search_edit.setFixedHeight(_BTN_H)
+        self._search_edit.setMinimumWidth(180)
+        self._search_edit.setMaximumWidth(260)
+        self._search_edit.setClearButtonEnabled(True)
+        self._search_edit.textChanged.connect(self._apply_filter)
+        row.addWidget(self._search_edit)
+        row.addSpacing(_GROUP_GAP)
 
-        self._add_stock_finder(row)
-        self._add_period_buttons(view_row)
-        view_row.addSpacing(14)
-        self._add_grouping_buttons(view_row)
-        view_row.addSpacing(14)
-        self._add_stale_toggle(view_row)
-        view_row.addStretch()
-
-        row.addStretch()
-        self._add_action_buttons(row)
-        rows.addLayout(row)
-        rows.addLayout(view_row)
-        return rows
-
-    def _add_stock_finder(self, row: QHBoxLayout) -> None:
-        """Holdings jump combo, company search field and its Search button."""
-        self._open_stocks_combo = QComboBox()
-        self._open_stocks_combo.addItem(tr("보유 종목...", "Current Holdings..."))
-        self._open_stocks_combo.setFixedHeight(_BTN_H)
-        self._open_stocks_combo.setMinimumWidth(150)
-        self._open_stocks_combo.setMaximumWidth(250)
-        self._open_stocks_combo.currentTextChanged.connect(self._on_open_stock_combo_changed)
-        row.addWidget(self._open_stocks_combo)
-
-        self._search_stock_pl_edit = QLineEdit()
-        self._search_stock_pl_edit.setPlaceholderText(tr("종목 검색", "Search company"))
-        self._search_stock_pl_edit.setFixedHeight(_BTN_H)
-        self._search_stock_pl_edit.setMinimumWidth(180)
-        self._search_stock_pl_edit.setMaximumWidth(250)
-        self._search_stock_pl_edit.returnPressed.connect(self._on_search_stock_pl)
-        row.addWidget(self._search_stock_pl_edit)
-        row.addWidget(make_button(tr("검색", "Search"), on_click=self._on_search_stock_pl))
-
-    def _add_period_buttons(self, view_row: QHBoxLayout) -> None:
-        """Period filter (mockup "periods": 1M/3M/YTD/All), by buy date."""
         self._period_filter = "All"
-        self._period_buttons = {}
-        for label in ("1M", "3M", "YTD", "All"):
-            btn = make_button(_PERIOD_LABELS.get(label, label), width=48, checkable=True, checked=(label == "All"))
-            btn.clicked.connect(lambda checked, p=label: self._on_period_filter_changed(p))
-            view_row.addWidget(btn)
-            self._period_buttons[label] = btn
-
-    def _add_grouping_buttons(self, view_row: QHBoxLayout) -> None:
-        """Row grouping: by status (closed, then open) or by month (all trades
-        newest first with a month summary row after each month). A view
-        mode, not a column sort -- the month summary rows cannot take part
-        in a header-click sort -- so it is a two-button segment like the
-        period filter (docs/ui.md 8.2; it was a "Sort: Date" toggle whose
-        label named the other mode)."""
         self._sort_by_date = False
-        self._group_buttons = {}
-        for key, label in (("status", tr("상태별", "By Status")), ("month", tr("월별", "By Month"))):
-            btn = make_button(label, width=84, checkable=True, checked=(key == "status"))
-            btn.clicked.connect(lambda _c, k=key: self._on_grouping_changed(k))
-            view_row.addWidget(btn)
-            self._group_buttons[key] = btn
-
-    def _add_stale_toggle(self, view_row: QHBoxLayout) -> None:
-        """docs/ui.md 3.5: the 30-day rule used to be hardcoded with no UI
-        trace of it, so a user seeing a blank current-price cell had no way
-        to know why."""
         self._hide_stale_closed = True
-        self._stale_toggle_btn = make_button(
-            tr("오래된 시세 숨김", "Hide stale prices"), tooltip=tr("매도 후 30일이 지난 거래의 현재가를 숨깁니다", "Hide the current price of trades closed more than 30 days ago"),
-            checkable=True, checked=True)
-        self._stale_toggle_btn.toggled.connect(self._on_stale_toggle_changed)
-        view_row.addWidget(self._stale_toggle_btn)
+        self._period_btn = self._cycle_button(
+            _PERIOD_STATES, tr("누를 때마다 매수일 기준 기간이 바뀝니다: 전체 → 1개월 → 3개월 → 올해",
+                               "Each click changes the buy-date period: All -> 1M -> 3M -> YTD"),
+            lambda: self._on_period_filter_changed(self._next_value(_PERIOD_STATES, self._period_filter)))
+        self._group_btn = self._cycle_button(
+            _GROUP_STATES, tr("상태별: 매도 완료 → 보유 순 / 월별: 매수일 최신순 + 월 요약 행",
+                              "By status: closed then open / By month: newest buys first with a month summary row"),
+            lambda: self._on_grouping_changed("status" if self._sort_by_date else "month"))
+        # docs/ui.md 3.5: the 30-day rule used to be hardcoded with no UI
+        # trace of it, so a blank current-price cell had no explanation.
+        self._stale_btn = self._cycle_button(
+            _STALE_STATES, tr("매도 후 30일이 지난 거래의 현재가를 숨기거나 모두 표시합니다",
+                              "Hide the current price of trades closed more than 30 days ago, or show all"),
+            lambda: self._on_stale_toggle_changed(not self._hide_stale_closed))
+        for btn in (self._period_btn, self._group_btn, self._stale_btn):
+            row.addWidget(btn)
+        row.addStretch()
 
-    def _add_action_buttons(self, row: QHBoxLayout) -> None:
-        """Actions; Add Trade is the tab's one primary (docs/ui.md 8.1)."""
-        row.addWidget(make_button(tr("종목별 요약", "Summary"), on_click=self._show_holdings_summary))
+        self._summary_btn = make_button(tr("종목별 요약", "Summary"), on_click=self._show_holdings_summary)
         self._fetch_dep_btn = make_button(tr("예수금 조회", "Fetch Deposit"), on_click=self._fetch_account_deposit)
-        row.addWidget(self._fetch_dep_btn)
-        row.addWidget(make_button(tr("다시 읽기", "Reload"), on_click=self._reload_current))
-        row.addWidget(make_button(tr("거래 추가", "Add Trade"), "primary", self._show_add_trade_dialog))
+        self._reload_btn = make_button(tr("다시 읽기", "Reload"), on_click=self._reload_current)
+        # Add Trade is the tab's one primary (docs/ui.md 8.1), last.
+        self._add_trade_btn = make_button(tr("거래 추가", "Add Trade"), "primary", self._show_add_trade_dialog)
+        for btn in (self._summary_btn, self._fetch_dep_btn, self._reload_btn):
+            row.addWidget(btn)
+        row.addSpacing(_GROUP_GAP)
+        row.addWidget(self._add_trade_btn)
+        self._unify_button_widths()
+        self._sync_cycle_buttons()
+        return row
 
+    @staticmethod
+    def _cycle_button(states, tooltip: str, on_click) -> QPushButton:
+        btn = make_button(states[0][1], tooltip=tooltip, checkable=True)
+        btn._cycle_labels = [label for _, label in states]
+        btn.clicked.connect(lambda _checked: on_click())
+        return btn
+
+    @staticmethod
+    def _next_value(states, current):
+        values = [v for v, _ in states]
+        return values[(values.index(current) + 1) % len(values)] if current in values else values[0]
+
+    def _unify_button_widths(self) -> None:
+        """One width for every toolbar button: the widest label any of them
+        can show (every cycle label included), never below _MIN_BTN_W."""
+        buttons = [self._period_btn, self._group_btn, self._stale_btn, self._summary_btn,
+                   self._fetch_dep_btn, self._reload_btn, self._add_trade_btn]
+        width = _MIN_BTN_W
+        for b in buttons:
+            current = b.text()
+            for label in getattr(b, "_cycle_labels", [current]):
+                b.setText(label)
+                width = max(width, b.sizeHint().width())
+            b.setText(current)
+        for b in buttons:
+            b.setFixedWidth(width)
+
+    def _sync_cycle_buttons(self) -> None:
+        """Label and checked state of the three cycle buttons from the current
+        filter state; checked = not the default, so a narrowed table shows."""
+        for btn, states, value in ((self._period_btn, _PERIOD_STATES, self._period_filter),
+                                   (self._group_btn, _GROUP_STATES, "month" if self._sort_by_date else "status"),
+                                   (self._stale_btn, _STALE_STATES, self._hide_stale_closed)):
+            label = next((lbl for v, lbl in states if v == value), states[0][1])
+            btn.setText(label)
+            btn.setChecked(value != states[0][0])
 
     # ---Language switch (docs/ui.md 8.20): MainWindow rebuilds every tab in
     # the new language and carries this state over. Plain values only (the
     # ui classes themselves are re-imported).
     def export_state(self) -> dict:
         return {"period": self._period_filter, "by_month": self._sort_by_date,
-                "hide_stale": self._hide_stale_closed}
+                "hide_stale": self._hide_stale_closed, "search": self._search_edit.text()}
 
     def import_state(self, state: dict) -> None:
-        self._stale_toggle_btn.setChecked(state["hide_stale"])
+        self._search_edit.blockSignals(True)
+        self._search_edit.setText(state.get("search", ""))
+        self._search_edit.blockSignals(False)
+        self._hide_stale_closed = state["hide_stale"]
         self._on_grouping_changed("month" if state["by_month"] else "status")
         self._on_period_filter_changed(state["period"])
 
     def _on_grouping_changed(self, key: str):
         self._sort_by_date = key == "month"
-        for k, btn in self._group_buttons.items():
-            btn.setChecked(k == key)
+        self._sync_cycle_buttons()
         self._apply_filter()
 
     def _on_period_filter_changed(self, period: str):
         self._period_filter = period
-        for p, btn in self._period_buttons.items():
-            btn.setChecked(p == period)
+        self._sync_cycle_buttons()
         self._apply_filter()
 
-    def _on_stale_toggle_changed(self, checked: bool):
-        self._hide_stale_closed = checked
+    def _on_stale_toggle_changed(self, hide: bool):
+        self._hide_stale_closed = hide
+        self._sync_cycle_buttons()
         self._apply_filter()
 
     def _build_history_table(self) -> QTableWidget:
@@ -382,12 +385,21 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         return [self._row_data[r] for r in rows if r < len(self._row_data) and self._row_data[r][0] != "monthly"]
 
     def _on_table_context_menu(self, pos):
-        if not self._selected_trade_records():
+        targets = self._selected_trade_records()
+        if not targets:
             return
         menu = QMenu(self._table)
+        # The stock's trade history (2026-11-16): it used to open only from
+        # the removed holdings combo (open rows) and Search button (closed rows).
+        history_action = menu.addAction(tr("종목 거래 이력", "Stock Trade History"))
+        history_action.setEnabled(len({rec.get("company", "") for _, rec in targets}) == 1)
         delete_action = menu.addAction(tr("거래 삭제...", "Delete Trade..."))
-        if menu.exec(self._table.viewport().mapToGlobal(pos)) is delete_action:
+        chosen = menu.exec(self._table.viewport().mapToGlobal(pos))
+        if chosen is delete_action:
             self._delete_selected_trades()
+        elif chosen is history_action:
+            kind, rec = targets[0]
+            self._show_stock_history(rec.get("company", ""), is_open=(kind == "open"))
 
     def _delete_selected_trades(self):
         targets = self._selected_trade_records()
@@ -821,104 +833,44 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         set_kpi("cost_basis", f"{agg['cost_total']:,.0f}")
         set_kpi("deposit", None)  # value is the live QLineEdit; only the sub-label updates
 
-    def _on_search_stock_pl(self):
-        query = self._search_stock_pl_edit.text().strip().lower()
-        if not query:
-            return
-            
-        total_pl = 0.0
-        total_buy = 0.0
-        total_sell = 0.0
-        matches = []
-        matched_company = ""
-        
-        for item in getattr(self, '_closed_data', []):
-            comp = item.get("company", "")
-            if query in comp.lower():
-                matches.append(item)
-                total_pl += float(item.get("pl", 0.0))
-                total_buy += float(item.get("buy_amount", 0.0))
-                total_sell += float(item.get("sell_amount", 0.0))
-                if not matched_company:
-                    matched_company = comp
-                
-        if not matches:
-            self.status_message.emit(tr(f"'{self._search_stock_pl_edit.text()}'의 매도 완료 거래가 없습니다", f"No completed trades found for '{self._search_stock_pl_edit.text()}'"))
-            return
-            
-        dlg = StockTradeHistoryDialog(matched_company, matches, total_pl, total_buy, total_sell, self)
-        dlg.exec()
-
-    def _update_open_stocks_combo(self):
-        self._open_stocks_combo.blockSignals(True)
-        self._open_stocks_combo.clear()
-        self._open_stocks_combo.addItem(tr("보유 종목...", "Current Holdings..."))
-        
-        companies = []
+    def _stock_history_rows(self, company: str, is_open: bool):
+        """(matches, total P/L, total buy, total sell) of one company's closed
+        trades, or of its open lots valued at the current price."""
+        matches, total_pl, total_buy, total_sell = [], 0.0, 0.0, 0.0
+        if not is_open:
+            for item in self._closed_data:
+                if item.get("company", "") == company:
+                    matches.append(item)
+                    total_pl += float(item.get("pl", 0.0))
+                    total_buy += float(item.get("buy_amount", 0.0))
+                    total_sell += float(item.get("sell_amount", 0.0))
+            return matches, total_pl, total_buy, total_sell
         for item in self._open_data:
-            comp = item.get("company", "")
-            if comp and comp not in companies:
-                companies.append(comp)
-                
-        companies.sort()
-        for comp in companies:
-            self._open_stocks_combo.addItem(comp)
-            
-        self._open_stocks_combo.setCurrentIndex(0)
-        self._open_stocks_combo.blockSignals(False)
+            if item.get("company", "") != company:
+                continue
+            rec = item.copy()
+            curr_price = float(rec.get("curr_price", 0.0))
+            qty = float(rec.get("qty", 0.0))
+            buy_amt = float(rec.get("buy_amount", 0.0))
+            eval_amt = curr_price * qty
+            pl = eval_amt - buy_amt
+            rec.update(sell_date="Open", sell_price=curr_price, sell_qty=qty, sell_amount=eval_amt,
+                       pl=pl, pl_pct=(pl / buy_amt * 100) if buy_amt > 0 else 0.0)
+            matches.append(rec)
+            total_pl += pl
+            total_buy += buy_amt
+            total_sell += eval_amt
+        return matches, total_pl, total_buy, total_sell
 
-    def _on_open_stock_combo_changed(self, text):
-        if not text or text == tr("보유 종목...", "Current Holdings..."):
-            return
-            
-        query = text.strip().lower()
-        total_pl = 0.0
-        total_buy = 0.0
-        total_sell = 0.0
-        matches = []
-        matched_company = ""
-        
-        for item in self._open_data:
-            comp = item.get("company", "")
-            if query == comp.lower():
-                rec = item.copy()
-                curr_price = float(rec.get("curr_price", 0.0))
-                qty = float(rec.get("qty", 0.0))
-                buy_amt = float(rec.get("buy_amount", 0.0))
-                eval_amt = curr_price * qty
-                
-                rec["sell_date"] = "Open"
-                rec["sell_price"] = curr_price
-                rec["sell_qty"] = qty
-                rec["sell_amount"] = eval_amt
-                
-                pl = eval_amt - buy_amt
-                pl_pct = (pl / buy_amt * 100) if buy_amt > 0 else 0.0
-                
-                rec["pl"] = pl
-                rec["pl_pct"] = pl_pct
-                
-                matches.append(rec)
-                total_pl += pl
-                total_buy += buy_amt
-                total_sell += eval_amt
-                
-                if not matched_company:
-                    matched_company = comp
-
+    def _show_stock_history(self, company: str, is_open: bool):
+        """The table's "종목 거래 이력": closed trades of a closed row's company,
+        open lots (at the current price) of an open row's company."""
+        matches, total_pl, total_buy, total_sell = self._stock_history_rows(company, is_open)
         if not matches:
-            self.status_message.emit(tr(f"'{text}'의 거래가 없습니다", f"No trades found for '{text}'"))
-            self._open_stocks_combo.blockSignals(True)
-            self._open_stocks_combo.setCurrentIndex(0)
-            self._open_stocks_combo.blockSignals(False)
+            self.status_message.emit(tr(f"'{company}'의 거래가 없습니다", f"No trades found for '{company}'"))
             return
-            
-        dlg = StockTradeHistoryDialog(matched_company, matches, total_pl, total_buy, total_sell, self, is_open_position=True)
-        dlg.exec()
-        
-        self._open_stocks_combo.blockSignals(True)
-        self._open_stocks_combo.setCurrentIndex(0)
-        self._open_stocks_combo.blockSignals(False)
+        StockTradeHistoryDialog(company, matches, total_pl, total_buy, total_sell, self,
+                                is_open_position=is_open).exec()
 
     # ---Filter / refresh ---
     def _apply_filter(self, *_):
@@ -934,6 +886,15 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         if cutoff is not None:
             closed_src = [r for r in closed_src if r.get("buy_date", "") >= cutoff]
             open_src = [r for r in open_src if r.get("buy_date", "") >= cutoff]
+
+        # Live search (2026-11-16, like Trading Universe): company name or
+        # ticker contains the text, case-insensitive; both open and closed rows.
+        query = self._search_edit.text().strip().lower() if hasattr(self, "_search_edit") else ""
+        if query:
+            def hit(r):
+                return query in str(r.get("company", "")).lower() or query in str(r.get("ticker", "")).lower()
+            closed_src = [r for r in closed_src if hit(r)]
+            open_src = [r for r in open_src if hit(r)]
 
         closed_rows = [("closed", r) for r in closed_src]
         open_rows   = [("open", r) for r in open_src]
@@ -982,7 +943,6 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             )
         finally:
             tbl.setUpdatesEnabled(True)
-        self._update_open_stocks_combo()
         self._fit_columns()
         tbl.scrollToTop()
 

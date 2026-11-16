@@ -77,17 +77,45 @@ class TestAddTickerRow(unittest.TestCase):
         with patch("ui.universe_tab.safe_load_json", side_effect=_no_disk):
             self.tab = UniverseTab()
 
-    def test_markets_caption_and_hint(self):
+    def test_add_dialog_markets_caption_and_hint(self):
         from PyQt6.QtWidgets import QLabel
-        tab = self.tab
-        combo = tab.market_combo
+        from ui.dialogs import AddTickerDialog
+        dlg = AddTickerDialog("KOSPI")
+        combo = dlg.market_combo
         # one US choice (2026-11-15); the stored value is "US"
         self.assertEqual([combo.itemText(i) for i in range(combo.count())], ["KOSPI", "KOSDAQ", "미국"])
         self.assertEqual([combo.itemData(i) for i in range(combo.count())], ["KOSPI", "KOSDAQ", "US"])
-        self.assertFalse([w for w in tab.findChildren(QLabel) if w.text() in ("추가할 시장", "Add to market")])
-        self.assertIn("005930", tab.ticker_input.placeholderText())
+        # the dialog labels its market field so it is not read as the toolbar filter
+        self.assertTrue([w for w in dlg.findChildren(QLabel) if w.text() == "추가할 시장"])
+        self.assertIn("005930", dlg.ticker_input.placeholderText())
+        self.assertFalse(dlg.add_btn.isEnabled())
         combo.setCurrentIndex(combo.findData("US"))
-        self.assertIn("AAPL", tab.ticker_input.placeholderText())
+        self.assertIn("AAPL", dlg.ticker_input.placeholderText())
+        dlg.ticker_input.setText(" ko ")
+        self.assertTrue(dlg.add_btn.isEnabled())
+        self.assertEqual(dlg.values(), ("US", "KO"))
+
+    def test_add_button_opens_the_dialog_and_remembers_the_market(self):
+        tab = self.tab
+        calls = []
+
+        class _Dlg:
+            DialogCode = type("DC", (), {"Accepted": 1})
+
+            def __init__(self, market, parent=None):
+                calls.append(("open", market))
+
+            def exec(self):
+                return 1
+
+            def values(self):
+                return "US", "KO"
+
+        with patch("ui.universe_tab.AddTickerDialog", _Dlg), \
+                patch.object(tab, "add_ticker", side_effect=lambda m, t: calls.append(("add", m, t))):
+            tab.add_ticker_btn.click()
+            tab.add_ticker_btn.click()
+        self.assertEqual(calls, [("open", "KOSPI"), ("add", "US", "KO"), ("open", "US"), ("add", "US", "KO")])
 
     def test_us_add_goes_to_the_fetch_thread_with_its_market(self):
         tab = self.tab
@@ -102,23 +130,24 @@ class TestAddTickerRow(unittest.TestCase):
             def start(self):
                 pass
 
-        tab.market_combo.setCurrentIndex(tab.market_combo.findData("US"))
-        tab.ticker_input.setText("ko")
         with patch("ui.universe_tab.SingleStockFetchThread", _Thread),                 patch.object(tab, "_track_thread", side_effect=lambda t, attr=None: t),                 patch.object(tab, "load_custom_settings"), patch.object(tab, "save_custom_settings"):
-            tab.add_ticker()
+            tab.add_ticker("US", "ko")
         self.assertEqual(started, [("US", "KO")])
 
     def test_market_toggles_show_index_names_and_fit(self):
         tab = self.tab
         labels = {m: b.text().replace("&&", "&") for m, b in tab._market_buttons.items()}
-        self.assertEqual(labels, {"KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ", "NASDAQ 100": "NASDAQ 100", "S&P500": "S&P 500"})
+        # "NASDAQ 100" is shortened on the button (2026-11-16); the tooltip keeps the full name
+        self.assertEqual(labels, {"KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ", "NASDAQ 100": "NASDAQ", "S&P500": "S&P 500"})
+        self.assertIn("NASDAQ 100", tab._market_buttons["NASDAQ 100"].toolTip())
         for b in tab._market_buttons.values():
             self.assertGreaterEqual(b.width(), b.sizeHint().width())
 
 
 class TestStatusFilterButton(unittest.TestCase):
-    """The toolbar's status button cycles blank -> Held -> Target -> blank
-    (user direction 2026-09-29) at a fixed size and drives the table filter."""
+    """The toolbar's status filter is one button cycling 종목(전체) -> 종목(보유)
+    -> 종목(관심) (user direction 2026-11-16) at a fixed size and drives the
+    table filter."""
 
     def setUp(self):
         p = patch("ui.universe_tab.atomic_save_json")
@@ -132,12 +161,13 @@ class TestStatusFilterButton(unittest.TestCase):
         tab = self.tab
         btn = tab.tg_filter_btn
         width0 = btn.width()
-        self.assertEqual(btn.text(), "전체")
+        self.assertEqual(btn.text(), "종목(전체)")
         self.assertFalse(btn.isChecked())
         seen = []
         with patch.object(tab.table, "apply_col_filters", side_effect=lambda *a, **k: seen.append(k["status"])):
             for expected_label, expected_status, expected_checked in (
-                    ("보유", "On", True), ("관심", "Tg", True), ("전체", "", False), ("보유", "On", True)):
+                    ("종목(보유)", "On", True), ("종목(관심)", "Tg", True), ("종목(전체)", "", False),
+                    ("종목(보유)", "On", True)):
                 btn.click()
                 self.assertEqual(btn.text(), expected_label)
                 self.assertEqual(btn.isChecked(), expected_checked)
@@ -145,6 +175,29 @@ class TestStatusFilterButton(unittest.TestCase):
                 self.assertEqual(btn.width(), width0)
         self.assertEqual(seen, ["On", "Tg", "", "On"])
         self.assertEqual(btn.minimumWidth(), btn.maximumWidth())     # fixed width: label changes never resize it
+
+    def test_view_state_sets_the_button(self):
+        tab = self.tab
+        tab.apply_view_state({"status": "Tg"})
+        self.assertEqual(tab.tg_filter_btn.text(), "종목(관심)")
+        self.assertTrue(tab.tg_filter_btn.isChecked())
+        self.assertEqual(tab._status_filter, "Tg")
+
+    def test_every_toolbar_button_has_one_fixed_width(self):
+        tab = self.tab
+        btns = [*tab._market_buttons.values(), tab.tg_filter_btn, tab.filters_btn,
+                tab.add_ticker_btn, tab.trend_score_btn, tab.refresh_btn]
+        widths = {b.width() for b in btns}
+        self.assertEqual(len(widths), 1)
+        for b in btns:
+            self.assertEqual(b.minimumWidth(), b.maximumWidth())
+            self.assertGreaterEqual(b.width(), b.sizeHint().width())
+        for _ in range(3):                                          # every status label fits
+            tab.tg_filter_btn.click()
+            self.assertGreaterEqual(tab.tg_filter_btn.width(), tab.tg_filter_btn.sizeHint().width())
+        tab._ranges = {"tper": [0, 12]}
+        tab._update_filters_button()
+        self.assertEqual(tab.filters_btn.width(), widths.pop())    # "필터 (1)" keeps the size
 
     def test_filter_hides_rows_of_other_statuses(self):
         from ui.widgets import StockTable
