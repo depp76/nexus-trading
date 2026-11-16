@@ -1,5 +1,5 @@
 """ui/strategy_tab.py — StrategyTab: the "Strategy" top-level tab. One page
-per strategy package under src/strategy/ (only Trend Following for now).
+per strategy in strategy.registry with a page (only Trend Following for now).
 
 There are no sub-tabs (reports/strategy_run_settings_ui.md 1): each page's
 toolbar starts with a strategy selector listing every registered strategy,
@@ -12,15 +12,20 @@ from __future__ import annotations
 
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QStackedWidget
 
-from i18n import tr
-from ui.common import ThreadOwnerMixin
-from ui.trend_following_tab import TrendFollowingTab
+import importlib
 
-# (selector label, page class), in list order. A new strategy adds its page
-# here; the page needs a `strategy_combo` and `set_strategy_choices()`.
-STRATEGY_TABS = (
-    (tr("추세추종", "Trend Following"), TrendFollowingTab),
-)
+from strategy.registry import STRATEGIES
+from ui.common import ThreadOwnerMixin
+
+
+def _page_class(spec: str):
+    module, _, cls = spec.partition(":")
+    return getattr(importlib.import_module(module), cls)
+
+
+# (selector label, page class), in strategy.registry order -- the one list of
+# strategies (2026-11-16). A page needs a `strategy_combo` and `set_strategy_choices()`.
+STRATEGY_TABS = tuple((e.title(), _page_class(e.page)) for e in STRATEGIES if e.page)
 
 
 class StrategyTab(ThreadOwnerMixin, QWidget):

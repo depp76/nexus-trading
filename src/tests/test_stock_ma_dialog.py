@@ -257,7 +257,7 @@ class TestStockChart(unittest.TestCase):
             first_btn = next(iter(d._series_buttons.values()))
             self.assertLessEqual(abs(mid(d._right_title) - mid(first_btn)), 1, width)
             self.assertLessEqual(abs(gy(d._right_table) - gy(d._canvas)), 1, width)
-            self.assertGreater(gy(d.trend_section), gy(d._right_table))
+            self.assertGreater(gy(d.strategy_section), gy(d._right_table))
             # the as-of date comes last: on the period buttons' line (the last group)
             # when it fits there, else on the line under it (offscreen fonts are wider)
             self.assertGreaterEqual(mid(d._as_of_lbl) + 2, mid(d._period_buttons["All"]))
@@ -278,7 +278,7 @@ class TestStockChart(unittest.TestCase):
         for _ in range(3):
             QApplication.processEvents()
         self.assertIsNone(d._right_table)
-        title = d.trend_section.layout().itemAt(0).widget()
+        title = d.strategy_section.title_lbl                 # "전략 점검" + combo line (2026-11-16)
         btn = next(iter(d._series_buttons.values()))
         mid = lambda w: w.mapToGlobal(QPoint(0, w.height() // 2)).y()   # noqa: E731
         self.assertLessEqual(abs(mid(title) - mid(btn)), 2)
@@ -374,92 +374,129 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class TestTrendScoreSection(unittest.TestCase):
-    """docs/ui.md 8.10: the MA chart dialog carries the last Trend Score
-    run's breakdown for a KR stock (moved out of the Universe table)."""
+def _c_picks(vid="C1"):
+    from strategy.trend_following.signal_provider import pick_signals
+    from tests.strategy.trend_following.test_scoring import score_book
+    book, _ = score_book()
+    return pick_signals(vid, book, None)
 
-    @staticmethod
-    def _rec():
-        from strategy.trend_following.config import StrategyParams
-        from strategy.trend_following.scoring import compute_scores, weekly_recommendation
-        from tests.strategy.trend_following.test_scoring import score_book
-        book, _ = score_book()
-        p = StrategyParams()
-        return weekly_recommendation(compute_scores(book, p), book, p)
 
-    def test_scored_name_shows_percentiles_rank_and_gate(self):
-        rec = self._rec()
-        top = rec.top[0]
-        d = StockMaDialog(top.ticker, "X", "KOSPI", _df(), trend_rec=rec)
-        sec = d.trend_section
-        self.assertEqual(sec.cards["ma50"].value.text(), f"{top.pct_ma50:.2f}")
-        self.assertEqual(sec.cards["range52"].value.text(), f"{top.pct_range52:.2f}")
-        self.assertEqual(sec.total_lbl.text(), f"{top.week_avg:+.2f}")
-        self.assertIn(f"{top.latest_total:+.2f}", sec.hint_lbl.text())
-        self.assertIn("Top 1", sec.hint_lbl.text())
-        self.assertEqual({b.text() for b in sec.gate_badges.values()}, {"통과"})
+def _ctx(picks=None, items=None, default=""):
+    from strategy.signal_api import SignalCache
+    from ui.strategy_check_section import SignalContext
+    cache = SignalCache()
+    if picks is not None:
+        cache.put(picks)
+    return SignalContext(items=items or [], cache=cache, default_variant=default)
+
+
+class TestStrategyCheckSection(unittest.TestCase):
+    """docs/ui.md 8.22 (2026-11-16): the right panel's "전략 점검" -- a
+    strategy combo and this stock's check under it, drawn from the generic
+    signal_api.StockCheck (the C rows' score breakdown included)."""
+
+    def test_combo_lists_the_markets_variants_and_defaults(self):
+        from unittest.mock import patch
+        from strategy import signal_api
+        d = StockMaDialog("005930", "Samsung", "KOSPI", _df())
+        sec = d.strategy_section
+        self.assertEqual([sec.combo.itemData(i) for i in range(sec.combo.count())], signal_api.variants("KOSPI"))
+        self.assertEqual(sec.variant(), "C1")
+        self.assertFalse(sec.calc_btn.isEnabled())                   # no Universe rows passed
+        d.close()
+        with patch("ui.strategy_check_section.StrategyCheckSection._run_stock"):
+            d = StockMaDialog("005930", "Samsung", "KOSPI", _df(), signal_ctx=_ctx(default="A3"))
+        self.assertEqual(d.strategy_section.variant(), "A3")         # the pinned Universe variant
+        d.close()
+
+    def test_no_section_where_no_strategy_applies(self):
+        d = StockMaDialog("AAPL", "Apple", "NASDAQ 100", _df(), signal_ctx=_ctx(_c_picks()))
+        self.assertIsNone(d.strategy_section)
+        d.close()
+
+    def test_scored_name_shows_score_metrics_and_gates(self):
+        picks = _c_picks()
+        top = picks.detail.top[0]
+        d = StockMaDialog(top.ticker, "X", "KOSPI", _df(), signal_ctx=_ctx(picks))
+        sec = d.strategy_section
+        self.assertEqual(sec.cards["MA50Div"].value.text(), f"{top.pct_ma50:.2f}")
+        self.assertEqual(sec.cards["Range52"].value.text(), f"{top.pct_range52:.2f}")
+        self.assertEqual(sec.score_lbl.text(), f"{top.week_avg:+.2f}")
+        self.assertIn(f"{top.latest_total:+.2f}", sec.score_hint_lbl.text())
+        self.assertIn("상위 1", sec.score_hint_lbl.text())
+        self.assertEqual({b.text() for b in sec.badges.values()}, {"통과"})
+        self.assertIsNone(sec.calc_btn)                               # a run exists: no "계산"
+        self.assertIn("기준", sec.asof_lbl.text())
         d.close()
 
     def test_overheated_name_fails_that_gate(self):
-        rec = self._rec()
-        d = StockMaDialog("SPIKE", "X", "KOSPI", _df(), trend_rec=rec)
-        self.assertEqual(d.trend_section.gate_badges["heat"].objectName(), "badgeFail")
-        self.assertIn("Bottom", d.trend_section.hint_lbl.text())
+        d = StockMaDialog("SPIKE", "X", "KOSPI", _df(), signal_ctx=_ctx(_c_picks()))
+        sec = d.strategy_section
+        self.assertEqual(sec.badges["과열 아님"].objectName(), "badgeFail")
+        self.assertIn("하위", sec.score_hint_lbl.text())
         d.close()
 
-    def test_no_score_keeps_every_row_with_dashes(self):
-        """2026-11-15: before a run, or for an unscored name, the block keeps
-        its rows ("-" values, neutral "-" badges); the "run Trend Score in
-        Trading Universe" line is gone, an unscored name says why in a tooltip."""
-        from ui.trend_score_section import NOT_SCORED_SHORT, NOT_SCORED_TEXT
+    def test_no_run_keeps_every_row_with_dashes(self):
         d = StockMaDialog("005930", "Samsung", "KOSPI", _df())
-        sec = d.trend_section
-        self.assertEqual(sec.total_lbl.text(), "-")
-        self.assertEqual(sec.hint_lbl.text(), "")
+        sec = d.strategy_section
+        self.assertEqual(sec.score_lbl.text(), "-")
         self.assertEqual({c.value.text() for c in sec.cards.values()}, {"-"})
-        self.assertEqual(set(sec.cards), {"ma50", "range52", "r3"})
-        self.assertEqual({(b.objectName(), b.text()) for b in sec.gate_badges.values()}, {("badgeNa", "-")})
+        self.assertEqual(set(sec.cards), {"MA50Div", "Range52", "R3"})
+        self.assertEqual({(b.objectName(), b.text()) for b in sec.badges.values()}, {("badgeNa", "-")})
+        self.assertEqual(len(sec.badges), 4)
         d.close()
-        d = StockMaDialog("THIN", "X", "KOSPI", _df(), trend_rec=self._rec())
-        sec = d.trend_section
-        self.assertEqual(sec.hint_lbl.text(), NOT_SCORED_SHORT)
-        self.assertEqual(sec.hint_lbl.toolTip(), NOT_SCORED_TEXT)
-        self.assertEqual(len(sec.gate_badges), 4)
+        d = StockMaDialog("THIN", "X", "KOSPI", _df(), signal_ctx=_ctx(_c_picks()))
+        self.assertEqual(d.strategy_section.verdict_lbl.text(), "채점 제외")
         d.close()
 
-    def test_block_height_and_type_sizes_do_not_depend_on_the_score(self):
-        from ui.common import FONT_BODY, FONT_HEADING, FONT_KPI
-        rec = self._rec()
-        heights = []
-        for ticker, r in ((rec.top[0].ticker, rec), ("005930", None), ("THIN", rec)):
-            d = StockMaDialog(ticker, "X", "KOSPI", _df(), trend_rec=r)
-            sec = d.trend_section
-            sec.ensurePolished()
-            heights.append(sec.sizeHint().height())
-            self.assertEqual(sec.title_lbl.font().pointSize(), FONT_BODY)
-            self.assertTrue(sec.title_lbl.font().bold())
-            self.assertEqual(sec.total_lbl.font().pointSize(), FONT_KPI)
-            card = sec.cards["ma50"].value
-            card.ensurePolished()
-            self.assertEqual(card.font().pointSize(), FONT_HEADING)
-            d.close()
-        self.assertEqual(len(set(heights)), 1, heights)
-
-    def test_no_section_outside_kr_stocks(self):
-        d = StockMaDialog("AAPL", "Apple", "NASDAQ 100", _df(), trend_rec=self._rec())
-        self.assertIsNone(d.trend_section)
+    def test_stock_variant_runs_a_check_and_renders_it(self):
+        from unittest.mock import patch
+        from strategy.signal_api import CheckRow, StockCheck
+        check = StockCheck("A0", "005930", None, "entry", "진입 신호",
+                           [CheckRow("추세", True)], [CheckRow("추세 이탈", False)])
+        d = StockMaDialog("005930", "Samsung", "KOSPI", _df())
+        sec = d.strategy_section
+        with patch("ui.strategy_check_section.StrategyCheckSection._run_stock") as run:
+            sec.combo.setCurrentIndex(sec.combo.findData("A0"))
+        run.assert_called_once_with("A0")
+        self.assertEqual(sec.status_lbl.text(), "계산 중...")
+        sec._on_check_done(check, "", "A0")
+        self.assertEqual(sec.verdict_lbl.text(), "진입 신호")
+        self.assertEqual(sec.badges["추세"].text(), "통과")
+        self.assertEqual(sec.badges["추세 이탈"].text(), "없음")
+        self.assertIsNone(sec.score_lbl)                              # no score line for A rows
         d.close()
 
-    def test_universe_passes_its_last_run_to_the_dialog(self):
+    def test_calc_runs_the_universe_and_shares_the_result(self):
+        from unittest.mock import patch
+        picks = _c_picks("C2")
+        ctx = _ctx(items=[{"ticker": "X", "name": "X", "market": "KOSPI"},
+                          {"ticker": "AAPL", "name": "A", "market": "NASDAQ 100"}], default="C2")
+        d = StockMaDialog(picks.detail.top[0].ticker, "X", "KOSPI", _df(), signal_ctx=ctx)
+        sec = d.strategy_section
+        self.assertEqual(sec.variant(), "C2")
+        self.assertTrue(sec.calc_btn.isEnabled())
+        with patch("ui.strategy_check_section.SignalPicksThread") as th:
+            sec.calc_btn.click()
+        self.assertEqual(th.call_args.args[1], "C2")
+        self.assertFalse(sec.calc_btn.isEnabled())                    # running
+        th.return_value.variant_id = "C2"
+        with patch.object(sec, "sender", return_value=th.return_value):
+            sec._on_universe_done(picks, "")
+        self.assertIs(ctx.cache.get("C2"), picks)
+        self.assertEqual(sec.verdict_lbl.text(), "매수 후보 (상위 1)")
+        d.close()
+
+    def test_universe_passes_its_context_to_the_dialog(self):
         from unittest.mock import patch
         from ui.universe_tab import UniverseTab
         with patch("ui.universe_tab.safe_load_json", side_effect=lambda _p, default=None: default):
             tab = UniverseTab()
-        from strategy.trend_following.universe_signals import pick_signals
-        from tests.strategy.trend_following.test_scoring import score_book
-        book, _dates = score_book()
-        picks = pick_signals("C1", book, None)
-        tab._on_trend_score_finished(picks, "")      # a C run is remembered for the dialog
+        picks = _c_picks("C3")
+        tab._on_signals_finished(picks, "")      # a pinned run is shared with the dialog
         with patch("ui.ma_chart.StockMaDialog") as dlg:
             tab._on_stock_ma_loaded("UP", "Up", _df(), "", [], "KOSPI", "pct")
-        self.assertIs(dlg.call_args.kwargs["trend_rec"], picks.recommendation)
+        ctx = dlg.call_args.kwargs["signal_ctx"]
+        self.assertIs(ctx.cache, tab._signal_cache)
+        self.assertIs(ctx.cache.get("C3"), picks)
+        self.assertEqual(ctx.default_variant, "C3")

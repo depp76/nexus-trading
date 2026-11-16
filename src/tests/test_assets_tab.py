@@ -216,7 +216,7 @@ class TestSharedToolbarWidth(_AssetsTabTestCase):
         h._settings_save_timer.stop()
         a = TradingRecordTab()
         buttons = [*u._market_buttons.values(), u.tg_filter_btn, u.filters_btn, u.add_ticker_btn,
-                   u.trend_score_btn, u.refresh_btn,
+                   u.signal_btn, u.refresh_btn,
                    h._period_btn, h._group_btn, h._stale_btn, h._summary_btn, h._fetch_dep_btn,
                    h._reload_btn, h._add_trade_btn,
                    a._currency_btn, a._graph_btn, a._add_btn]

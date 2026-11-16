@@ -111,12 +111,11 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
     pan/zoom live in the mixins (see the module docstring)."""
 
     def __init__(self, ticker, name, market, df, investor_data=None, parent=None, change_mode='pct',
-                 trend_rec=None):
+                 signal_ctx=None):
         super().__init__(parent)
-        # The last Trend Score run (scoring.Recommendation) when the dialog was
-        # opened from Trading Universe; KR stocks get its breakdown in the
-        # right panel (ui.trend_score_section, docs/ui.md 8.10).
-        self._trend_rec = trend_rec
+        # "전략 점검" context (ui.strategy_check_section.SignalContext) from the
+        # Universe tab: its KR rows and its shared universe runs.
+        self._signal_ctx = signal_ctx
         self._ticker = ticker
         self._name = name
         self._market = market
@@ -345,13 +344,14 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
     def _build_right_panel(self, is_stock: bool) -> QWidget:
         """The right panel (ui/dialogs/stock_ma_side.py); its pieces stay
         reachable under the attribute names the dialog has always used."""
-        self._side = StockMaSidePanel(self._ticker, self._market, self._investor_data, self._trend_rec, is_stock)
+        self._side = StockMaSidePanel(self._ticker, self._market, self._investor_data, is_stock,
+                                      name=self._name, signal_ctx=self._signal_ctx)
         self._right_panel = self._side.widget
         self._right_layout = self._side.layout
         self._right_title = self._side.title
         self._right_table = self._side.table
         self._right_gap = self._side.gap
-        self.trend_section = self._side.trend_section
+        self.strategy_section = self._side.strategy_section
         return self._side.widget
 
     def _align_right_panel(self) -> None:

@@ -66,7 +66,7 @@ src/
 │   ├── history_tab.py / history_table.py / history_calc.py
 │   ├── assets_tab.py / assets_report.py
 │   ├── strategy_tab.py / trend_following_tab.py / strategy_widgets.py
-│   ├── ma_chart.py / trend_score_section.py
+│   ├── ma_chart.py / strategy_check_section.py
 │   └── dialogs/                         # index_ma·stock_ma·trade_edit·trade_history·assets_graph·holdings_summary·
 │                                        #   assets_report·stock_report·variant_picker·trend_conditions·strategy_trades
 ├── threads/                       # fetch_threads.py, realtime.py, strategy_threads.py
@@ -248,3 +248,5 @@ src/
 | 2026-11-16 | Trading History KPI: 총자산 = 평가액 + 예수금 + 출금(원금이 얼마가 됐는지), 바로 오른쪽에 원금 입력칸, 총자산 아래 '원금의 n배'; '누적 자산' 칸 삭제(같은 값). 같은 날 키움 명세서 대조로 `portfolio.db` 거래 기록 정정(백업 archive/manual_before_kiwoom_fix_20261116_153310). |
 | 2026-11-16 | Trading History KPI 오른쪽 묶음: 매입 원가 · 평가액 · 평가 손익(운용 자금 = 예수금 + 매입 원가 대비 %, `history_calc` `capital`/`pos_pl_pct_capital`) · 예수금 · 출금. 값 아래 설명 문구 삭제(툴팁으로), 입력칸 세 개에 점선 밑줄. 재입금은 출금(순출금)에서 뺌. |
 | 2026-11-16 | Universe '추세 점수' → **'전략 신호'**(메뉴로 A0~C3 선택, `strategy.trend_following.universe_signals`; 스펙 9-29): C는 기존 주간 추천, A는 오늘 진입 신호 / 추세 이탈 신호, B는 52주 고가 근접 순 / 추세 이탈 신호; A3~A5는 수급 로드. 종목 추가 버튼을 검색창 오른쪽으로. `tests/strategy/trend_following/test_universe_signals.py` 8건 등, pytest 918. |
+| 2026-11-16 | MA 차트 오른쪽 칸 '추세 점수' → **'전략 점검'**(전략 콤보 A0~C3; A·B는 이 종목만 즉시 점검 `check_stock`, C는 유니버스 결과 또는 칸 안 '계산'; Universe와 결과 공유). 전략 신호 접점 **`strategy/signal_api.py`**(등록부 + 결과 타입)를 새로 두어 Universe·MA 차트가 전략 패키지를 직접 부르지 않게 함 — 새 전략은 `PROVIDER` 하나로 두 화면에 붙음. 스펙 9-29, docs/ui.md 8.22, pytest 928. |
+| 2026-11-16 | 전략 연결 구조 정리(사용자 지시 1~7): 단일 전략 등록부 `strategy/registry.py`(Strategy 탭 페이지 + 신호 제공자), 공용 입력 `strategy/common/`(`PriceBook` 이동, `load_daily_inputs`), 제공자가 데이터를 직접 로드(`load`)·적용 시장(`markets`)·목록 문구(`labels`)를 선언, 종목 점검을 공통 `StockCheck`(점수·지표 카드 포함)로 그려 `trend_score_section.py` 삭제, `SignalCache`(계산한 날만 유효), 이름 정리(`universe_signals` → `signal_provider`, `TrendScoreThread` → `SignalPicksThread`, `trend_score_btn` → `signal_btn` 등). pytest 931. |

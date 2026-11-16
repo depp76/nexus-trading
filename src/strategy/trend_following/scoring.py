@@ -7,7 +7,7 @@ Layers, all pure except the loader at the bottom:
   compute_scores(book, params)      -> ScoreBook  (date x ticker arrays, 2-5 (1)-(3))
   weekly_recommendation(sb, book)   -> Recommendation (Top N / Bottom N over the last week)
   load_score_inputs(items)          -> PriceBook + KOSPI closes through data.history (network)
-  run_universe_scoring(items)       -> the three above chained, for TrendScoreThread
+  run_universe_scoring(items)       -> the three above chained (C1 alone; the screens use signal_provider)
 
 Spec mapping (9-4 in the md lists the decisions this file makes beyond the
 text): MA50Div / Range52 / MA20Div / R3 are computed from closes as in
@@ -30,18 +30,14 @@ from __future__ import annotations
 from i18n import tr
 
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date
 
 import numpy as np
 import pandas as pd
-import polars as pl
 
-from data.cache import start_date
-from data.history import get_historical_data
 from strategy.trend_following.config import StrategyParams
-from strategy.trend_following.dataset import PriceBook, _check_stop, _say, _to_date, align_frame
+from strategy.trend_following.dataset import PriceBook, _check_stop, _say
 from strategy.trend_following.signals import atr, regime_state, rolling, shift
 
 logger = logging.getLogger(__name__)
@@ -288,63 +284,12 @@ def weekly_recommendation(sb: ScoreBook, book: PriceBook, params: StrategyParams
 # ---------------------------------------------------------------------------
 def load_score_inputs(items: list[dict], progress=None, should_stop=None, max_workers: int = 8,
                       start: str | None = None) -> tuple[PriceBook, np.ndarray | None]:
-    """Daily OHLCV for the Universe rows `items` (dicts with ticker / name /
-    market) on the KOSPI calendar, plus the aligned KOSPI closes (None when
-    the index history is unavailable; the calendar is then the union of the
-    stock dates). The lookback is data.cache.start_date() -- the same key the
-    Universe refresh used for its own history fetch -- so right after a
-    refresh every frame comes from _HIST_CACHE without a network call."""
-    start = start or start_date()
-    tickers = []
-    names, markets = {}, {}
-    for it in items:
-        tk = str(it.get("ticker", "")).strip()
-        if not tk or tk in names:
-            continue
-        tickers.append(tk)
-        names[tk] = str(it.get("name", tk) or tk)
-        markets[tk] = str(it.get("market", "") or "")
-    if not tickers:
-        raise ValueError("No tickers to score")
-
-    _check_stop(should_stop)
-    _say(progress, tr("KOSPI 지수 이력 불러오는 중...", "Loading KOSPI index history..."))
-    try:
-        idx_df = get_historical_data(INDEX_TICKER, start)
-    except Exception:
-        logger.warning("KOSPI index history failed; scoring on the union calendar", exc_info=True)
-        idx_df = None
-
-    _say(progress, tr(f"{len(tickers)}종목 일봉 불러오는 중...", f"Loading daily history for {len(tickers)} names..."))
-    frames: dict[str, pl.DataFrame] = {}
-    done = 0
-    with ThreadPoolExecutor(max_workers=max_workers) as exe:
-        futures = {exe.submit(get_historical_data, tk, start): tk for tk in tickers}
-        for fut in as_completed(futures):
-            _check_stop(should_stop, futures)
-            tk = futures[fut]
-            done += 1
-            try:
-                df = fut.result()
-            except Exception:
-                logger.warning("history fetch failed for %s", tk, exc_info=True)
-                df = None
-            if df is not None and not df.is_empty() and "Close" in df.columns:
-                frames[tk] = df
-            if done % 25 == 0 or done == len(tickers):
-                _say(progress, tr(f"일봉 {done}/{len(tickers)} (사용 가능 {len(frames)})", f"Daily history {done}/{len(tickers)} ({len(frames)} usable)"))
-    if not frames:
-        raise RuntimeError("No usable stock histories were loaded")
-    frames = {tk: frames[tk] for tk in tickers if tk in frames}   # keep the Universe order
-
-    if idx_df is not None and not idx_df.is_empty() and "Date" in idx_df.columns:
-        calendar = sorted({_to_date(d) for d in idx_df.get_column("Date").to_list()})
-        index_close = align_frame(idx_df, calendar, ["Close"])["Close"]
-    else:
-        calendar = sorted({_to_date(d) for df in frames.values() for d in df.get_column("Date").to_list()})
-        index_close = None
-    book = PriceBook.from_frames(frames, calendar, markets, names)
-    return book, index_close
+    """Daily OHLCV for the Universe rows `items` on the KOSPI calendar plus the
+    aligned KOSPI closes (None when unavailable); strategy.common.inputs does
+    the loading (shared with every signal provider since 2026-11-16)."""
+    from strategy.common.inputs import load_daily_inputs
+    inp = load_daily_inputs(items, INDEX_TICKER, False, progress, should_stop, max_workers, start)
+    return inp.book, inp.index_close
 
 
 def run_universe_scoring(items: list[dict], params: StrategyParams | None = None, n_top: int = 10,
