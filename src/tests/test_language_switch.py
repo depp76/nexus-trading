@@ -52,7 +52,7 @@ _SCRIPT = textwrap.dedent(r'''
 
     w.universe_tab.search_input.setText("abc")
     w.trading_history_tab._on_period_filter_changed("3M")
-    w.trading_record_tab._currency_combo.setCurrentText("USD")
+    w.trading_record_tab._currency_btn.click()
     from strategy.trend_following.research import ResearchRequest, run_research
     from tests.strategy.trend_following.helpers import synthetic_dataset
     tf = w.strategy_tab.trend_following_tab
@@ -64,7 +64,7 @@ _SCRIPT = textwrap.dedent(r'''
     def state(win):
         t = win.strategy_tab.trend_following_tab
         return (win.universe_tab.search_input.text(), win.trading_history_tab._period_filter,
-                win.trading_record_tab._currency_combo.currentText(), t.conditions.variant_ids,
+                win.trading_record_tab._currency, t.conditions.variant_ids,
                 t._result is not None, t.compare_table.rowCount(), win.tabs.currentIndex())
 
     def texts(win):

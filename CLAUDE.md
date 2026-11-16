@@ -114,7 +114,7 @@ Dev tooling is in `requirements-dev.txt`
 - **`src/ui/`**: `universe_tab.py` (`UniverseTab`), `history_tab.py` (`TradingHistoryTab`),
   `assets_tab.py` (`TradingRecordTab`), `strategy_tab.py` (`StrategyTab`: a `QStackedWidget` of the
   `STRATEGY_TABS` pages switched by each page's strategy selector; merges their `collect_threads_to_stop()`), `trend_following_tab.py`
-  (`TrendFollowingTab`: run toolbar (전략 selector | 시장 menu | 기간 | 조건... | 중지 백테스트 실행, one line or two fixed lines by width) + status line, rules and run conditions in `ui/dialogs/trend_conditions.py` `TrendConditionsDialog` (`TrendConditions`); docs/ui.md 8.19 -> result head (basis, "다음 실행에 적용", Save) ->
+  (`TrendFollowingTab`: run toolbar (전략 selector | 시장 toggles KOSPI·KOSDAQ·NASDAQ·NYSE | 기간 | 매매전략... | 중지 백테스트, one line or two fixed lines by width; buttons at the shared toolbar width) + status line, rules and run conditions in `ui/dialogs/trend_conditions.py` `TrendConditionsDialog` (`TrendConditions`); docs/ui.md 8.19 -> result head (basis, "다음 실행에 적용", Reset (`clear_result`), Save) ->
   `TrendFollowingResearchThread` -> variant/cost segments, KPI cards, NAV + drawdown chart,
   target-check card, result tabs (comparison, all metrics, monthly, trades,
   warnings), "Save Report" to `reports/`; docs/ui.md 8.10), `strategy_widgets.py` (that
@@ -140,7 +140,7 @@ Dev tooling is in `requirements-dev.txt`
   `QCalendarWidget` rules have no current caller and are kept for the next `QDateEdit`),
   `dialogs/` (one module per
   dialog group: `index_ma`, `stock_ma`, `trade_edit`, `trade_history`, `assets_graph`,
-  `holdings_summary`, `assets_report`, `stock_report`, `variant_picker`, `trend_conditions`, `strategy_trades`; import from `ui.dialogs`;
+  `holdings_summary`, `assets_report`, `stock_report`, `variant_picker`, `trend_conditions`, `strategy_trades`, `add_ticker`, `add_record`; import from `ui.dialogs`;
   `StockMaDialog` is split into mixins over shared dialog state since 2026-11-15: `stock_ma_plot`
   (panels, slots, margins, end labels, toggles), `stock_ma_hover` (crosshair/hover), `stock_ma_view`
   (pan/zoom/period/autofit), plus `stock_ma_side` (right panel), `stock_ma_consts`, `stock_ma_helpers`),
@@ -151,7 +151,7 @@ Dev tooling is in `requirements-dev.txt`
   to KOSPI), `common.py`
   (`create_font` + the `FONT_*` point-size scale, `FONT_FAMILIES` / `FONT_FAMILY_CSS`,
   `apply_matplotlib_font`, status color constants,
-  input validators, `make_button`/`BTN_H` (every push button), `setup_table`/`TABLE_ROW_H` (every data
+  input validators, `make_button`/`BTN_H` (every push button), `register_toolbar_labels`/`toolbar_button_width`/`fix_toolbar_widths` (the one toolbar button width shared by Universe, History, Total Assets and Strategy; each tab module registers its labels), `setup_table`/`TABLE_ROW_H` (every data
   table), `make_footer_label`/`TAB_MARGINS`/`TAB_SPACING` (the tab skeleton), `FlowLayout` (wrapping
   rows; the Strategy settings form), `install_table_keys`
   (Ctrl+C/Enter on a table), `KpiStrip` (History's KPI row), `KpiCard` / `make_badge` (Strategy

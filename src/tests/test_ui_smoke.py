@@ -80,7 +80,6 @@ def _all_tabs_patched():
          patch("ui.assets_tab.trade_db.load_asset_records", return_value=[]), \
          patch("ui.assets_tab.trade_db.save_asset_records"), \
          patch("ui.assets_tab.TradingRecordTab._start_metrics_preload"), \
-         patch("ui.assets_tab.TradingRecordTab._schedule_daily_sync"), \
          patch("trade_db.get_open_trades", return_value=[]), \
          patch("trade_db.load_all_trades", return_value=[]), \
          patch("trade_db.upsert_trade"), \

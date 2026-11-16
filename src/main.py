@@ -30,6 +30,7 @@ from ui.common import (
     cancel_thread,
     refresh_state,
     RefreshFailures,
+    EqualWidthTabBar,
 )
 from ui.language_switch import LanguageSwitch
 from ui.theme import app_qss, app_palette, apply_matplotlib_theme, TEXT_EMPTY
@@ -79,7 +80,7 @@ from ui.strategy_tab import StrategyTab
 # MainWindow built next uses the fresh modules (docs/ui.md 8.20).
 _UI_NAMES = {
     "ui.common": ("create_font", "apply_matplotlib_font", "FONT_FAMILY_CSS", "FONT_TITLE", "FONT_HEADING",
-                  "FONT_BODY", "cancel_thread", "refresh_state", "RefreshFailures"),
+                  "FONT_BODY", "cancel_thread", "refresh_state", "RefreshFailures", "EqualWidthTabBar"),
     "ui.language_switch": ("LanguageSwitch",),
     "ui.theme": ("app_qss", "app_palette", "apply_matplotlib_theme", "TEXT_EMPTY"),
     "ui.colors": ("OK", "WARN", "DANGER"),
@@ -234,6 +235,8 @@ class MainWindow(QMainWindow):
         # Tab System
         self.tabs = QTabWidget()
         self.tabs.setObjectName("MainTabs")
+        # Trading Universe ~ Strategy all one width (user direction 2026-11-16).
+        self.tabs.setTabBar(EqualWidthTabBar())
         main_layout.addWidget(self.tabs)
 
         # Schema + one-time JSON migrations before any tab reads the DB

@@ -10,10 +10,14 @@ from ui.dialogs.assets_report import AssetsReportDialog
 from ui.dialogs.variant_picker import VariantPickerDialog
 from ui.dialogs.trend_conditions import TrendConditions, TrendConditionsDialog
 from ui.dialogs.strategy_trades import StrategyTradesDialog
+from ui.dialogs.add_ticker import AddTickerDialog
+from ui.dialogs.add_record import AddRecordDialog
 
 __all__ = [
     "IndexMaDialog", "StockMaDialog",
     "BuyEditDialog", "SellEditDialog", "TradeEntryDialog",
     "StockTradeHistoryDialog", "TotalAssetsGraphDialog", "AssetsReportDialog",
     "VariantPickerDialog", "TrendConditions", "TrendConditionsDialog", "StrategyTradesDialog",
+    "AddTickerDialog",
+    "AddRecordDialog",
 ]

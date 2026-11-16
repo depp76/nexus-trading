@@ -93,14 +93,13 @@ class TestTabButtons(unittest.TestCase):
     def test_strategy_tab(self):
         from ui.trend_following_tab import TrendFollowingTab
         tab = TrendFollowingTab()
-        self._check(tab, "백테스트 실행")
+        self._check(tab, "백테스트")
         self.assertEqual(tab.stop_btn.objectName(), "")
 
     def test_assets_tab_has_no_delete_button(self):
         with patch("ui.assets_tab.trade_db.load_asset_records", return_value=[]), \
              patch("ui.assets_tab.trade_db.save_asset_records"), \
-             patch("ui.assets_tab.TradingRecordTab._start_metrics_preload"), \
-             patch("ui.assets_tab.TradingRecordTab._schedule_daily_sync"):
+             patch("ui.assets_tab.TradingRecordTab._start_metrics_preload"):
             from ui.assets_tab import TradingRecordTab
             tab = TradingRecordTab()
             self._check(tab, "기록 추가")
@@ -110,10 +109,9 @@ class TestTabButtons(unittest.TestCase):
             messages = []
             tab.status_message.connect(messages.append)
             with patch("ui.assets_tab.QMessageBox.information") as info:
-                tab._on_export_clicked()
                 tab._show_graph()
             info.assert_not_called()
-            self.assertEqual(len(messages), 2, messages)
+            self.assertEqual(len(messages), 1, messages)
 
 
 
@@ -359,7 +357,7 @@ class TestButtonOrderAndSizing(unittest.TestCase):
         finally:
             settings.remove(key)
 
-    def test_universe_add_ticker_has_its_own_row(self):
+    def test_universe_toolbar_is_one_row(self):
         from ui.universe_tab import UniverseTab
         with patch.object(UniverseTab, "refresh_data"),              patch("ui.universe_tab.safe_load_json", return_value=None):
             tab = UniverseTab()
@@ -367,9 +365,12 @@ class TestButtonOrderAndSizing(unittest.TestCase):
         tab.show()
         app.processEvents()
         y = lambda w: w.mapTo(tab, w.rect().center()).y()   # noqa: E731
-        self.assertEqual(y(tab.refresh_btn), y(tab.search_input))       # filters | analysis + primary
-        self.assertGreater(y(tab.add_ticker_btn), y(tab.refresh_btn))   # the add group below
-        self.assertEqual(y(tab.market_combo), y(tab.add_ticker_btn))
+        self.assertEqual(y(tab.refresh_btn), y(tab.search_input))       # filters | actions + primary
+        self.assertEqual(y(tab.add_ticker_btn), y(tab.refresh_btn))     # Add Ticker opens a dialog (2026-11-16)
+        x = lambda w: w.mapTo(tab, w.rect().topLeft()).x()   # noqa: E731
+        self.assertLess(x(tab.views_combo), x(tab.add_ticker_btn))
+        self.assertLess(x(tab.add_ticker_btn), x(tab.trend_score_btn))
+        self.assertLess(x(tab.trend_score_btn), x(tab.refresh_btn))
         tab.hide()
 
 

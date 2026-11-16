@@ -18,7 +18,7 @@ from collections.abc import Callable
 from PyQt6.QtCore import QObject, QEvent, Qt, QRect, QSize, QPoint
 from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QTableWidget, QHeaderView, QLabel, QFrame, QHBoxLayout, QVBoxLayout,
-    QWidget, QApplication, QGridLayout, QLayout, QSizePolicy,
+    QWidget, QApplication, QGridLayout, QLayout, QSizePolicy, QTabBar,
 )
 from PyQt6.QtGui import QFont, QPainter, QColor, QKeySequence
 
@@ -123,6 +123,56 @@ def make_button(text: str, role: str | None = None, on_click: Callable | None = 
     if on_click is not None:
         btn.clicked.connect(on_click)
     return btn
+
+
+# One toolbar button width across the Universe, History, Total Assets and
+# Strategy tabs (user direction 2026-11-16; docs/ui.md 8.17): every label any of their
+# toolbar buttons can show (cycle labels included) is registered at import by
+# its tab module, and the width is the widest of them, never below
+# TOOLBAR_MIN_BTN_W. toolbar_button_width() imports those modules first, so
+# the result does not depend on which tab is built first.
+TOOLBAR_MIN_BTN_W = 80
+_TOOLBAR_MODULES = ("ui.universe_tab", "ui.history_tab", "ui.assets_tab", "ui.trend_following_tab")
+_TOOLBAR_LABELS: set[str] = set()
+
+
+def register_toolbar_labels(*labels: str) -> None:
+    _TOOLBAR_LABELS.update(labels)
+
+
+def toolbar_button_width() -> int:
+    import importlib
+    for name in _TOOLBAR_MODULES:
+        importlib.import_module(name)
+    probe = make_button("")
+    width = TOOLBAR_MIN_BTN_W
+    for label in _TOOLBAR_LABELS:
+        probe.setText(label)
+        width = max(width, probe.sizeHint().width())
+    probe.deleteLater()
+    return width
+
+
+def fix_toolbar_widths(buttons) -> int:
+    """Give `buttons` the shared toolbar width; returns it."""
+    width = toolbar_button_width()
+    for b in buttons:
+        b.setFixedWidth(width)
+    return width
+
+
+class EqualWidthTabBar(QTabBar):
+    """A tab bar whose tabs all take the widest tab's width (the main
+    window's Trading Universe ~ Strategy tabs; user direction 2026-11-16,
+    docs/ui.md 8.17). Height and styling come from the normal size hint."""
+
+    def tabSizeHint(self, index: int):
+        size = super().tabSizeHint(index)
+        size.setWidth(max(super(EqualWidthTabBar, self).tabSizeHint(i).width() for i in range(self.count())))
+        return size
+
+    def minimumTabSizeHint(self, index: int):
+        return self.tabSizeHint(index)
 
 
 def button_row(*buttons: QPushButton, leading: tuple = ()) -> QHBoxLayout:
@@ -617,6 +667,12 @@ class KpiCard(QFrame):
         self.label = QLabel(label.upper())
         self.label.setObjectName("kpiLabel")
         self.badge = make_badge("na", "")
+        # The badge's place stays when it is hidden, so a card is as tall
+        # before a result as with one (user direction 2026-11-16: nothing
+        # under the Strategy cards moves after a run).
+        pol = self.badge.sizePolicy()
+        pol.setRetainSizeWhenHidden(True)
+        self.badge.setSizePolicy(pol)
         self.badge.hide()
         self.value = QLabel("-")
         self.value.setObjectName("kpiValue")

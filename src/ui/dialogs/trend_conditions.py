@@ -1,4 +1,4 @@
-"""ui/dialogs/trend_conditions.py — the Trend Following "조건..." dialog
+"""ui/dialogs/trend_conditions.py — the Trend Following "매매전략..." dialog (was "조건...")
 (reports/strategy_run_settings_ui.md 2): the rule list with its fixed
 description pane on top (VariantPickerDialog), and under it the run
 conditions: market-cap top N, liquidity floor, max positions, check weekday,
@@ -74,7 +74,7 @@ class TrendConditionsDialog(VariantPickerDialog):
 
     def __init__(self, conditions: TrendConditions, parent=None):
         super().__init__(conditions.variant_ids, params=conditions.params(), parent=parent)
-        self.setWindowTitle(tr("조건 — 추세추종", "Conditions — Trend Following"))
+        self.setWindowTitle(tr("매매전략 — 추세추종", "Trading Strategy — Trend Following"))
         fit_to_screen(self, 900, 700)
         self.ok_btn.setText(tr("적용", "Apply"))
 
