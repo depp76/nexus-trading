@@ -61,7 +61,8 @@ class TestStockChart(unittest.TestCase):
     def test_panels_and_default_view(self):
         d = self.dlg
         self.assertEqual(list(d._panel_axes), ["price", "vol", "div", "rsi"])
-        self.assertEqual(d._panel_on, {"vol": True, "div": True, "rsi": False})
+        self.assertEqual(d._panel_on, {"vol": True, "div": True, "rsi": True})     # RSI on by default (2026-11-16)
+        self.assertTrue(d._panel_buttons["rsi"].isChecked())
         # Opens with Close + Divergence (user direction 2026-09-29): no MA
         # line visible. A fresh dialog, since the shared one is left in
         # whatever state the other tests chose last.
@@ -121,7 +122,7 @@ class TestStockChart(unittest.TestCase):
         never hides (it used to when no price line was selected)."""
         d = StockMaDialog("005930", "Samsung", "KOSPI", _df())
         _show(d, {"Div"})
-        self.assertEqual(d._visible_panels(), [("price", 3), ("vol", 1), ("div", 1)])
+        self.assertEqual(d._visible_panels(), [("price", 3), ("vol", 1), ("div", 1), ("rsi", 1)])
         self.assertTrue(d._panel_axes["price"].get_visible())
         self.assertEqual(set(d._end_labels), {"Close"})
         _show(d, set())
@@ -291,6 +292,7 @@ class TestStockChart(unittest.TestCase):
     def test_panel_toggles_regrid(self):
         d = self.dlg
         _show(d, {"Close", "Div"})
+        d._set_panel("rsi", False)
         self.assertEqual(d._visible_panels(), [("price", 3), ("vol", 1), ("div", 1)])
         d._set_panel("rsi", True)
         self.assertEqual([k for k, _ in d._visible_panels()], ["price", "vol", "div", "rsi"])
@@ -298,7 +300,6 @@ class TestStockChart(unittest.TestCase):
         d._set_panel("vol", False)
         self.assertFalse(d._panel_axes["vol"].get_visible())
         d._set_panel("vol", True)
-        d._set_panel("rsi", False)
 
     def test_crosshair_and_badges(self):
         d, ax = self.dlg, self.dlg._panel_axes["price"]
