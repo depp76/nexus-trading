@@ -1,12 +1,15 @@
 """ui/strategy_check_section.py — the MA chart dialog's "전략 점검" block
-(user direction 2026-11-16): pick a strategy variant in the combo and see
+(user direction 2026-11-16): pick a strategy variant in the menu and see
 this stock's conditions under it, whether or not the Trading Universe has a
 "전략 신호" run pinned.
 
 Everything comes through strategy.signal_api and is drawn from its generic
 ``StockCheck``, so a newly registered strategy shows up here without touching
 this file:
-  * the combo lists the variants that apply to the stock's market;
+  * the strategy button's menu has a check box per variant that applies to
+    the stock's market, exactly one ticked (user direction 2026-11-16: the
+    same check-box menu as the Universe "전략 신호" button); the button shows
+    the ticked one;
   * a variant that needs the whole universe (a rank within it; trend
     following C1-C3) reads a universe run of that variant from the shared
     ``SignalCache`` -- the Universe tab's own run when there is one -- and
@@ -14,10 +17,16 @@ this file:
   * any other variant is checked for this stock alone in a worker
     (strategy_threads.StrategyCheckThread), once per dialog and variant.
 
-Layout, top to bottom: title + combo, as-of caption, verdict (PROFIT for
+Layout, top to bottom: title + strategy button, as-of caption, verdict (PROFIT for
 entry/hold, LOSS for exit), the score line and metric cards when the check
 has them, the entry conditions (Pass / Fail badges), the exit conditions
 (Hit / None badges), a note, and the "계산" row when a universe run is missing.
+
+One height whatever is picked (user direction 2026-11-16, docs/ui.md 8.22):
+the body is fixed to the tallest of every offered variant's layout templates
+(``signal_api.templates``: all rows, widest values, longest verdict) at the
+body's current width, and its content sits at the top. Only a width change
+(dialog resize, splitter move) measures again.
 """
 from __future__ import annotations
 
@@ -26,7 +35,9 @@ from dataclasses import dataclass, field
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
-from PyQt6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (
+    QCheckBox, QGridLayout, QHBoxLayout, QLabel, QMenu, QSizePolicy, QVBoxLayout, QWidget, QWidgetAction,
+)
 
 from i18n import tr
 from strategy import signal_api
@@ -71,6 +82,11 @@ class StrategyCheckSection(QWidget):
         self.check = None                        # the StockCheck on screen
         self.calc_btn = None
         self.status_lbl = None
+        self.verdict_lbl = None
+        self.score_lbl = None
+        self.score_hint_lbl = None
+        self.badges: dict[str, QLabel] = {}
+        self.cards: dict[str, KpiCard] = {}
 
         box = QVBoxLayout(self)
         box.setContentsMargins(0, 0, 0, 0)
@@ -80,35 +96,79 @@ class StrategyCheckSection(QWidget):
         self.title_lbl = QLabel(tr("전략 점검", "Strategy Check"))
         self.title_lbl.setFont(create_font(FONT_BODY, QFont.Weight.Bold))
         head.addWidget(self.title_lbl)
-        self.combo = QComboBox()
-        for vid in signal_api.variants(market):
-            self.combo.addItem(f"{vid}  {signal_api.title(vid)}", vid)
-        self.combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.combo.setMinimumContentsLength(14)
-        self.combo.view().setMinimumWidth(self.combo.view().sizeHintForColumn(0) + 24)
-        self.combo.setToolTip(tr("이 종목을 점검할 매매전략", "The strategy to check this stock against"))
-        head.addWidget(self.combo, 1)
+        self._variants = signal_api.variants(market)
+        self._variant = None
+        self.variant_btn = make_button("", tooltip=tr("이 종목을 점검할 매매전략", "The strategy to check this stock against"))
+        self.variant_btn.setMinimumWidth(1)          # the label is elided by the button, not the panel width
+        self.variant_menu = self._build_menu()
+        self.variant_btn.setMenu(self.variant_menu)
+        head.addWidget(self.variant_btn, 1)
         box.addLayout(head)
         self.asof_lbl = _caption("")
+        # One height empty or not (an empty label's height came from the
+        # unpolished font, a dated one from the QSS caption font).
+        self.asof_lbl.setText("2026-11-16 기준")
+        self.asof_lbl.ensurePolished()
+        self.asof_lbl.setFixedHeight(max(self.asof_lbl.sizeHint().height(), self.asof_lbl.fontMetrics().height()))
+        self.asof_lbl.setText("")
         box.addWidget(self.asof_lbl)
 
         self.body = QWidget()
-        self._body_box = QVBoxLayout(self.body)
-        self._body_box.setContentsMargins(0, 0, 0, 0)
-        self._body_box.setSpacing(4)
+        self._body_box = self._new_body_box(self.body)
         box.addWidget(self.body)
+        self._heights: dict[int, int] = {}       # body width -> the tallest template height
+        self._fit_width = -1
+        self.body.setMinimumWidth(self.template_min_width())     # one width whatever is picked
 
         start = self._ctx.default_variant or signal_api.default_variant()
-        self.combo.setCurrentIndex(max(self.combo.findData(start), 0))
-        self.combo.currentIndexChanged.connect(self._on_variant_changed)
+        self._select(start if start in self._variants else (self._variants[0] if self._variants else None))
+        # Only what it needs: the space below the investor table goes to the
+        # table, and this block sits right above the "기업 정보" button.
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self._show()
 
     # ------------------------------------------------------------------ state
-    def variant(self) -> str:
-        return self.combo.currentData()
+    def variant(self) -> str | None:
+        return self._variant
 
-    def _on_variant_changed(self, _index: int) -> None:
+    def _build_menu(self) -> QMenu:
+        """A check box per variant, like the Universe "전략 신호" menu."""
+        menu = QMenu(self)
+        panel = QWidget()
+        col = QVBoxLayout(panel)
+        col.setContentsMargins(12, 8, 16, 8)
+        col.setSpacing(6)
+        self.variant_checks: dict[str, QCheckBox] = {}
+        for vid in self._variants:
+            cb = QCheckBox(f"{vid}  {signal_api.title(vid)}")
+            cb.clicked.connect(lambda _c, v=vid: self._on_variant_ticked(v))
+            col.addWidget(cb)
+            self.variant_checks[vid] = cb
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(panel)
+        menu.addAction(action)
+        return menu
+
+    def _select(self, vid) -> None:
+        """Tick `vid` alone and show it on the button."""
+        self._variant = vid
+        for v, cb in self.variant_checks.items():
+            cb.setChecked(v == vid)
+        self.variant_btn.setText(f"{vid}  {signal_api.title(vid)}" if vid else "-")
+
+    def set_variant(self, vid: str) -> None:
+        """Pick `vid` (as ticking its box does)."""
+        if vid not in self.variant_checks or vid == self._variant:
+            return
+        self._select(vid)
         self._show()
+
+    def _on_variant_ticked(self, vid: str) -> None:
+        self.variant_menu.close()
+        if vid == self._variant:
+            self._select(vid)        # ticking the current one again keeps it ticked
+            return
+        self.set_variant(vid)
 
     def _clear(self, lay) -> None:
         while lay.count():
@@ -127,8 +187,82 @@ class StrategyCheckSection(QWidget):
             self._ctx.track(thread)
         self._threads = [t for t in self._threads if t.isRunning()] + [thread]
 
+    @staticmethod
+    def _new_body_box(w: QWidget) -> QVBoxLayout:
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        return lay
+
+    # ------------------------------------------------------------------ height
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._fit_height()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._fit_height()
+
+    def _fit_height(self) -> None:
+        """Fix the body to the tallest template at its current width."""
+        width = self.body.width() if self.body.width() > 0 else self.width()
+        if width <= 0 or width == self._fit_width:
+            return
+        self._fit_width = width
+        h = self._heights.get(width)
+        if h is None:
+            h = self._heights[width] = self.template_height(width)
+        # Compare the constraint, not the current height: the body can be
+        # exactly h tall by chance (a C row) without being fixed to it.
+        if h > 0 and (self.body.minimumHeight() != h or self.body.maximumHeight() != h):
+            self.body.setFixedHeight(h)
+
+    def template_height(self, width: int) -> int:
+        """Height the body needs at `width` for the largest layout of any
+        variant in the menu."""
+        return self._measure(width)[1]
+
+    def template_min_width(self) -> int:
+        """The widest minimum width of any variant's layout (one-line labels
+        such as the score hint), so the panel does not widen per strategy."""
+        return self._measure(0)[0]
+
+    def _measure(self, width: int) -> tuple[int, int]:
+        """(minimum width, height at `width`) over every template of every
+        variant in the menu, drawn into a probe widget with the same code
+        that draws a real check."""
+        saved = (self._body_box, self.check, self.calc_btn, self.status_lbl, self.badges, self.cards,
+                 self.verdict_lbl, self.score_lbl, self.score_hint_lbl, self.asof_lbl.text())
+        probe = QWidget()
+        lay = self._new_body_box(probe)
+        best = min_w = 0
+        try:
+            for vid in self._variants:
+                for t in signal_api.templates(vid):
+                    self._body_box, self.badges, self.cards = lay, {}, {}
+                    self._render(t)
+                    if signal_api.needs_universe(vid):
+                        self._add_calc_row(vid)
+                    probe.ensurePolished()
+                    lay.activate()
+                    min_w = max(min_w, lay.totalMinimumSize().width())
+                    if width > 0:
+                        h = lay.totalHeightForWidth(width) if lay.hasHeightForWidth() else lay.totalSizeHint().height()
+                        best = max(best, h)
+                    self._clear(lay)
+        finally:
+            (self._body_box, self.check, self.calc_btn, self.status_lbl, self.badges, self.cards,
+             self.verdict_lbl, self.score_lbl, self.score_hint_lbl, asof) = saved
+            self.asof_lbl.setText(asof)
+            probe.deleteLater()
+        return min_w, best
+
     # ------------------------------------------------------------------ views
     def _show(self) -> None:
+        self._fill()
+        self._body_box.addStretch(1)            # content at the top of the fixed-height body
+
+    def _fill(self) -> None:
         self._clear(self._body_box)
         self.check, self.calc_btn, self.status_lbl = None, None, None
         self.badges: dict[str, QLabel] = {}
@@ -166,7 +300,7 @@ class StrategyCheckSection(QWidget):
         self.verdict_lbl.setWordWrap(True)
         self._body_box.addWidget(self.verdict_lbl)
 
-        self.score_lbl = None
+        self.score_lbl = self.score_hint_lbl = None
         if check.score:
             line = QHBoxLayout()
             line.setSpacing(8)

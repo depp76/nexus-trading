@@ -278,7 +278,7 @@ class TestStockChart(unittest.TestCase):
         for _ in range(3):
             QApplication.processEvents()
         self.assertIsNone(d._right_table)
-        title = d.strategy_section.title_lbl                 # "전략 점검" + combo line (2026-11-16)
+        title = d.strategy_section.title_lbl                 # "전략 점검" + strategy button line (2026-11-16)
         btn = next(iter(d._series_buttons.values()))
         mid = lambda w: w.mapToGlobal(QPoint(0, w.height() // 2)).y()   # noqa: E731
         self.assertLessEqual(abs(mid(title) - mid(btn)), 2)
@@ -392,15 +392,18 @@ def _ctx(picks=None, items=None, default=""):
 
 class TestStrategyCheckSection(unittest.TestCase):
     """docs/ui.md 8.22 (2026-11-16): the right panel's "전략 점검" -- a
-    strategy combo and this stock's check under it, drawn from the generic
+    strategy check-box menu and this stock's check under it, drawn from the generic
     signal_api.StockCheck (the C rows' score breakdown included)."""
 
-    def test_combo_lists_the_markets_variants_and_defaults(self):
+    def test_menu_lists_the_markets_variants_and_defaults(self):
         from unittest.mock import patch
         from strategy import signal_api
         d = StockMaDialog("005930", "Samsung", "KOSPI", _df())
         sec = d.strategy_section
-        self.assertEqual([sec.combo.itemData(i) for i in range(sec.combo.count())], signal_api.variants("KOSPI"))
+        self.assertEqual(list(sec.variant_checks), signal_api.variants("KOSPI"))
+        self.assertIs(sec.variant_btn.menu(), sec.variant_menu)
+        self.assertEqual([v for v, cb in sec.variant_checks.items() if cb.isChecked()], ["C1"])   # exactly one
+        self.assertTrue(sec.variant_btn.text().startswith("C1"))
         self.assertEqual(sec.variant(), "C1")
         self.assertFalse(sec.calc_btn.isEnabled())                   # no Universe rows passed
         d.close()
@@ -457,7 +460,9 @@ class TestStrategyCheckSection(unittest.TestCase):
         d = StockMaDialog("005930", "Samsung", "KOSPI", _df())
         sec = d.strategy_section
         with patch("ui.strategy_check_section.StrategyCheckSection._run_stock") as run:
-            sec.combo.setCurrentIndex(sec.combo.findData("A0"))
+            sec.variant_checks["A0"].click()
+        self.assertEqual([v for v, cb in sec.variant_checks.items() if cb.isChecked()], ["A0"])
+        self.assertTrue(sec.variant_btn.text().startswith("A0"))
         run.assert_called_once_with("A0")
         self.assertEqual(sec.status_lbl.text(), "계산 중...")
         sec._on_check_done(check, "", "A0")
@@ -500,3 +505,45 @@ class TestStrategyCheckSection(unittest.TestCase):
         self.assertIs(ctx.cache, tab._signal_cache)
         self.assertIs(ctx.cache.get("C3"), picks)
         self.assertEqual(ctx.default_variant, "C3")
+
+
+class TestStrategyCheckKeepsItsSize(unittest.TestCase):
+    """2026-11-16: picking another strategy never resizes the block (height
+    from the tallest layout template, width from the widest)."""
+
+    def test_every_variant_has_the_same_size_and_title_row(self):
+        """With the investor table above it (the usual KR layout), the
+        "전략 점검" title row stays put while the strategy changes, while a
+        stock check is computing and after it arrives."""
+        from unittest.mock import patch
+        from PyQt6.QtWidgets import QApplication
+        from strategy.signal_api import SignalCache
+        from strategy.trend_following.signal_provider import check_stock
+        from tests.strategy.trend_following.helpers import synthetic_dataset
+        from ui.strategy_check_section import SignalContext
+        ds = synthetic_dataset(with_flows=True)
+        cache = SignalCache()
+        cache.put(_c_picks("C2"))
+        ctx = SignalContext(items=[{"ticker": "X", "market": "KOSPI"}], cache=cache)
+        with patch("ui.strategy_check_section.StrategyCheckSection._run_stock"):
+            rows = [{"Date": f"2026-11-{i:02d}", "Close": 59000, "Foreigner": 1234567 * (i % 3 - 1),
+                     "Institution": -500 * i, "Retail": -3 * i} for i in range(1, 21)]
+            d = StockMaDialog("UP", "X", "KOSPI", _df(), investor_data=rows, signal_ctx=ctx)
+            d.resize(1400, 800)
+            d.show()
+            QApplication.processEvents()
+            sec = d.strategy_section
+            sizes = set()
+            title_y = lambda: sec.title_lbl.mapToGlobal(QPoint(0, 0)).y()   # noqa: E731
+            for vid in list(sec.variant_checks):
+                sec.set_variant(vid)
+                QApplication.processEvents()
+                sizes.add((sec.width(), sec.height(), d._right_panel.width(), title_y()))   # computing / C rows
+                if vid[0] in "AB":
+                    sec._on_check_done(check_stock(vid, "UP", ds.stocks, ds.index_close, ds.flow_fi), "", vid)
+                QApplication.processEvents()
+                box = sec._body_box
+                self.assertLessEqual(box.totalHeightForWidth(sec.body.width()), sec.body.height(), vid)   # nothing squeezed
+                sizes.add((sec.width(), sec.height(), d._right_panel.width(), title_y()))
+            self.assertEqual(len(sizes), 1, sizes)
+            d.close()

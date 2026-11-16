@@ -944,7 +944,7 @@ BM2·BM4와 개발 2구간(2021-22 / 2023-24)별 표, BM1 대비 알파·베타�
 - 고정된 행의 식별 칸은 이름 옆에 **짧은 꼬리표만**("A0 상위 1", "A0 이탈 2", "C1 하위 3") — 티커·시장과 정렬 기준 수치(RS, 52주 고가 근접도,
   주간 점수)는 툴팁으로 옮겨 이름이 잘리지 않게 했다.
 - J1(9-19) 판정상 채택 가능한 변형이 없으므로 상태 줄에 "연구용 신호이며 매매 권유가 아닙니다"를 함께 쓴다.
-- **MA 차트 "전략 점검"(2026-11-16, 사용자 결정: 콤보 · C는 "계산" 버튼 · 한 번에)**: 차트 오른쪽 칸의 "추세 점수"를 전략 콤보(A0~C3)로 바꿨다.
+- **MA 차트 "전략 점검"(2026-11-16, 사용자 결정: 콤보 · C는 "계산" 버튼 · 한 번에)**: 차트 오른쪽 칸의 "추세 점수"를 전략 선택(A0~C3, 체크박스 메뉴)으로 바꿨다.
   기본값은 Universe에 고정된 변형, 없으면 C1. `signal_provider.check_stock`이 한 종목의 마지막 거래일 조건을 같은 `compute_features`로 계산한다.
   - A0~A5: 진입 조건(L1은 쓰는 행만 · 유동성 · 추세 3개 · 20일 돌파 · V · F)과 청산 조건(10일 저가 이탈, A5는 FX). 판정 "진입 신호"는
     백테스트의 진입 마스크와 같고(L1 꺼짐은 "신규 매수 보류"로 덧붙임), 같은 날 Universe Top 목록과 종목별로 일치한다(테스트).
@@ -955,7 +955,8 @@ BM2·BM4와 개발 2구간(2021-22 / 2023-24)별 표, BM1 대비 알파·베타�
   - `strategy/registry.py` `STRATEGIES`: 전략 목록은 여기 하나. 항목마다 신호 모듈(`signals`)과 Strategy 탭 페이지(`page`, "모듈:클래스"
     문자열이라 전략 층이 `ui`를 import하지 않음). `ui.strategy_tab.STRATEGY_TABS`도 이 목록에서 만든다.
   - `strategy/signal_api.py`: Universe "전략 신호"와 MA 차트 "전략 점검"은 전략 패키지를 직접 부르지 않고 여기만 거친다.
-    `SignalProvider`(variants · title · markets · needs_universe · labels · load · pick · check)와 결과 타입
+    `SignalProvider`(variants · title · markets · needs_universe · labels · load · pick · check · templates — 마지막은 화면이 크기를
+    고정하도록 가장 큰 점검 모양, `layout_templates`; 행 목록은 실제 점검과 같은 `_stock_rows`/`_score_check`에서 만든다)와 결과 타입
     (`SignalPicks`/`SignalName`/`ListLabels`/`StockCheck`/`CheckRow`/`Metric`), 유니버스 결과 공유 `SignalCache`(계산한 날에만 유효).
     변형 id는 전략 사이에서 겹치면 안 된다(등록 시 오류).
   - 화면에 쓰이는 문구(목록 꼬리표 "상위/하위/이탈", 상태 줄 설명, 시장 필터 이름)는 `labels(vid)`가, 적용 시장은 `markets(vid)`가 정한다.

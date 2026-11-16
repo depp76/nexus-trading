@@ -31,7 +31,7 @@ ten were discarded, and the 2025 hold-out had not been opened as of that record.
 counts as opening it. The scoring mode also feeds the
 Trading Universe tab's "전략 신호" button (was "Trend Score", C1 only; since 2026-11-16 a menu picks any
 variant A0-C3 and `signal_provider.pick_signals` lists its buy candidates / exit signals with the backtest's own
-signal code, spec 9-29; both it and the MA chart's "전략 점검" combo (`ui/strategy_check_section.py`,
+signal code, spec 9-29; both it and the MA chart's "전략 점검" check-box menu (`ui/strategy_check_section.py`,
 `signal_provider.check_stock` per stock, `StrategyCheckThread`) go through `src/strategy/signal_api.py`), which pins the Top 10 / Bottom 10 to the top
 of its table (`SignalPicksThread`; Top rows, then Bottom rows, then the rest in the default
 order, with a `Top n (score)` / `Bottom n (score)` tag in the identity cell; the checkable
@@ -127,7 +127,7 @@ Dev tooling is in `requirements-dev.txt`
   screen's widgets: `KpiRow`, `TargetCheckCard`, `SharpeBarDelegate`, `SegmentRow`, table
   fillers, `DEFAULT_TARGET_SHARPE` (1.0; the run's target comes from the form)/`TARGET_MDD`; the trade list shared by the tab and its popup is
   `dialogs/strategy_trades.py` `StrategyTradesView`), `strategy_check_section.py` (`StrategyCheckSection`: the
-  MA chart dialog's "전략 점검" block -- a combo of the variants that apply to the stock's market and the
+  MA chart dialog's "전략 점검" block -- a check-box menu of the variants that apply to the stock's market and the
   generic `signal_api.StockCheck` drawn as verdict, score line, metric cards and condition badges; the
   Universe tab passes a `SignalContext` (its rows, its `SignalCache`, the pinned variant) through
   `StockMaDialog(signal_ctx=...)`),
@@ -333,8 +333,8 @@ not fixtures. Trading History principal/deposit/withdrawal live in `QSettings`
   strategy docs at the repo root. Since 2026-11-16 a strategy is listed once, in
   `src/strategy/registry.py` (`STRATEGIES`: its Strategy tab page and its signal module); the
   signal module exposes a `PROVIDER` implementing `strategy.signal_api.SignalProvider` (variants,
-  title, markets, needs_universe, labels, load, pick, check), which puts it in the Universe
-  "전략 신호" menu and the MA chart "전략 점검" combo. Screens never import a strategy package for
+  title, markets, needs_universe, labels, load, pick, check, templates), which puts it in the Universe
+  "전략 신호" menu and the MA chart "전략 점검" menu. Screens never import a strategy package for
   current signals; shared price structures and loaders live in `src/strategy/common/`
   (`prices.py` `PriceBook`, `inputs.py` `load_daily_inputs`), which imports no strategy package.
 - `roadmap.md` is the running log of what was done and why (current-state summary, open long-term

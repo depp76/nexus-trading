@@ -231,5 +231,26 @@ class TestSignalCache(unittest.TestCase):
         self.assertNotIn("C2", cache)
 
 
+class TestLayoutTemplates(unittest.TestCase):
+    """layout_templates: the largest shape of each variant's check, with the
+    same rows a real check has (the MA chart block keeps one size)."""
+
+    def test_templates_have_the_real_rows(self):
+        from strategy.trend_following.signal_provider import layout_templates
+        ds = synthetic_dataset(with_flows=True)
+        book, _ = score_book()
+        picks = pick_signals("C1", book, None)
+        for vid in VARIANTS:
+            temps = layout_templates(vid)
+            self.assertTrue(temps, vid)
+            if VARIANTS[vid].mode == "score":
+                real = check_stock(vid, picks.top[0].ticker, book, None, picks=picks if vid == "C1" else None)
+            else:
+                real = check_stock(vid, "UP", ds.stocks, ds.index_close, ds.flow_fi)
+            t = temps[0]
+            self.assertEqual([r.label for r in t.entry], [r.label for r in real.entry], vid)
+            self.assertEqual([r.label for r in t.exit], [r.label for r in real.exit], vid)
+            self.assertEqual([m.label for m in t.metrics], [m.label for m in real.metrics], vid)
+
 if __name__ == "__main__":
     unittest.main()

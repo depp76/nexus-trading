@@ -19,7 +19,9 @@ A provider supplies, per variant id (ids are unique across strategies):
                           strategy.common.inputs for daily prices / flows);
   * ``pick(vid, inputs, n)`` -> ``SignalPicks``;
   * ``check(vid, ticker, inputs, picks)`` -> ``StockCheck`` (``inputs`` is None
-                          for a needs_universe variant, which reads ``picks``).
+                          for a needs_universe variant, which reads ``picks``);
+  * ``templates(vid)``    the largest ``StockCheck`` shapes of the variant (all
+                          rows, widest values), so a screen can keep one height.
 
 Universe runs are shared between the screens through ``SignalCache`` (kept for
 the day they were computed on).
@@ -127,6 +129,7 @@ class SignalProvider(Protocol):
     def load(self, vid: str, items: list[dict], progress=None, should_stop=None): ...
     def pick(self, vid: str, inputs, n: int = 10) -> SignalPicks: ...
     def check(self, vid: str, ticker: str, inputs, picks: SignalPicks | None = None) -> StockCheck: ...
+    def templates(self, vid: str) -> list[StockCheck]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +185,12 @@ def needs_universe(vid: str) -> bool:
 
 def labels(vid: str) -> ListLabels:
     return provider(vid).labels(vid)
+
+
+def templates(vid: str) -> list[StockCheck]:
+    """The variant's largest check shapes (empty when the provider has none)."""
+    fn = getattr(provider(vid), "templates", None)
+    return list(fn(vid)) if fn is not None else []
 
 
 def universe_rows(items: list[dict], vid: str) -> list[dict]:

@@ -208,7 +208,7 @@ class StockMaSidePanel:
             v.addWidget(self.table)
 
         if has_section(self._market):
-            # "전략 점검" (2026-11-16): a strategy combo and this stock's check under it.
+            # "전략 점검" (2026-11-16): a strategy check-box menu and this stock's check under it.
             self.strategy_section = StrategyCheckSection(self._ticker, self._name, self._market, self._signal_ctx)
             if self.table is not None:
                 v.addSpacing(12)
@@ -243,7 +243,8 @@ class StockMaSidePanel:
         first_line_mid = y_in_panel(buttons[0], buttons[0].height() // 2)
         title = self.title
         if title is self.strategy_section and title is not None:
-            title_h = title.combo.sizeHint().height()
+            btn = title.variant_btn         # fixed BTN_H: its sizeHint ignores the fixed height
+            title_h = max(btn.sizeHint().height(), btn.minimumHeight())
         else:
             title_h = title.sizeHint().height() if title is not None else 0
         top = max(0, first_line_mid - title_h // 2)
