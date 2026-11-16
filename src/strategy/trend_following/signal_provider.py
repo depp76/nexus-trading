@@ -46,7 +46,7 @@ DEFAULT_VARIANT = "C1"          # what the Universe button showed before it got 
 MARKETS = ("KOSPI", "KOSDAQ")   # spec 2-0: KR stocks (the scoring and the flows are KR-only)
 INDEX_TICKER = "KS11"           # KOSPI: the calendar and the L1 regime input
 
-__all__ = ["pick_signals", "check_stock", "run_universe_signals", "load_inputs",
+__all__ = ["pick_signals", "check_stock", "layout_templates", "run_universe_signals", "load_inputs",
            "DEFAULT_VARIANT", "MARKETS", "PROVIDER"]
 
 
@@ -172,6 +172,68 @@ def _score_check(vid: str, ticker: str, picks: SignalPicks | None, p: StrategyPa
                       score_caption=caption, score_hint=hint, metrics=metrics)
 
 
+def _stock_rows(v, p: StrategyParams, x) -> tuple[list[CheckRow], list[CheckRow]]:
+    """A0-A5 / B entry and exit rows from the values in `x` (each may be None:
+    the layout template). One place for the row list, so a check and its
+    template always have the same rows."""
+    entry: list[CheckRow] = []
+    if v.regime:
+        entry.append(CheckRow(tr(f"시장 조건: KOSPI > {p.regime_ma}일선, 상승", f"Regime: KOSPI > MA{p.regime_ma}, rising"),
+                              x.regime))
+    entry.append(CheckRow(tr("유동성: 20일 평균 거래대금 ≥ 100억", "Liquidity: 20-day avg value ≥ 10B"),
+                          x.liquid, x.adv_text))
+    entry.append(CheckRow(tr(f"추세: 종가 > {p.trend_ma_long}일선", f"Trend: close > MA{p.trend_ma_long}"), x.above))
+    entry.append(CheckRow(tr(f"추세: {p.trend_ma_long}일선 상승", f"Trend: MA{p.trend_ma_long} rising"), x.rising))
+    entry.append(CheckRow(tr(f"추세: {p.trend_ma_short}일선 > {p.trend_ma_long}일선",
+                             f"Trend: MA{p.trend_ma_short} > MA{p.trend_ma_long}"), x.stacked))
+    if v.mode == "high52":
+        entry.append(CheckRow(tr("52주 고가 근접도", "52w-high proximity"), None, x.prox_text))
+    else:
+        entry.append(CheckRow(tr(f"{p.breakout_window}일 신고가 돌파", f"{p.breakout_window}-day high breakout"),
+                              x.breakout, x.rs_text))
+        if v.volume:
+            entry.append(CheckRow(tr(f"거래량 ≥ {p.volume_ratio_min:g}배", f"Volume ≥ {p.volume_ratio_min:g}x"), x.vol))
+        if v.flow:
+            entry.append(CheckRow(tr(f"수급: 외국인+기관 {p.flow_long_window}일·{p.flow_short_window}일 순매수",
+                                     f"Flows: foreign+inst net buy {p.flow_long_window}d & {p.flow_short_window}d"),
+                                  x.flow))
+    exits = [CheckRow(tr(f"추세 이탈: 종가 < 직전 {p.exit_window}일 최저가",
+                         f"Trend break: close < prior {p.exit_window}-day low"), x.exit_channel)]
+    if v.flow_exit:
+        exits.append(CheckRow(tr(f"수급 청산: {p.flow_exit_window}일 순매도 & 종가 < {p.trend_ma_short}일선",
+                                 f"Flow exit: {p.flow_exit_window}d net sell & close < MA{p.trend_ma_short}"),
+                              x.flow_exit))
+    return entry, exits
+
+
+def layout_templates(variant_id: str, params: StrategyParams | None = None) -> list[StockCheck]:
+    """The largest shapes a check of `variant_id` can take (every row, the
+    widest sample values, the longest verdict and note), for a screen that
+    keeps one height whatever it shows (MA chart "전략 점검", 2026-11-16)."""
+    v = VARIANTS[variant_id]
+    p = v.apply(params or StrategyParams())
+    if v.mode == "score":
+        out = [_score_check(variant_id, "", None, p)]                      # no run: note + "-" rows
+        scored = _score_check(variant_id, "", None, p)
+        scored.verdict_text = tr("매수 후보 (상위 10)", "Buy candidate (Top 10)")
+        scored.score, scored.score_hint = "-0.00", tr("최근 -0.00 · 하위 10", "latest -0.00 · Bottom 10")
+        scored.note = ""
+        out.append(scored)
+        unscored = _score_check(variant_id, "", None, p)
+        unscored.note = tr("유동성 부족, 이력 부족 또는 국내 종목 아님", "Illiquid, too little history, or not a KR stock")
+        out.append(unscored)
+        return out
+    no = False      # every row with a badge: the widest a row gets
+    x = SimpleNamespace(regime=no, liquid=no, adv_text=tr("999,999억", "99,999.9B"), above=no, rising=no,
+                        stacked=no, prox_text="100.0%", breakout=no, rs_text="RS +999.9%p", vol=no, flow=no,
+                        exit_channel=no, flow_exit=no)
+    entry, exits = _stock_rows(v, p, x)
+    verdict = (tr("조건 통과 (순위는 유니버스 계산) · 시장 조건 꺼짐: 신규 매수 보류",
+                  "Eligible (rank needs a universe run) · regime off: no new entries") if v.mode == "high52"
+               else tr("진입 신호 · 시장 조건 꺼짐: 신규 매수 보류", "Entry signal · regime off: no new entries"))
+    return [StockCheck(variant_id, "", None, "none", verdict, entry, exits)]
+
+
 def check_stock(variant_id: str, ticker: str, book: PriceBook | None, index_close: np.ndarray | None,
                 flow_fi: np.ndarray | None = None, params: StrategyParams | None = None,
                 picks: SignalPicks | None = None) -> StockCheck:
@@ -194,49 +256,25 @@ def check_stock(variant_id: str, ticker: str, book: PriceBook | None, index_clos
     rising = ma_l[t] > shift(ma_l, p.trend_slope_lookback)[t]
     stacked = ma_s[t] > ma_l[t]
 
-    entry: list[CheckRow] = []
-    regime_ok = None
-    if v.regime:
-        regime_ok = bool(f.regime_on[t]) if index_close is not None else None
-        entry.append(CheckRow(tr(f"시장 조건: KOSPI > {p.regime_ma}일선, 상승", f"Regime: KOSPI > MA{p.regime_ma}, rising"),
-                              regime_ok))
-    adv = f.adv[t, j]
-    entry.append(CheckRow(tr("유동성: 20일 평균 거래대금 ≥ 100억", "Liquidity: 20-day avg value ≥ 10B"),
-                          bool(f.liquid[t, j]),
-                          tr(f"{adv / 1e8:,.0f}억", f"{adv / 1e9:,.1f}B") if np.isfinite(adv) else ""))
-    entry.append(CheckRow(tr(f"추세: 종가 > {p.trend_ma_long}일선", f"Trend: close > MA{p.trend_ma_long}"), bool(above)))
-    entry.append(CheckRow(tr(f"추세: {p.trend_ma_long}일선 상승", f"Trend: MA{p.trend_ma_long} rising"), bool(rising)))
-    entry.append(CheckRow(tr(f"추세: {p.trend_ma_short}일선 > {p.trend_ma_long}일선",
-                             f"Trend: MA{p.trend_ma_short} > MA{p.trend_ma_long}"), bool(stacked)))
     rs = f.rs[t, j]
-    rs_text = ("RS " + _pct(rs)) if np.isfinite(rs) else ""
-
+    adv = f.adv[t, j]
+    prox = f.high52_prox[t, j]
+    regime_ok = (bool(f.regime_on[t]) if index_close is not None else None) if v.regime else None
+    x = SimpleNamespace(
+        regime=regime_ok, liquid=bool(f.liquid[t, j]),
+        adv_text=tr(f"{adv / 1e8:,.0f}억", f"{adv / 1e9:,.1f}B") if np.isfinite(adv) else "",
+        above=bool(above), rising=bool(rising), stacked=bool(stacked),
+        prox_text=f"{prox * 100:.1f}%" if np.isfinite(prox) else "-",
+        breakout=bool(f.breakout[t, j]), rs_text=("RS " + _pct(rs)) if np.isfinite(rs) else "",
+        vol=bool(f.vol_ok[t, j]), flow=bool(f.flow_ok[t, j]) if f.has_flows else None,
+        exit_channel=bool(f.exit_channel[t, j]), flow_exit=bool(f.flow_exit[t, j]) if f.has_flows else None)
+    entry, exits = _stock_rows(v, p, x)
     if v.mode == "high52":
-        prox = f.high52_prox[t, j]
-        entry.append(CheckRow(tr("52주 고가 근접도", "52w-high proximity"), None,
-                              f"{prox * 100:.1f}%" if np.isfinite(prox) else "-"))
         eligible = bool(f.trend_ok[t, j] and f.liquid[t, j] and f.traded[t, j] and np.isfinite(prox))
     else:
-        entry.append(CheckRow(tr(f"{p.breakout_window}일 신고가 돌파", f"{p.breakout_window}-day high breakout"),
-                              bool(f.breakout[t, j]), rs_text))
-        if v.volume:
-            entry.append(CheckRow(tr(f"거래량 ≥ {p.volume_ratio_min:g}배", f"Volume ≥ {p.volume_ratio_min:g}x"),
-                                  bool(f.vol_ok[t, j])))
-        if v.flow:
-            entry.append(CheckRow(tr(f"수급: 외국인+기관 {p.flow_long_window}일·{p.flow_short_window}일 순매수",
-                                     f"Flows: foreign+inst net buy {p.flow_long_window}d & {p.flow_short_window}d"),
-                                  bool(f.flow_ok[t, j]) if f.has_flows else None))
         # The backtest's entry mask (_breakout_entries) for this column; L1 is reported apart.
         eligible = bool(f.trend_ok[t, j] and f.breakout[t, j] and f.liquid[t, j] and f.traded[t, j]
                         and (not v.volume or f.vol_ok[t, j]) and (not v.flow or f.flow_ok[t, j]))
-
-    exits = [CheckRow(tr(f"추세 이탈: 종가 < 직전 {p.exit_window}일 최저가",
-                         f"Trend break: close < prior {p.exit_window}-day low"),
-                      bool(f.exit_channel[t, j]))]
-    if v.flow_exit:
-        exits.append(CheckRow(tr(f"수급 청산: {p.flow_exit_window}일 순매도 & 종가 < {p.trend_ma_short}일선",
-                                 f"Flow exit: {p.flow_exit_window}d net sell & close < MA{p.trend_ma_short}"),
-                              bool(f.flow_exit[t, j]) if f.has_flows else None))
 
     regime_note = "" if regime_ok is not False else tr(" · 시장 조건 꺼짐: 신규 매수 보류", " · regime off: no new entries")
     if any(r.ok for r in exits):
@@ -311,6 +349,9 @@ class _TrendFollowingSignals:
 
     def pick(self, vid, inputs: DailyInputs, n: int = 10) -> SignalPicks:
         return pick_signals(vid, inputs.book, inputs.index_close, inputs.flow_fi, None, n)
+
+    def templates(self, vid) -> list[StockCheck]:
+        return layout_templates(vid)
 
     def check(self, vid, ticker, inputs: DailyInputs | None, picks=None) -> StockCheck:
         if inputs is None:
