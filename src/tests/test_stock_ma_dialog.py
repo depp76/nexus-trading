@@ -455,8 +455,11 @@ class TestTrendScoreSection(unittest.TestCase):
         from ui.universe_tab import UniverseTab
         with patch("ui.universe_tab.safe_load_json", side_effect=lambda _p, default=None: default):
             tab = UniverseTab()
-        rec = self._rec()
-        tab._on_trend_score_finished(rec, "")      # a run is remembered for the dialog
+        from strategy.trend_following.universe_signals import pick_signals
+        from tests.strategy.trend_following.test_scoring import score_book
+        book, _dates = score_book()
+        picks = pick_signals("C1", book, None)
+        tab._on_trend_score_finished(picks, "")      # a C run is remembered for the dialog
         with patch("ui.ma_chart.StockMaDialog") as dlg:
             tab._on_stock_ma_loaded("UP", "Up", _df(), "", [], "KOSPI", "pct")
-        self.assertIs(dlg.call_args.kwargs["trend_rec"], rec)
+        self.assertIs(dlg.call_args.kwargs["trend_rec"], picks.recommendation)

@@ -42,6 +42,9 @@ from strategy.trend_following.scoring import (
     ScoreBook, ScoredName, Recommendation, compute_scores, weekly_recommendation, load_score_inputs,
     run_universe_scoring,
 )
+from strategy.trend_following.universe_signals import (
+    SignalName, SignalPicks, pick_signals, run_universe_signals, DEFAULT_VARIANT as DEFAULT_SIGNAL_VARIANT,
+)
 
 __all__ = [
     "SPEC_VERSION", "SPEC_FILE", "StrategyParams", "Variant", "VARIANTS", "COST_MULTIPLIERS", "PERIODS",
@@ -57,4 +60,5 @@ __all__ = [
     "ResearchRequest", "ResearchResult", "RunSummary", "run_research", "render_markdown",
     "ScoreBook", "ScoredName", "Recommendation", "compute_scores", "weekly_recommendation", "load_score_inputs",
     "run_universe_scoring", "VariantDescription", "describe_variant",
+    "SignalName", "SignalPicks", "pick_signals", "run_universe_signals", "DEFAULT_SIGNAL_VARIANT",
 ]

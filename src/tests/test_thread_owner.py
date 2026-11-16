@@ -144,9 +144,23 @@ class TestSignalSlotArity(unittest.TestCase):
         tab._refresh_summary()
 
         # eval=1200, cost=1000, deposit=500, withdrawal=100, principal=3000
-        self.assertEqual(tab._kpi_labels["total_asset"][0].text(), "1,700")      # nav = eval + deposit
-        self.assertEqual(tab._kpi_labels["cumulative_asset"][0].text(), "1,800")  # nav + withdrawal
+        # 총자산 = 평가액 + 예수금 + 출금 (2026-11-16), next to 원금
+        self.assertEqual(tab._kpi_labels["total_asset"][0].text(), "1,800")
+        self.assertIn("원금의 0.60배", tab._kpi_labels["total_asset"][0].toolTip())   # on the tooltip only
+        for key, (_val, sub) in tab._kpi_labels.items():                                 # no line under any figure
+            self.assertEqual(sub.text(), "", key)
+            self.assertTrue(sub.isHidden(), key)
+        self.assertNotIn("cumulative_asset", tab._kpi_labels)
+        keys = list(tab._kpi_labels)
+        self.assertEqual(keys[:2], ["total_asset", "principal"])
         self.assertEqual(tab._kpi_labels["cost_basis"][0].text(), "1,000")        # cost_total, not NAV
+        self.assertEqual(tab._kpi_labels["eval_total"][0].text(), "1,200")
+        self.assertEqual(tab._kpi_labels["pos_pl"][0].text(), "+200")
+        self.assertIn("+13.3%", tab._kpi_labels["pos_pl"][0].toolTip())               # 200 / (500 + 1,000)
+        from ui.common import FONT_KPI
+        sizes = {k: (v.font() if v is not None else getattr(tab, f"_{k}_edit").font()).pointSize()
+                 for k, (v, _s) in tab._kpi_labels.items()}
+        self.assertEqual(set(sizes.values()), {FONT_KPI}, sizes)                         # one size for every figure
         self.assertEqual(tab._kpi_labels["total_pl"][0].text(), "-1,200")         # cumulative - principal
         self.assertEqual(emitted, [1800.0])                                       # nav + withdrawal
         tab._settings_save_timer.stop()

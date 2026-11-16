@@ -29,7 +29,9 @@ ten were discarded, and the 2025 hold-out had not been opened as of that record.
 2026-11-13 the Strategy tab's end date defaults to today and a run past `DEV_END` passes
 `allow_holdout=True` and is labelled as including the hold-out (spec 9-23); running one
 counts as opening it. The scoring mode also feeds the
-Trading Universe tab's "Trend Score" button, which pins the weekly Top 10 / Bottom 10 to the top
+Trading Universe tab's "전략 신호" button (was "Trend Score", C1 only; since 2026-11-16 a menu picks any
+variant A0-C3 and `universe_signals.pick_signals` lists its buy candidates / exit signals with the backtest's own
+signal code, spec 9-29), which pins the Top 10 / Bottom 10 to the top
 of its table (`TrendScoreThread`; Top rows, then Bottom rows, then the rest in the default
 order, with a `Top n (score)` / `Bottom n (score)` tag in the identity cell; the checkable
 button unpins on the second click; decisions in spec 9-4). Validation reruns use saved dataset

@@ -617,13 +617,19 @@ class StockTable(QTableWidget):
             "ticker": ticker,
             "name": item.get('name', ticker),
             "market": item.get('market', ''),
-            # The Universe's pinned Trend Score rows carry a "Top 3 (+0.79)" /
-            # "Bottom 7 (-0.41)" tag after the market (universe_tab._sort_all_data).
-            "meta": f"{ticker} · {_market_label(item.get('market', ''))}"
-                    + (f" · {item['trend_rank']}" if item.get('trend_rank') else ""),
+            # A pinned 전략 신호 row shows only its short tag ("A0 상위 3") next
+            # to the name, so the name keeps the room (user direction
+            # 2026-11-16); ticker and market move to the tooltip.
+            "meta": item['trend_rank'] if item.get('trend_rank')
+                    else f"{ticker} · {_market_label(item.get('market', ''))}",
             "status": status,
             "mode": mode,
         })
+        if item.get('trend_rank'):
+            # The pinned row's ticker, market and figure (RS, 52w-high
+            # proximity or weekly score) on the tooltip (2026-11-16).
+            tip = f"{ticker} · {_market_label(item.get('market', ''))} · {item['trend_rank']}"
+            identity_item.setToolTip(tip + (f" · {item['trend_tip']}" if item.get('trend_tip') else ""))
         self.setItem(row, COL_IDENTITY, identity_item)
 
     def _set_price_cells(self, row, price_text, price_raw, changes, mode):

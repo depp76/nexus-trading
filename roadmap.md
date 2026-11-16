@@ -245,3 +245,6 @@ src/
 | 2026-11-16 | MA 차트 RSI 패널을 기본으로 켬(거래량·이격도·RSI 모두 켠 채로 열림; docs/ui.md MA 차트 패널 토글). |
 | 2026-11-16 | 앱 제목 NEXUS → Nexus Trading. Strategy 매매 내역 탭: 검색·청산 사유 필터 삭제, 요약 줄 오른쪽 끝에 '자세히'(이전 '크게 보기'); 팝업은 필터 유지(`StrategyTradesView(filters=False)`). |
 | 2026-11-16 | 갱신 상태(자동 갱신·최근 갱신)와 국기 버튼을 제목 줄에서 상위 탭 줄 오른쪽 끝으로(Trading Universe 탭과 같은 높이, `QTabWidget.setCornerWidget`; docs/ui.md 8.17 헤더 갱신 상태). |
+| 2026-11-16 | Trading History KPI: 총자산 = 평가액 + 예수금 + 출금(원금이 얼마가 됐는지), 바로 오른쪽에 원금 입력칸, 총자산 아래 '원금의 n배'; '누적 자산' 칸 삭제(같은 값). 같은 날 키움 명세서 대조로 `portfolio.db` 거래 기록 정정(백업 archive/manual_before_kiwoom_fix_20261116_153310). |
+| 2026-11-16 | Trading History KPI 오른쪽 묶음: 매입 원가 · 평가액 · 평가 손익(운용 자금 = 예수금 + 매입 원가 대비 %, `history_calc` `capital`/`pos_pl_pct_capital`) · 예수금 · 출금. 값 아래 설명 문구 삭제(툴팁으로), 입력칸 세 개에 점선 밑줄. 재입금은 출금(순출금)에서 뺌. |
+| 2026-11-16 | Universe '추세 점수' → **'전략 신호'**(메뉴로 A0~C3 선택, `strategy.trend_following.universe_signals`; 스펙 9-29): C는 기존 주간 추천, A는 오늘 진입 신호 / 추세 이탈 신호, B는 52주 고가 근접 순 / 추세 이탈 신호; A3~A5는 수급 로드. 종목 추가 버튼을 검색창 오른쪽으로. `tests/strategy/trend_following/test_universe_signals.py` 8건 등, pytest 918. |

@@ -117,12 +117,25 @@ class TestSummarizePositions(unittest.TestCase):
         self.assertAlmostEqual(agg["total_pl"], 600.0)
         self.assertAlmostEqual(agg["total_pl_pct"], 20.0)
         self.assertAlmostEqual(agg["deposit_pct"], 500.0 / 3500.0 * 100)
+        # trading capital = cash left + cost of the open positions
+        self.assertAlmostEqual(agg["capital"], 3500.0)
+        self.assertAlmostEqual(agg["pos_pl_pct_capital"], 0.0)
 
         # per-row fields
         self.assertAlmostEqual(kr["curr_pl"], 200.0)
         self.assertAlmostEqual(kr["curr_pl_pct"], 20.0)
         self.assertAlmostEqual(kr["position_w"], 1200.0 / 3500.0 * 100)
         self.assertAlmostEqual(kr["curr_pct_pl"], 20.0 * kr["position_w"] / 100.0)
+
+    def test_position_pl_against_the_cash_it_came_from(self):
+        """User's example (2026-11-16): cash 100M, 50M bought, now worth 60M
+        -> P/L 10M on 100M = 10% (cash left 50M + cost 50M)."""
+        row = _rec(market="KOSPI", buy_amount=50_000_000.0, qty=100.0, curr_price=600_000.0)
+        agg = self._run([row], deposit=50_000_000.0, principal=350_000_000.0)
+        self.assertAlmostEqual(agg["capital"], 100_000_000.0)
+        self.assertAlmostEqual(agg["pos_pl"], 10_000_000.0)
+        self.assertAlmostEqual(agg["pos_pl_pct_capital"], 10.0)
+        self.assertAlmostEqual(agg["pos_pl_pct"], 20.0)               # vs cost only, unchanged
 
     def test_sp500_label_counts_as_us(self):
         # Regression: the price thread and the summary used to disagree on this label.
@@ -158,6 +171,7 @@ class TestSummarizePositions(unittest.TestCase):
         self.assertEqual(agg["total_pl_pct"], 0.0)
         self.assertEqual(agg["deposit_pct"], 0.0)
         self.assertEqual(agg["pos_pl_pct"], 0.0)
+        self.assertEqual(agg["pos_pl_pct_capital"], 0.0)
 
 
 if __name__ == "__main__":

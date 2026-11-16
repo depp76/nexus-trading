@@ -14,7 +14,8 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from i18n import tr
 
 from strategy.trend_following import (
-    ResearchCancelled, ResearchRequest, load_dataset, run_research, run_universe_scoring,
+    ResearchCancelled, ResearchRequest, load_dataset, run_research, run_universe_signals,
+    DEFAULT_SIGNAL_VARIANT,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,16 +65,18 @@ class TrendFollowingResearchThread(QThread):
 
 
 class TrendScoreThread(QThread):
-    """Scores the Trading Universe's KR rows with the 2-5 "trend + pullback"
-    mode and builds the weekly Top/Bottom recommendation (scoring.py).
-    ``finished(Recommendation | None, error)``; ``progress(text)`` as above;
+    """The Trading Universe "전략 신호" run: one strategy variant's Top /
+    Bottom lists over the KR rows (universe_signals.py; the C rows are the 2-5
+    weekly recommendation it used to be limited to).
+    ``finished(SignalPicks | None, error)``; ``progress(text)`` as above;
     ``cancel()`` finishes with ``(None, CANCELLED_MESSAGE)``."""
     progress = pyqtSignal(str)
     finished = pyqtSignal(object, str)
 
-    def __init__(self, items: list, params=None, n_top: int = 10):
+    def __init__(self, items: list, params=None, n_top: int = 10, variant_id: str = DEFAULT_SIGNAL_VARIANT):
         super().__init__()
         self.items = list(items)
+        self.variant_id = variant_id
         self.params = params
         self.n_top = n_top
         self._cancelled = False
@@ -86,7 +89,7 @@ class TrendScoreThread(QThread):
 
     def run(self):
         try:
-            rec = run_universe_scoring(self.items, params=self.params, n_top=self.n_top,
+            rec = run_universe_signals(self.items, self.variant_id, params=self.params, n=self.n_top,
                                        progress=self.progress.emit, should_stop=self.is_cancelled)
             self.finished.emit(rec, "")
         except ResearchCancelled:

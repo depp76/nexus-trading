@@ -27,7 +27,7 @@ from datetime import datetime
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLineEdit,
-    QPushButton, QMessageBox, QInputDialog,
+    QPushButton, QMessageBox, QInputDialog, QMenu, QCheckBox, QWidgetAction,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
@@ -41,6 +41,7 @@ from threads.fetch_threads import (
     GeminiStockReportThread,
 )
 from threads.strategy_threads import TrendScoreThread, CANCELLED_MESSAGE
+from strategy.trend_following import VARIANTS, DEFAULT_SIGNAL_VARIANT, describe_variant
 from ui.universe_table import StockTable
 from ui.heat_legend import HeatLegend
 from ui.filter_popups import RangeFilterPopup
@@ -110,8 +111,13 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._trend_score_order = {}
         # The last successful Trend Score run (scoring.Recommendation). The MA
         # chart dialog shows its breakdown for the opened name (docs/ui.md 8.10);
-        # it outlives an unpin.
+        # it outlives an unpin. Only C rows (scoring) have one.
         self._last_recommendation = None
+        # "전략 신호" (user direction 2026-11-16): the strategy variant whose
+        # Top / Bottom lists the button pins (the last one picked; nothing is
+        # pinned at start, "선택 안 함" is checked).
+        self._signal_variant = DEFAULT_SIGNAL_VARIANT
+        self._last_picks = None
         # User-added tickers re-fetched after a full refresh (on_finished_all)
         # each arrive on their own thread; rendering once, a beat after the
         # last one lands, instead of a full table rebuild per ticker.
@@ -162,6 +168,12 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.search_input.setMaximumWidth(260)
         self.search_input.textChanged.connect(self.filter_table)
         bar.addWidget(self.search_input)
+        # 종목 추가 right of the search box (user direction 2026-11-16): you
+        # search for a name first and add it when it is not in the universe.
+        self.add_ticker_btn = make_button(tr("종목 추가", "Add Ticker"), on_click=self._on_add_ticker_clicked)
+        self.add_ticker_btn.setToolTip(tr("유니버스에 없는 종목을 시장과 코드로 하나 추가합니다",
+                                          "Add one name that is not in the universe, by market and ticker"))
+        bar.addWidget(self.add_ticker_btn)
 
         self._build_market_buttons(bar)
 
@@ -211,24 +223,21 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         bar.addSpacing(self._GROUP_GAP)   # markets | status filter
 
     def _build_action_buttons(self, bar: QHBoxLayout) -> None:
-        """Right end of the toolbar: Add Ticker, Trend Score, then the primary
-        Refresh. Add Ticker opens a small dialog (user direction 2026-11-16;
-        it was the toolbar's own second row)."""
-        self.add_ticker_btn = make_button(tr("종목 추가", "Add Ticker"), on_click=self._on_add_ticker_clicked)
-        self.add_ticker_btn.setToolTip(tr("유니버스에 없는 종목을 시장과 코드로 하나 추가합니다",
-                                          "Add one name that is not in the universe, by market and ticker"))
-        bar.addWidget(self.add_ticker_btn)
-        # Weekly "trend + pullback" Top/Bottom recommendation
-        # (trend_following.md 2-5; scoring.py via TrendScoreThread). Checked
-        # while a run's Top/Bottom rows are pinned to the top of the table;
-        # clicking it again restores the default order (user direction 2026-09-29).
-        self.trend_score_btn = make_button(tr("추세 점수", "Trend Score"), checkable=True)
-        self.trend_score_btn.setToolTip(tr("KOSPI/KOSDAQ 종목을 추세 + 눌림 점수(trend_following.md 2-5)로 채점해 "
-                                           "주간 상위 10 / 하위 10을 표 맨 위에 고정합니다. 다시 누르면 원래 순서로 돌아갑니다.",
-                                           "Score the KOSPI/KOSDAQ rows with trend_following.md 2-5 and pin the "
-                                           "weekly Top 10 / Bottom 10 to the top of the table; click again to "
-                                           "restore the default order"))
-        self.trend_score_btn.clicked.connect(self._on_trend_score_clicked)
+        """Right end of the toolbar: 전략 신호, then the primary Refresh (종목
+        추가 moved next to the search box, 2026-11-16)."""
+        # "전략 신호" (user direction 2026-11-16; was "추세 점수", the C1 row
+        # only): pick a strategy variant from the menu and its Top / Bottom
+        # lists are pinned to the top of the table (universe_signals.py).
+        # Checked while a run is pinned; "선택 안 함" in the menu unpins.
+        self.trend_score_btn = make_button(tr("전략 신호", "Signals"), checkable=True)
+        self.trend_score_btn.setToolTip(tr(
+            "구현된 매매전략 중 하나를 골라 KOSPI/KOSDAQ 종목의 매수 후보(상위)와 매도·회피 신호(하위)를 "
+            "최대 10개씩 표 맨 위에 고정합니다. 백테스트와 같은 조건 코드로 계산하며, 연구용 신호입니다.",
+            "Pick one of the implemented strategies: its buy candidates (top) and sell / avoid signals "
+            "(bottom), up to ten each, are pinned to the top of the table. Same signal code as the "
+            "backtest; research signals, not advice."))
+        self._signal_menu = self._build_signal_menu()
+        self.trend_score_btn.setMenu(self._signal_menu)
         bar.addWidget(self.trend_score_btn)
         bar.addSpacing(self._GROUP_GAP)   # analysis | primary action
 
@@ -640,8 +649,11 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             entry = order.get(item.get('ticker'))
             if entry is None:
                 item.pop('trend_rank', None)
+                item.pop('trend_tip', None)
             else:
                 item['trend_rank'] = entry[2]
+                if len(entry) > 3:
+                    item['trend_tip'] = entry[3]
         self.all_data.sort(key=self._order_key)
 
     def filter_table(self, text=None):
@@ -678,7 +690,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     # ui classes themselves are re-imported).
     def export_state(self) -> dict:
         return {"all_data": list(self.all_data), "view": self.current_view_state(),
-                "trend_rec": self._last_recommendation, "pinned": bool(self._trend_score_order),
+                "trend_rec": self._last_recommendation, "picks": self._last_picks,
+                "pinned": bool(self._trend_score_order), "signal_variant": self._signal_variant,
                 "refreshing": not self.refresh_btn.isEnabled()}
 
     def import_state(self, state: dict) -> None:
@@ -687,10 +700,11 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             self._sort_all_data()            # also drops the old Top/Bottom tags
             self._reload_table()
         self.apply_view_state(state["view"])
-        rec = state.get("trend_rec")
-        self._last_recommendation = rec
-        if rec is not None and state.get("pinned"):
-            self._on_trend_score_finished(rec, "")   # re-pin with tags in the new language
+        self._last_recommendation = state.get("trend_rec")
+        self._signal_variant = state.get("signal_variant", self._signal_variant)
+        picks = state.get("picks")
+        if picks is not None and state.get("pinned"):
+            self._on_trend_score_finished(picks, "")   # re-pin with tags in the new language
 
     def _update_filters_button(self):
         n = len(self._ranges)
@@ -852,6 +866,55 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     TREND_SCORE_MARKETS = ("KOSPI", "KOSDAQ")
     TREND_SCORE_TOP_N = 10
 
+    def _build_signal_menu(self) -> QMenu:
+        """A check box per strategy row (user direction 2026-11-16: "체크박스로
+        선택"), with "선택 안 함" first; exactly one is checked. Ticking a
+        strategy runs it and pins its lists, ticking "선택 안 함" unpins. The
+        row titles are the Strategy tab's variant titles."""
+        menu = QMenu(self)
+        panel = QWidget()
+        col = QVBoxLayout(panel)
+        col.setContentsMargins(12, 8, 16, 8)
+        col.setSpacing(6)
+        self._signal_none_check = QCheckBox(tr("선택 안 함", "None"))
+        self._signal_none_check.setChecked(True)
+        self._signal_none_check.clicked.connect(lambda _c: self._on_signal_check(None))
+        col.addWidget(self._signal_none_check)
+        self._signal_checks = {}
+        for vid in VARIANTS:
+            cb = QCheckBox(f"{vid}  {describe_variant(vid).title}")
+            cb.clicked.connect(lambda _c, v=vid: self._on_signal_check(v))
+            col.addWidget(cb)
+            self._signal_checks[vid] = cb
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(panel)
+        menu.addAction(action)
+        return menu
+
+    def _sync_signal_checks(self, vid):
+        """Tick `vid` (None = "선택 안 함") and untick the rest."""
+        self._signal_none_check.setChecked(vid is None)
+        for v, cb in self._signal_checks.items():
+            cb.setChecked(v == vid)
+
+    def _on_signal_check(self, vid):
+        """A box was ticked: run that strategy (replacing a pinned one), or unpin."""
+        self._signal_menu.close()
+        if vid is None:
+            if self._trend_score_order:
+                self._clear_trend_score()
+            self._sync_signal_checks(None)
+            return
+        if vid == self._signal_variant and self._trend_score_order:
+            self._sync_signal_checks(vid)        # already pinned: ticking it again keeps it
+            return
+        self._signal_variant = vid
+        self._sync_signal_checks(vid)
+        if self._trend_score_order:
+            self._trend_score_order = {}
+            self._apply_trend_score_order()
+        self._on_trend_score_clicked()
+
     def _trend_score_items(self) -> list:
         """The rows the scoring runs on: KR equities (index/yield/commodity
         rows and US names are skipped; the spec's universe is KR stocks)."""
@@ -865,49 +928,75 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         if self._trend_score_order:
             self._clear_trend_score()
             return
-        self.trend_score_btn.setChecked(False)   # the click toggled it on; checked means "pinned"
+        self.trend_score_btn.setChecked(False)   # checked means "pinned"
         items = self._trend_score_items()
+        vid = self._signal_variant
         if not items:
-            self.status_text_changed.emit(tr("추세 점수: 채점할 KOSPI/KOSDAQ 종목이 없습니다 -- 먼저 유니버스를 새로고침하세요",
-                                             "Trend Score: no KOSPI/KOSDAQ rows to score -- Refresh the universe first"))
+            self._sync_signal_checks(None)
+            self.status_text_changed.emit(tr("전략 신호: 채점할 KOSPI/KOSDAQ 종목이 없습니다 -- 먼저 유니버스를 새로고침하세요",
+                                             "Signals: no KOSPI/KOSDAQ rows to score -- Refresh the universe first"))
             return
         self.trend_score_btn.setEnabled(False)
-        self.status_text_changed.emit(tr(f"{len(items)}종목 채점 중 (추세 + 눌림)...",
-                                         f"Scoring {len(items)} names (trend + pullback)..."))
-        thread = self._track_thread(TrendScoreThread(items, n_top=self.TREND_SCORE_TOP_N), "_trend_score_thread")
+        self.status_text_changed.emit(tr(f"{vid} 전략 신호 계산 중 ({len(items)}종목)...",
+                                         f"Computing {vid} signals ({len(items)} names)..."))
+        thread = self._track_thread(TrendScoreThread(items, n_top=self.TREND_SCORE_TOP_N, variant_id=vid),
+                                    "_trend_score_thread")
         thread.progress.connect(self._on_trend_score_progress)
         thread.finished.connect(self._on_trend_score_finished)
         thread.start()
 
     def _on_trend_score_progress(self, text: str):
-        self.status_text_changed.emit(tr(f"추세 점수: {text}", f"Trend Score: {text}"))
+        self.status_text_changed.emit(tr(f"전략 신호: {text}", f"Signals: {text}"))
 
-    def _on_trend_score_finished(self, rec, error: str):
+    def _on_trend_score_finished(self, picks, error: str):
+        """`picks`: universe_signals.SignalPicks (None on failure)."""
         self.trend_score_btn.setEnabled(True)
-        if rec is None:
+        if picks is None:
             self.trend_score_btn.setChecked(False)
+            self._sync_signal_checks(None)
             if error != CANCELLED_MESSAGE:
-                QMessageBox.warning(self, _TITLE, tr(f"추세 점수 계산 실패:\n{error}", f"Trend Score failed:\n{error}"))
-            self.status_text_changed.emit(tr(f"추세 점수: {error}", f"Trend Score: {error}"))
+                QMessageBox.warning(self, _TITLE, tr(f"전략 신호 계산 실패:\n{error}", f"Signals failed:\n{error}"))
+            self.status_text_changed.emit(tr(f"전략 신호: {error}", f"Signals: {error}"))
             return
+        vid = picks.variant_id
+        bottom_word = tr("하위", "Bottom") if picks.bottom_kind == "score" else tr("이탈", "Exit")
+        # Short tags so the name stays readable ("A0 상위 1", user direction
+        # 2026-11-16); the figure the list is ordered by is on the tooltip.
         order = {}
-        for i, s in enumerate(rec.top, 1):
-            order[s.ticker] = (0, i, tr(f"상위 {i} ({s.week_avg:+.2f})", f"Top {i} ({s.week_avg:+.2f})"))
-        for i, s in enumerate(rec.bottom, 1):
-            order[s.ticker] = (1, i, tr(f"하위 {i} ({s.week_avg:+.2f})", f"Bottom {i} ({s.week_avg:+.2f})"))
+        for i, s in enumerate(picks.top, 1):
+            order[s.ticker] = (0, i, tr(f"{vid} 상위 {i}", f"{vid} Top {i}"), s.value_label)
+        for i, s in enumerate(picks.bottom, 1):
+            order[s.ticker] = (1, i, tr(f"{vid} {bottom_word} {i}", f"{vid} {bottom_word} {i}"), s.value_label)
         self._trend_score_order = order
-        self._last_recommendation = rec
+        self._last_picks = picks
+        if picks.recommendation is not None:
+            self._last_recommendation = picks.recommendation
+        self._signal_variant = vid
+        self._sync_signal_checks(vid)
         self.trend_score_btn.setChecked(True)
         self._apply_trend_score_order()
-        regime = {True: tr("위험 선호", "Risk-on"), False: tr("위험 회피", "Risk-off")}.get(
-            rec.regime_on, tr("없음", "n/a"))
-        self.status_text_changed.emit(tr(
-            f"추세 점수 {rec.as_of:%Y-%m-%d} 기준 ({len(rec.week_dates)}거래일): 상위 {len(rec.top)} / "
-            f"하위 {len(rec.bottom)} 고정 (유니버스 {rec.n_universe}, 유동성 통과 {rec.n_liquid}, "
-            f"게이트 통과 {rec.n_gated}, KOSPI L1 {regime}). 추세 점수를 다시 누르면 원래 순서로 돌아갑니다.",
-            f"Trend Score as of {rec.as_of:%Y-%m-%d} ({len(rec.week_dates)} sessions): {len(rec.top)} top / "
-            f"{len(rec.bottom)} bottom pinned (universe {rec.n_universe}, liquid {rec.n_liquid}, "
-            f"gate {rec.n_gated}, KOSPI L1 {regime}). Click Trend Score again to restore the order."))
+        self.status_text_changed.emit(self._signal_status(picks))
+
+    @staticmethod
+    def _signal_status(picks) -> str:
+        """One status line: what the two lists are, how many met the
+        condition, and the market regime when the row uses it."""
+        vid = picks.variant_id
+        top_what = {"score": tr("점수 상위", "top score"), "entry": tr("오늘 진입 신호", "entry signals today"),
+                    "high52": tr("52주 고가 근접", "52w-high proximity")}[picks.top_kind]
+        bottom_what = tr("점수 하위", "bottom score") if picks.bottom_kind == "score" else \
+            tr("추세 이탈(청산) 신호", "trend-break exits")
+        regime = ""
+        if picks.uses_regime and picks.regime_on is not None:
+            regime = tr(" · 시장 조건(L1) 켜짐", " · L1 regime on") if picks.regime_on else \
+                tr(" · 시장 조건(L1) 꺼짐: 전략상 신규 매수 보류", " · L1 regime off: no new entries under this strategy")
+        return tr(
+            f"{vid} 전략 신호 {picks.as_of:%Y-%m-%d} 기준: {top_what} {len(picks.top)}/{picks.n_top_candidates}, "
+            f"{bottom_what} {len(picks.bottom)}/{picks.n_bottom_candidates} 고정 (유니버스 {picks.n_universe}, "
+            f"유동성 통과 {picks.n_liquid}){regime}. 연구용 신호이며 매매 권유가 아닙니다.",
+            f"{vid} signals as of {picks.as_of:%Y-%m-%d}: {top_what} {len(picks.top)}/{picks.n_top_candidates}, "
+            f"{bottom_what} {len(picks.bottom)}/{picks.n_bottom_candidates} pinned (universe {picks.n_universe}, "
+            f"liquid {picks.n_liquid}){regime}. Research signals, not advice.")
 
     def _on_user_sorted(self):
         """A header click re-sorts the whole table, which would scatter the
@@ -921,14 +1010,16 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._sort_all_data()      # strips the trend_rank tags, default data order
         self._reload_table()       # re-applies the user's sort
         self.filter_table()
-        self.status_text_changed.emit(tr("추세 점수 순서 해제 (열 정렬).", "Trend Score order cleared (column sort)."))
+        self._sync_signal_checks(None)
+        self.status_text_changed.emit(tr("전략 신호 순서 해제 (열 정렬).", "Signals order cleared (column sort)."))
 
     def _clear_trend_score(self):
         self._trend_score_order = {}
+        self._sync_signal_checks(None)
         self.trend_score_btn.setChecked(False)
         self._apply_trend_score_order()
-        self.status_text_changed.emit(tr("추세 점수 순서 해제, 기본 순서로 복원.",
-                                         "Trend Score order cleared; default order restored."))
+        self.status_text_changed.emit(tr("전략 신호 순서 해제, 기본 순서로 복원.",
+                                         "Signals order cleared; default order restored."))
 
     def _apply_trend_score_order(self):
         """Re-sort all_data (pinned rows first, if any), drop the user's
@@ -1141,5 +1232,5 @@ register_toolbar_labels(
     *(UniverseTab._MARKET_BUTTON_TEXT.get(m, label).replace("&", "&&") for m, label in MARKETS.items()),
     *(label for _, label in UniverseTab._STATUS_FILTER_STATES),
     tr("필터", "Filters"), tr("필터 (99)", "Filters (99)"),
-    tr("종목 추가", "Add Ticker"), tr("추세 점수", "Trend Score"), tr("새로고침", "Refresh"),
+    tr("종목 추가", "Add Ticker"), tr("전략 신호", "Signals"), tr("새로고침", "Refresh"),
 )
