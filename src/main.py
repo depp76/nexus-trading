@@ -172,8 +172,10 @@ class MainWindow(QMainWindow):
         self._start_auto_backup(run_backup)
 
     def _build_header(self) -> QHBoxLayout:
-        """App title, refresh status and language flags; also creates the
-        auto-refresh and indicator timers and turns auto-refresh on."""
+        """App title; also builds the refresh status and language flags
+        (`self._status_corner`, placed on the tab row by _build_tabs: user
+        direction 2026-11-16, level with the Trading Universe tab) and creates
+        the auto-refresh and indicator timers and turns auto-refresh on."""
         header_layout = QHBoxLayout()
         # App title + subtitle (docs/ui.md 8.16): the largest text on screen.
         title_label = QLabel("Nexus Trading")
@@ -193,12 +195,17 @@ class MainWindow(QMainWindow):
         self.global_auto_timer.setInterval(self.AUTO_REFRESH_MS)
         self.global_auto_timer.timeout.connect(self._on_global_auto_timer)
 
-        self._build_refresh_status(header_layout)
-        header_layout.addSpacing(14)
+        # Refresh status + language flags: one widget, the tab bar's
+        # top-right corner (same height as the Trading Universe tab).
+        self._status_corner = QWidget()
+        status_layout = QHBoxLayout(self._status_corner)
+        status_layout.setContentsMargins(0, 0, 4, 2)
+        self._build_refresh_status(status_layout)
+        status_layout.addSpacing(14)
         # UI language flags (docs/ui.md 8.20).
         self.language_switch = LanguageSwitch()
         self.language_switch.language_requested.connect(self._on_language_requested)
-        header_layout.addWidget(self.language_switch)
+        status_layout.addWidget(self.language_switch)
         # Re-evaluates "late" between updates.
         self._indicator_timer = QTimer(self)
         self._indicator_timer.setInterval(15000)
@@ -237,6 +244,8 @@ class MainWindow(QMainWindow):
         self.tabs.setObjectName("MainTabs")
         # Trading Universe ~ Strategy all one width (user direction 2026-11-16).
         self.tabs.setTabBar(EqualWidthTabBar())
+        # Refresh status and language flags on the tab row, right end.
+        self.tabs.setCornerWidget(self._status_corner, Qt.Corner.TopRightCorner)
         main_layout.addWidget(self.tabs)
 
         # Schema + one-time JSON migrations before any tab reads the DB
