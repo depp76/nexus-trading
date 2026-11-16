@@ -8,9 +8,10 @@ an x tick, so the values ran into each other. Now: no per-point labels; the
 latest value of each series at the right end, nudged apart; the peak of Total
 Assets marked once; month ticks; amounts in 억; and the gap between Total
 Assets and KOSPI shaded (PROFIT ahead, LOSS behind). The same day a marker went
-back on every weekly point; resting the mouse on a marker enlarges it and shows
-that point's value next to it (no vertical line, no readout line above the
-chart: user direction).
+back on every weekly point; resting the mouse on any marker enlarges that
+week's three markers and shows all three values of the week in one box next
+to it, each line in its series color (no vertical line, no readout line above
+the chart: user direction).
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ import pandas as pd
 import matplotlib.dates as mdates
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.offsetbox import AnnotationBbox, TextArea, VPacker
 from matplotlib.ticker import FixedLocator
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QDialog, QVBoxLayout
@@ -28,7 +30,7 @@ from PyQt6.QtWidgets import QDialog, QVBoxLayout
 from i18n import tr
 from ui.colors import PROFIT, LOSS
 from ui.common import make_button, button_row, fit_to_screen
-from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_FAINT, SURFACE, HDR_BG, LINE
+from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_FAINT, SURFACE, HDR_BG
 
 logger = logging.getLogger(__name__)
 
@@ -112,9 +114,9 @@ class TotalAssetsGraphDialog(QDialog):
         self.canvas = FigureCanvas(self.fig)
         layout.addWidget(self.canvas, 1)
 
-        self._hover_marker = None
-        self._tooltip = None
-        self.hovered = None            # (series index, week index) under the mouse, or None
+        self._hover_markers = []       # one enlarged marker per series, on the hovered week
+        self._tooltip = None           # the AnnotationBbox with the week's three values
+        self.hovered = None            # (series index, week index) of the marker under the mouse, or None
         if len(self._x):
             self._plot_series()
             self._shade_gap()
@@ -211,14 +213,11 @@ class TotalAssetsGraphDialog(QDialog):
                 (_LBL_KOSPI, self._kospi, TEXT_MUTED, TEXT_MUTED))
 
     def _add_hover_artists(self) -> None:
-        """The enlarged marker and the value box, both hidden until the mouse
-        rests on a marker."""
-        (self._hover_marker,) = self.ax.plot([self._x[-1]], [self._asset[-1]], "o", markersize=_HOVER_SIZE,
-                                             markeredgewidth=2, zorder=8, visible=False)
-        self._tooltip = self.ax.annotate(
-            "", (self._x[-1], self._asset[-1]), xytext=(12, 12), textcoords="offset points", fontsize=9,
-            color=TEXT, zorder=9, visible=False,
-            bbox={"boxstyle": "round,pad=0.4", "fc": HDR_BG, "ec": LINE, "alpha": 0.95})
+        """The three enlarged markers; the value box is built on each hover."""
+        for _name, values, color, face in self._series():
+            (m,) = self.ax.plot([self._x[-1]], [values[-1]], "o", markersize=_HOVER_SIZE, color=color,
+                                markerfacecolor=face, markeredgewidth=2, zorder=8, visible=False)
+            self._hover_markers.append(m)
 
     def point_at(self, px: float, py: float):
         """(series index, week index) of the marker within _HIT_PX pixels of
@@ -232,16 +231,22 @@ class TotalAssetsGraphDialog(QDialog):
                 best, best_d = (s_idx, i), d[i]
         return best
 
-    def tooltip_text(self, s_idx: int, i: int) -> str:
-        """The value of one marker: series, date, return and (for the asset
-        series) the amount."""
-        name, values, _c, _f = self._series()[s_idx]
-        line = f"{values[i]:+.1f}%"
-        if s_idx == 0:
-            line += f" · {fmt_krw(self._totals[i])}"
-        elif s_idx == 1:
-            line += f" · ${self._usd_totals[i]:,.0f}"
-        return "\n".join((name, self._dates[i], line))
+    def tooltip_lines(self, i: int) -> list[tuple[str, str]]:
+        """(text, color) lines of week `i`: the date, then Total Assets,
+        Total Assets ($) and KOSPI with return and amount."""
+        return [
+            (self._dates[i], TEXT_MUTED),
+            (f"{_LBL_ASSETS}  {self._asset[i]:+.1f}% · {fmt_krw(self._totals[i])}", TEXT),
+            (f"{_LBL_ASSETS_USD}  {self._usd[i]:+.1f}% · ${self._usd_totals[i]:,.0f}", ACCENT),
+            (f"{_LBL_KOSPI}  {self._kospi[i]:+.1f}%", TEXT_MUTED),
+        ]
+
+    def _hide_hover(self) -> None:
+        for m in self._hover_markers:
+            m.set_visible(False)
+        if self._tooltip is not None:
+            self._tooltip.remove()
+            self._tooltip = None
 
     def _on_motion(self, event) -> None:
         hit = None
@@ -250,35 +255,34 @@ class TotalAssetsGraphDialog(QDialog):
         if hit == self.hovered:
             return
         self.hovered = hit
+        self._hide_hover()
         if hit is None:
-            self._hover_marker.set_visible(False)
-            self._tooltip.set_visible(False)
             self.canvas.draw_idle()
             return
         s_idx, i = hit
-        _name, values, color, face = self._series()[s_idx]
-        x, y = self._x[i], values[i]
-        self._hover_marker.set_data([x], [y])
-        self._hover_marker.set_color(color)
-        self._hover_marker.set_markerfacecolor(face)
-        self._hover_marker.set_visible(True)
+        for m, (_name, values, _c, _f) in zip(self._hover_markers, self._series()):
+            m.set_data([self._x[i]], [values[i]])
+            m.set_visible(True)
+        x, y = self._x[i], self._series()[s_idx][1][i]
         # The box goes toward the middle of the chart so it stays inside it.
         (px, py), ((x0, y0), (x1, y1)) = self.ax.transData.transform((x, y)), self.ax.bbox.get_points()
         right, upper = px > (x0 + x1) / 2, py > (y0 + y1) / 2
-        self._tooltip.xy = (x, y)
-        self._tooltip.set_text(_mpl(self.tooltip_text(s_idx, i)))
-        self._tooltip.set_position((-14 if right else 14, -14 if upper else 14))
-        self._tooltip.set_ha("right" if right else "left")
-        self._tooltip.set_va("top" if upper else "bottom")
-        self._tooltip.get_bbox_patch().set_edgecolor(color)
-        self._tooltip.set_visible(True)
+        self.tooltip_align = (1.0 if right else 0.0, 1.0 if upper else 0.0)
+        box = VPacker(children=[TextArea(_mpl(text), textprops={"color": color, "fontsize": 9,
+                                                                 "fontweight": "bold" if n == 1 else "normal"})
+                                for n, (text, color) in enumerate(self.tooltip_lines(i))],
+                      align="left", pad=0, sep=3)
+        self._tooltip = AnnotationBbox(
+            box, (x, y), xybox=(-16 if right else 16, -16 if upper else 16), boxcoords="offset points",
+            box_alignment=self.tooltip_align, frameon=True, zorder=9,
+            bboxprops={"boxstyle": "round,pad=0.5", "fc": HDR_BG, "ec": self._series()[s_idx][2], "alpha": 0.95})
+        self.ax.add_artist(self._tooltip)
         self.canvas.draw_idle()
 
     def _on_leave(self, _event) -> None:
         if self.hovered is not None:
             self.hovered = None
-            self._hover_marker.set_visible(False)
-            self._tooltip.set_visible(False)
+            self._hide_hover()
             self.canvas.draw_idle()
 
     # ---------------------------------------------------------------- buttons

@@ -1,7 +1,8 @@
 """tests/test_assets_graph.py — TotalAssetsGraphDialog after the 2026-11-16
 label review (items 1-7): no per-point labels, right-end labels pushed apart,
 one peak mark, month ticks, amounts in 억, the Total Assets vs KOSPI gap
-shaded, and a marker on every week whose value shows when the mouse rests on it."""
+shaded, and a marker on every week: resting on any of a week's three markers
+shows all three values of that week."""
 import datetime as dt
 import unittest
 from types import SimpleNamespace
@@ -96,48 +97,52 @@ class TestDialog(unittest.TestCase):
     def _move(self, px, py):
         self.dlg._on_motion(SimpleNamespace(inaxes=self.dlg.ax, x=px, y=py))
 
-    def test_value_shows_only_with_the_mouse_on_a_marker(self):
+    def _box_lines(self):
+        box = self.dlg._tooltip.offsetbox
+        return [(c._text.get_text(), c._text.get_color()) for c in box.get_children()]
+
+    def test_any_marker_shows_the_whole_week(self):
         dlg = self.dlg
         dates, kospi, asset, usd, totals, usd_totals = self.data
-        # no vertical line and no readout line any more
         self.assertFalse(hasattr(dlg, "_crosshair"))
         self.assertFalse(hasattr(dlg, "readout_lbl"))
-        px, py = self._px(asset, 10)
-        self._move(px + 3, py - 2)                                     # on the Total Assets marker of week 10
-        self.assertEqual(dlg.hovered, (0, 10))
-        self.assertTrue(dlg._tooltip.get_visible())
-        text = dlg._tooltip.get_text()
-        self.assertIn("총자산", text)
-        self.assertIn(dates[10], text)
-        self.assertIn(f"{asset[10]:+.1f}%", text)
-        self.assertIn("억", text)
-        self.assertEqual(tuple(dlg._tooltip.xy), (dlg._x[10], asset[10]))
-        self.assertTrue(dlg._hover_marker.get_visible())
-        self.assertEqual((dlg._hover_marker.get_xdata()[0], dlg._hover_marker.get_ydata()[0]),
-                         (dlg._x[10], asset[10]))
+        for s_idx, values in ((0, asset), (1, usd), (2, kospi)):          # the week's box from any of its three
+            px, py = self._px(values, 10)
+            self._move(px + 2, py - 2)
+            self.assertEqual(dlg.hovered, (s_idx, 10))
+            self.assertIsNotNone(dlg._tooltip)
+            lines = self._box_lines()
+            self.assertEqual(len(lines), 4)
+            self.assertEqual(lines[0][0], dates[10])
+            self.assertIn(f"{asset[10]:+.1f}%", lines[1][0])
+            self.assertIn("억", lines[1][0])
+            self.assertIn(f"{usd[10]:+.1f}%", lines[2][0])
+            self.assertIn(f"{usd_totals[10]:,.0f}", lines[2][0])
+            self.assertIn(r"\$", lines[2][0])                         # not read as math
+            self.assertIn(f"{kospi[10]:+.1f}%", lines[3][0])
+            self.assertEqual(len({c for _, c in lines[1:]}), 3)          # one color per series
+            for m, v in zip(dlg._hover_markers, (asset, usd, kospi)):
+                self.assertTrue(m.get_visible())
+                self.assertEqual((m.get_xdata()[0], m.get_ydata()[0]), (dlg._x[10], v[10]))
+            self.assertEqual(sum(1 for a in dlg.ax.artists if a is dlg._tooltip), 1)
 
-        px, py = self._px(usd, 30)                                     # the USD marker: its own value
-        self._move(px, py)
-        self.assertEqual(dlg.hovered, (1, 30))
-        self.assertIn(r"\$", dlg._tooltip.get_text())
-        self.assertIn(f"{usd_totals[30]:,.0f}", dlg._tooltip.get_text())
-
-        mid_x = (self._px(asset, 10)[0] + self._px(asset, 11)[0]) / 2  # between two weeks, off the lines
+        mid_x = (self._px(asset, 10)[0] + self._px(asset, 11)[0]) / 2   # between two weeks, off the lines
         self._move(mid_x, self._px(asset, 10)[1] + 200)
         self.assertIsNone(dlg.hovered)
-        self.assertFalse(dlg._tooltip.get_visible())
-        self.assertFalse(dlg._hover_marker.get_visible())
+        self.assertIsNone(dlg._tooltip)
+        self.assertFalse(any(m.get_visible() for m in dlg._hover_markers))
+        self.assertEqual(len(dlg.ax.artists), 0)                         # the old box was removed
 
     def test_box_stays_inside_toward_the_middle(self):
         dlg = self.dlg
         asset = self.data[2]
-        self._move(*self._px(asset, 45))                               # the last week, right edge
-        self.assertEqual(dlg._tooltip.get_ha(), "right")
-        self._move(*self._px(asset, 0))                                # the first week, left edge, bottom
-        self.assertEqual((dlg._tooltip.get_ha(), dlg._tooltip.get_va()), ("left", "bottom"))
+        self._move(*self._px(asset, 45))                                # the last week, right edge
+        self.assertEqual(dlg.tooltip_align[0], 1.0)
+        self._move(*self._px(asset, 0))                                 # the first week, left edge, bottom
+        self.assertEqual(dlg.tooltip_align, (0.0, 0.0))
         dlg._on_leave(None)
         self.assertIsNone(dlg.hovered)
-        self.assertFalse(dlg._tooltip.get_visible())
+        self.assertIsNone(dlg._tooltip)
 
     def test_one_week_and_no_week(self):
         one = TotalAssetsGraphDialog(*[s[:1] for s in self.data])
