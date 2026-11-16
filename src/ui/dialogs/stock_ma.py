@@ -21,7 +21,8 @@ docs/ui.md "MA Chart Redesign" mockup (12 issues, phases A-D):
 
 2026-10-15 (user direction): the exclusive view segment (Short / Long /
 Close only / Divergence / Equal Weight) became independent, multi-select
-series toggles -- Close, MA5, MA10, MA20, MA50, Divergence [, Equal Weight].
+series toggles -- MA10, MA20, MA50 [, Equal Weight], Divergence (Close is always drawn,
+no MA5: 2026-11-16).
 Divergence shows/hides the divergence panel (the separate panel button is
 gone); with no price line selected the price panel is hidden too. The
 crosshair carries its values on the chart: a dot + value badge on every
@@ -78,14 +79,14 @@ from i18n import tr
 from ui.dialogs.stock_ma_consts import (  # noqa: F401 -- re-exported for callers of ui.dialogs.stock_ma
     _STOCK_MARKETS, _SIMPLE_CHART_TICKERS, _SCROLL_MAX, _TICK_PT, _SEG_H, _PERIODS, _PERIOD_LABELS,
     _DEFAULT_PERIOD, _DEFAULT_MARGINS, _MARGIN_PAD_PX, _MIN_RIGHT_PX, _SLOT_RATIOS, _SERIES,
-    _PRICE_SERIES, _DEFAULT_SERIES,
+    _PRICE_SERIES, _DEFAULT_SERIES, _MA_KEYS,
 )
 from ui.dialogs.stock_ma_hover import _HoverMixin
 from ui.dialogs.stock_ma_plot import _PlotMixin
 from ui.dialogs.stock_ma_side import StockMaSidePanel
 from ui.dialogs.stock_ma_view import _ViewMixin
 from ui.common import FlowLayout, create_font, FONT_HEADING, FONT_BODY, FONT_CAPTION, fit_to_screen
-from ui.colors import PROFIT, LOSS, MA_RAMP
+from ui.colors import PROFIT, LOSS
 from ui.theme import TEXT_MUTED, TEXT_FAINT
 
 logger = logging.getLogger(__name__)
@@ -127,7 +128,7 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         self._is_simple_chart = ticker in _SIMPLE_CHART_TICKERS or change_mode == 'bp'
         self._has_data = (
             df is not None and not df.is_empty() and "Close" in df.columns
-            and (self._is_simple_chart or all(c in df.columns for c in MA_RAMP))
+            and (self._is_simple_chart or all(c in df.columns for c in _MA_KEYS))
         )
         self._currency, self._unit_suffix, self._fmt_str = self._format_config()
         self._init_chart_state()
@@ -255,59 +256,74 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         return w, lay
 
     def _build_view_row(self) -> QWidget:
-        """Series toggles | period segment | panel toggles, as three groups in
-        a FlowLayout (user direction 2026-11-15): one line when the chart is
-        wide enough, otherwise a group moves to the next line instead of
-        raising the dialog's minimum width. A group never splits."""
+        """The toggles by kind, each with a caption (user direction 2026-11-16):
+        [이동평균 MA10 · MA20 · MA50 (· 동일가중)] and [보조지표 이격도 · 거래량 ·
+        RSI   기간 1개월 ~ 전체]. Close is always drawn (no button) and MA5 is
+        gone (same day). 보조지표 and 기간 are one unsplittable group so they
+        always share a line; the groups sit in a FlowLayout (2026-11-15), one
+        line when the chart is wide enough, else the second group moves down
+        whole. Every button of the row has one width, the widest label's."""
         row_w = QWidget()
         row = FlowLayout(row_w, h_spacing=18, v_spacing=6)
         # Clear of the splitter: the as-of date ends the row and the right
         # panel's TREND SCORE title starts level with it.
         row.setContentsMargins(0, 0, 24, 0)
-        series_w, series = self._button_group_widget()
+        self._group_captions = []
         self._series_buttons = {}
-        keys = [] if self._is_simple_chart else ["Close", *MA_RAMP.keys(), "Div"]
-        if self._has_data and "EqualWeight" in self._df.columns and not self._is_simple_chart:
-            keys.append("EW")
-        if keys:
-            cap = QLabel(tr("표시", "Series"))
-            cap.setFont(create_font(FONT_CAPTION, QFont.Weight.Bold))
-            cap.setStyleSheet(f"color:{TEXT_FAINT};")
-            series.addWidget(cap)
-        for key in keys:
+        self._panel_buttons = {}
+        has_ew = self._has_data and "EqualWeight" in self._df.columns and not self._is_simple_chart
+
+        def series_button(lay, key):
             btn = _segment_button(_SERIES[key], checked=(key in _DEFAULT_SERIES))
             btn.clicked.connect(lambda checked, k=key: self._set_series(k, checked))
-            series.addWidget(btn)
+            lay.addWidget(btn)
             self._series_buttons[key] = btn
-        if keys:
-            row.addWidget(series_w)
 
-        period_w, period = self._button_group_widget()
+        def caption(lay, text):
+            cap = QLabel(text)
+            cap.setFont(create_font(FONT_CAPTION, QFont.Weight.Bold))
+            cap.setStyleSheet(f"color:{TEXT_FAINT};")
+            lay.addWidget(cap)
+            self._group_captions.append(cap)
+
+        if not self._is_simple_chart:
+            ma_w, ma = self._button_group_widget()
+            caption(ma, tr("이동평균", "MA"))
+            for key in _MA_KEYS:
+                series_button(ma, key)
+            if has_ew:      # the equal-weight index line sits with the other price-panel lines
+                series_button(ma, "EW")
+            row.addWidget(ma_w)
+
+        # 보조지표 (the divergence series drives its panel; volume / RSI panel
+        # toggles), then 기간 in the same group.
+        ind_w, ind = self._button_group_widget()
+        caption(ind, tr("보조지표", "Indicators"))
+        if not self._is_simple_chart:
+            series_button(ind, "Div")
+        for key, label in (("vol", tr("거래량", "Volume")), ("rsi", "RSI")):
+            btn = _segment_button(label)
+            btn.clicked.connect(lambda checked, k=key: self._set_panel(k, checked))
+            ind.addWidget(btn)
+            self._panel_buttons[key] = btn
+        ind.addSpacing(18)
+        caption(ind, tr("기간", "Period"))
         self._period_group = QButtonGroup(self)
         self._period_group.setExclusive(True)
         self._period_buttons = {}
         for label, months in _PERIODS:
             btn = _segment_button(_PERIOD_LABELS[label], self._period_group, checked=(label == _DEFAULT_PERIOD))
             btn.clicked.connect(lambda _c, m=months, lbl=label: self._on_period_clicked(lbl, m))
-            period.addWidget(btn)
+            ind.addWidget(btn)
             self._period_buttons[label] = btn
-        # One width for the segment, from the widest label (a fixed 52 px cut
-        # the first digit of "3개월"/"6개월").
-        seg_w = max(b.sizeHint().width() for b in self._period_buttons.values())
-        for b in self._period_buttons.values():
-            b.setFixedWidth(seg_w)
-        row.addWidget(period_w)
+        row.addWidget(ind_w)
 
-        # The divergence panel has no button here: the Divergence series
-        # toggle drives it.
-        panels_w, panels = self._button_group_widget()
-        self._panel_buttons = {}
-        for key, label in (("vol", tr("거래량", "Volume")), ("rsi", "RSI")):
-            btn = _segment_button(label)
-            btn.clicked.connect(lambda checked, k=key: self._set_panel(k, checked))
-            panels.addWidget(btn)
-            self._panel_buttons[key] = btn
-        row.addWidget(panels_w)
+        # One width for every button of the row, from the widest label (a
+        # fixed 52 px once cut the first digit of "3개월").
+        buttons = [*self._series_buttons.values(), *self._panel_buttons.values(), *self._period_buttons.values()]
+        seg_w = max(b.sizeHint().width() for b in buttons)
+        for b in buttons:
+            b.setFixedWidth(seg_w)
 
         # As-of date at the right end of the (last) button line: an Ignored
         # policy makes FlowLayout stretch it to the line's end, and it never

@@ -17,6 +17,7 @@ app = QApplication.instance() or QApplication([])
 from data.indicators import _compute_indicators  # noqa: E402
 from ui.dialogs.stock_ma import StockMaDialog  # noqa: E402
 from ui.colors import PROFIT, LOSS, MA_RAMP  # noqa: E402
+from ui.dialogs.stock_ma_consts import _MA_KEYS  # noqa: E402
 
 
 def _df(n=400, ew=False, volume=True):
@@ -65,14 +66,16 @@ class TestStockChart(unittest.TestCase):
         # line visible. A fresh dialog, since the shared one is left in
         # whatever state the other tests chose last.
         fresh = StockMaDialog("005930", "Samsung", "KOSPI", _df())
-        self.assertEqual({k for k, b in fresh._series_buttons.items() if b.isChecked()}, {"Close", "Div"})
-        self.assertEqual({k: fresh._lines[k].get_visible() for k in MA_RAMP},
-                         {"MA5": False, "MA10": False, "MA20": False, "MA50": False})
+        self.assertEqual({k for k, b in fresh._series_buttons.items() if b.isChecked()}, {"Div"})
+        self.assertEqual({k: fresh._lines[k].get_visible() for k in _MA_KEYS},
+                         {"MA10": False, "MA20": False, "MA50": False})
+        self.assertNotIn("MA5", fresh._lines)                          # dropped 2026-11-16
+        self.assertNotIn("Close", fresh._series_buttons)               # Close is always drawn
         self.assertTrue(fresh._lines["Close"].get_visible())
         self.assertEqual(set(fresh._end_labels), {"Close"})
-        _show(d, {"Close", "MA5", "MA10", "MA20"})
-        self.assertEqual({k: d._lines[k].get_visible() for k in MA_RAMP},
-                         {"MA5": True, "MA10": True, "MA20": True, "MA50": False})
+        _show(d, {"MA10", "MA20"})
+        self.assertEqual({k: d._lines[k].get_visible() for k in _MA_KEYS},
+                         {"MA10": True, "MA20": True, "MA50": False})
         self.assertIsNone(d._panel_axes["price"].get_legend())      # issue #3: no legend
         for line in d._lines.values():
             self.assertEqual(line.get_marker(), "None")             # issue #8: no markers
@@ -82,13 +85,13 @@ class TestStockChart(unittest.TestCase):
         self.assertEqual(cols, [_rgb(PROFIT), _rgb(LOSS)])
 
     def test_ma_lines_are_the_accent_ramp(self):
-        for key, color in MA_RAMP.items():
-            self.assertEqual(self.dlg._lines[key].get_color(), color)
+        for key in _MA_KEYS:
+            self.assertEqual(self.dlg._lines[key].get_color(), MA_RAMP[key])
 
     def test_end_labels_follow_the_visible_lines(self):
         d = self.dlg
-        _show(d, {"Close", "MA5", "MA10", "MA20"})
-        self.assertEqual(set(d._end_labels), {"Close", "MA5", "MA10", "MA20"})
+        _show(d, {"MA10", "MA20"})
+        self.assertEqual(set(d._end_labels), {"Close", "MA10", "MA20"})
         _show(d, {"Close", "MA20", "MA50"})
         self.assertEqual(set(d._end_labels), {"Close", "MA20", "MA50"})
         _show(d, {"Close"})
@@ -96,16 +99,14 @@ class TestStockChart(unittest.TestCase):
         _show(d, {"Close", "EW"})
         self.assertTrue(d._lines["EW"].get_visible())
         self.assertEqual(set(d._end_labels), {"Close", "EW"})
-        _show(d, {"MA5", "MA50"})                       # Close can be hidden too
-        self.assertEqual(set(d._end_labels), {"MA5", "MA50"})
         _show(d, {"Close", "Div"})
 
     def test_series_toggles_are_independent(self):
         d = StockMaDialog("005930", "Samsung", "KOSPI", _df())
-        self.assertEqual(list(d._series_buttons), ["Close", "MA5", "MA10", "MA20", "MA50", "Div"])
+        self.assertEqual(list(d._series_buttons), ["MA10", "MA20", "MA50", "Div"])
         d._series_buttons["MA10"].click()
         d._series_buttons["MA50"].click()
-        self.assertEqual({k for k in MA_RAMP if d._lines[k].get_visible()}, {"MA10", "MA50"})
+        self.assertEqual({k for k in _MA_KEYS if d._lines[k].get_visible()}, {"MA10", "MA50"})
         self.assertTrue(d._lines["Close"].get_visible())
         d._series_buttons["Div"].click()                # Divergence off -> panel hidden
         self.assertFalse(d._panel_on["div"])
@@ -115,17 +116,16 @@ class TestStockChart(unittest.TestCase):
         d._series_buttons["Div"].click()
         self.assertTrue(d._panel_axes["div"].get_visible())
 
-    def test_no_price_line_hides_the_price_panel(self):
+    def test_close_is_always_drawn_so_the_price_panel_stays(self):
+        """2026-11-16: no 종가 button -- Close is always on, so the price panel
+        never hides (it used to when no price line was selected)."""
         d = StockMaDialog("005930", "Samsung", "KOSPI", _df())
         _show(d, {"Div"})
-        self.assertEqual(d._visible_panels(), [("vol", 1), ("div", 1)])
-        self.assertFalse(d._panel_axes["price"].get_visible())
-        self.assertEqual(d._end_labels, {})
-        d._set_panel("vol", False)
-        self.assertEqual(d._visible_panels(), [("div", 1)])          # fixed slot, not enlarged
-        _show(d, set())                                 # nothing at all: empty price panel
-        self.assertEqual(d._visible_panels(), [("price", 3)])
-        d.render(QPixmap(800, 500))
+        self.assertEqual(d._visible_panels(), [("price", 3), ("vol", 1), ("div", 1)])
+        self.assertTrue(d._panel_axes["price"].get_visible())
+        self.assertEqual(set(d._end_labels), {"Close"})
+        _show(d, set())
+        self.assertTrue(d._lines["Close"].get_visible())
 
     def test_period_buttons_set_the_window(self):
         d, ax = self.dlg, self.dlg._panel_axes["price"]
@@ -136,25 +136,38 @@ class TestStockChart(unittest.TestCase):
         self.assertGreater(ax.get_xlim()[1] - ax.get_xlim()[0], 399)
         d._apply_period("1Y")
 
-    def test_period_segment_shares_the_wrapping_view_row(self):
-        """2026-11-15: period buttons moved from the header into the series /
-        panel row, a FlowLayout of three unsplittable groups."""
+    def test_view_row_groups_with_period_beside_the_indicators(self):
+        """2026-11-16 (user direction): [이동평균 MA10-MA50 (동일가중)] and
+        [보조지표 이격도 · 거래량 · RSI  기간 1개월-전체] -- no 종가 button, no
+        MA5, 기간 on the 보조지표 line; captioned, every button one width;
+        still a FlowLayout of unsplittable groups (2026-11-15)."""
+        from PyQt6.QtWidgets import QLabel
         from ui.common import FlowLayout
         d = StockMaDialog("005930", "Samsung", "KOSPI", _df(ew=True))
         row = next(iter(d._period_buttons.values())).parentWidget().parentWidget()
         self.assertIsInstance(row.layout(), FlowLayout)
         items = [row.layout().itemAt(i).widget() for i in range(row.layout().count())]
-        groups = items[:3]
-        self.assertEqual(groups, [next(iter(d._series_buttons.values())).parentWidget(),
-                                  next(iter(d._period_buttons.values())).parentWidget(),
-                                  next(iter(d._panel_buttons.values())).parentWidget()])
-        self.assertEqual(items[3:], [d._as_of_lbl])                   # the as-of date ends the row
-        # wide: one line; narrow: groups move down whole
+        groups = items[:2]
+        b = d._series_buttons
+
+        def members(g):
+            lay = g.layout()
+            ws = [lay.itemAt(i).widget() for i in range(lay.count())]
+            return [w.text() for w in ws if w is not None]
+        self.assertEqual([members(g) for g in groups], [
+            ["이동평균", "MA10", "MA20", "MA50", "동일가중"],
+            ["보조지표", "이격도", "거래량", "RSI", "기간", "1개월", "3개월", "6개월", "1년", "3년", "전체"],
+        ])
+        self.assertTrue(all(isinstance(g.layout().itemAt(0).widget(), QLabel) for g in groups))
+        self.assertIs(d._period_buttons["1M"].parentWidget(), d._panel_buttons["rsi"].parentWidget())
+        self.assertEqual(items[2:], [d._as_of_lbl])                   # the as-of date ends the row
+        buttons = [*b.values(), *d._panel_buttons.values(), *d._period_buttons.values()]
+        self.assertEqual(len({x.width() for x in buttons}), 1)
+        self.assertTrue(all(x.width() >= x.sizeHint().width() for x in buttons))
+        # wide: one line; narrow: the second group moves down whole
         self.assertEqual(len(row.layout().lines(4000)), 1)
-        narrow = row.layout().lines(groups[0].sizeHint().width() + 10)
-        self.assertEqual([item.widget() for line in narrow for item in line][:3], groups)
-        self.assertEqual(len(narrow[0]), 1)
-        self.assertEqual(len(narrow[1]), 1)
+        narrow = row.layout().lines(max(g.sizeHint().width() for g in groups) + 10)
+        self.assertEqual([item.widget() for line in narrow for item in line][:2], groups)
         # one width for the segment, wide enough for every label ("3개월" was cut at 52 px)
         widths = {b.width() for b in d._period_buttons.values()}
         self.assertEqual(len(widths), 1)
@@ -170,7 +183,7 @@ class TestStockChart(unittest.TestCase):
         d.resize(700, 600)
         d.show()
         QApplication.processEvents()
-        for k in ("MA5", "MA20", "EW"):
+        for k in ("MA10", "MA20", "EW"):
             d._set_series(k, True)
         d._apply_period("All")
         d._canvas.draw()
@@ -204,7 +217,7 @@ class TestStockChart(unittest.TestCase):
                 self.assertEqual(tuple(ax.get_position().bounds), slots[k], tag)
             self.assertEqual(d._margins, margins, tag)
 
-        for key in ("MA5", "MA20", "EW", "MA50", "Div"):
+        for key in ("MA10", "MA20", "EW", "MA50", "Div"):
             d._series_buttons[key].click()
             check(key)
         for key in ("vol", "rsi"):
@@ -244,8 +257,13 @@ class TestStockChart(unittest.TestCase):
             self.assertLessEqual(abs(mid(d._right_title) - mid(first_btn)), 1, width)
             self.assertLessEqual(abs(gy(d._right_table) - gy(d._canvas)), 1, width)
             self.assertGreater(gy(d.trend_section), gy(d._right_table))
-            # the as-of date ends whichever line the panel buttons are on
-            self.assertLessEqual(abs(mid(d._as_of_lbl) - mid(d._panel_buttons["rsi"])), 2)
+            # the as-of date comes last: on the period buttons' line (the last group)
+            # when it fits there, else on the line under it (offscreen fonts are wider)
+            self.assertGreaterEqual(mid(d._as_of_lbl) + 2, mid(d._period_buttons["All"]))
+            lines = row.layout().lines(row.width())
+            self.assertIs(lines[-1][-1].widget(), d._as_of_lbl)
+            if width >= 1900:
+                self.assertLessEqual(abs(mid(d._as_of_lbl) - mid(d._period_buttons["All"])), 2)
             widths = [d._right_table.columnWidth(c) for c in (2, 3, 4)]   # Foreigner, Institution, Retail
             self.assertLessEqual(max(widths) - min(widths), 1, widths)
             self.assertFalse([b for b in d.findChildren(QPushButton) if b.text() in ("닫기", "Close")])
@@ -268,7 +286,7 @@ class TestStockChart(unittest.TestCase):
     def test_simple_chart_row_has_no_series_group(self):
         d = StockMaDialog("KR3YT", "KR 3Y", "Index", _df(volume=False), change_mode="bp")
         row = next(iter(d._period_buttons.values())).parentWidget().parentWidget()
-        self.assertEqual(row.layout().count(), 3)                 # periods + panels + as-of
+        self.assertEqual(row.layout().count(), 2)                 # [보조지표 + 기간] + as-of
 
     def test_panel_toggles_regrid(self):
         d = self.dlg

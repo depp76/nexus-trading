@@ -24,7 +24,7 @@ from matplotlib.collections import PolyCollection
 
 from i18n import tr
 from ui.dialogs.stock_ma_consts import (
-    _DEFAULT_MARGINS, _DEFAULT_PERIOD, _DEFAULT_SERIES, _MARGIN_PAD_PX, _MIN_RIGHT_PX, _PRICE_SERIES,
+    _DEFAULT_MARGINS, _DEFAULT_PERIOD, _DEFAULT_SERIES, _MARGIN_PAD_PX, _MIN_RIGHT_PX, _PRICE_SERIES, _MA_KEYS,
     _SLOT_RATIOS, _TICK_PT,
 )
 from ui.dialogs.stock_ma_helpers import _make_bars, _compact
@@ -100,10 +100,10 @@ class _PlotMixin:
         x = self._x
         self._lines["Close"], = ax.plot(x, self._col("Close"), color=TEXT, linewidth=1.7, label="Close", zorder=5)
         if not self._is_simple_chart:
-            for key, color in MA_RAMP.items():
+            for key in _MA_KEYS:
                 arr = self._col(key)
                 if arr is not None:
-                    self._lines[key], = ax.plot(x, arr, color=color, linewidth=1.3, label=key, zorder=4)
+                    self._lines[key], = ax.plot(x, arr, color=MA_RAMP[key], linewidth=1.3, label=key, zorder=4)
         ew = self._col("EqualWeight")
         if ew is not None and not self._is_simple_chart:
             close = self._col("Close")
@@ -261,7 +261,7 @@ class _PlotMixin:
 
     def _price_lines(self) -> list:
         """[(key, Line2D)] of every price-panel series, shown or not."""
-        return [(k, self._lines[k]) for k in ("Close", *MA_RAMP.keys(), "EW") if k in self._lines]
+        return [(k, self._lines[k]) for k in ("Close", *_MA_KEYS, "EW") if k in self._lines]
 
     def _right_px_current(self, renderer) -> float:
         price = self._panel_axes["price"]
@@ -325,7 +325,7 @@ class _PlotMixin:
     def _price_series_visible(self) -> list:
         """[(key, Line2D)] of the price-panel lines currently shown, Close first."""
         out = []
-        for key in ("Close", *MA_RAMP.keys(), "EW"):
+        for key in ("Close", *_MA_KEYS, "EW"):
             line = self._lines.get(key)
             if line is not None and line.get_visible():
                 out.append((key, line))
