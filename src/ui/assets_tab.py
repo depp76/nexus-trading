@@ -13,14 +13,11 @@ from datetime import datetime
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QLabel, QHeaderView, QMessageBox,
-    QInputDialog, QMenu, QSplitter, QFrame,
+    QInputDialog, QMenu, QFrame,
 )
 from PyQt6.QtCore import Qt, QSettings, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QKeySequence, QShortcut
 
-import matplotlib.dates as mdates
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
 import trade_db
 from threads.fetch_threads import AssetMetricsPreloadThread, AssetReportThread
@@ -29,7 +26,7 @@ from ui.table_items import ColSpec, NumericItem
 from ui.dialogs import TotalAssetsGraphDialog, AssetsReportDialog, AddRecordDialog
 from ui.assets_report import report_dates, build_report
 from ui.colors import PROFIT, LOSS
-from ui.theme import ACCENT, TEXT, TEXT_SUB, TEXT_MUTED
+from ui.theme import TEXT, TEXT_SUB, TEXT_MUTED
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +58,7 @@ class _AssetsTable(QTableWidget):
 from ui.common import (
     FONT_BODY,
     create_font, ThreadOwnerMixin, make_button, setup_table, TAB_MARGINS, TAB_SPACING,
-    install_table_keys, remember_splitter, fix_toolbar_widths, register_toolbar_labels,
+    install_table_keys, fix_toolbar_widths, register_toolbar_labels,
 )
 
 
@@ -249,12 +246,13 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         root = QVBoxLayout(self)
         root.setSpacing(TAB_SPACING)
         root.setContentsMargins(*TAB_MARGINS)
-        # Order (docs/ui.md 8.17, 2026-11-16): one toolbar row -> trend chart
-        # -> weekly table. The record input moved into AddRecordDialog.
+        # Order (docs/ui.md 8.17, 2026-11-16): one toolbar row -> weekly
+        # table. The record input moved into AddRecordDialog; the inline trend
+        # chart was dropped the same day (user direction: the 그래프 button
+        # opens the graph), so the table takes the whole height.
         root.addLayout(self._build_toolbar())
-        self._build_inline_chart()
         self._build_table()
-        root.addWidget(self._build_chart_table_splitter(), 1)
+        root.addWidget(self._table, 1)
 
     def _build_toolbar(self) -> QHBoxLayout:
         """The tab's one toolbar row (user direction 2026-11-16, like Universe
@@ -304,19 +302,6 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         row.addWidget(self._add_btn)
         fix_toolbar_widths([self._currency_btn, self._graph_btn, self._add_btn])
         return row
-
-    def _build_inline_chart(self):
-        """Inline chart (docs/ui.md 4.4): always-visible weekly trend,
-        asset vs KOSPI rebased to first week = 100. The _show_graph modal
-        stays available for a zoomed/detailed view."""
-        self._chart_fig = Figure(figsize=(6, 2), constrained_layout=True)
-        self._chart_ax = self._chart_fig.add_subplot(111)
-        self._chart_canvas = FigureCanvas(self._chart_fig)
-        # Not a fixed 200px any more: chart and table share a splitter below
-        # so the user sets the split (docs/ui.md 8.16).
-        self._chart_canvas.setMinimumHeight(120)
-        self._chart_canvas.setToolTip(tr("더블클릭하면 상세 주간 그래프가 열립니다", "Double-click for the detailed weekly graph"))
-        self._chart_canvas.mpl_connect("button_press_event", self._on_chart_clicked)
 
     def _build_live_labels(self) -> tuple:
         """The live (read-only) figures: returns their two caption labels;
@@ -379,22 +364,6 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self._delete_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
         self._delete_shortcut.activated.connect(self._delete_selected)
 
-    def _build_chart_table_splitter(self) -> QSplitter:
-        """The inline chart above the weekly table, in a vertical splitter
-        whose last sizes are remembered."""
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        splitter.setChildrenCollapsible(False)
-        splitter.addWidget(self._chart_canvas)
-        splitter.addWidget(self._table)
-        # The table gets most of the height at first (proposal 4: "초기에는 표를 충분히").
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 3)
-        # 200px is the starting chart height, not a fixed one; the user's
-        # last split is restored (docs/ui.md 8.17).
-        remember_splitter(splitter, "assets_chart_table", [200, 600])
-        self._splitter = splitter
-        return splitter
-
     def _on_table_context_menu(self, pos):
         if not self._table.selectedIndexes():
             return
@@ -448,7 +417,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self._currency_btn.setText(dict(_CURRENCY_STATES).get(text, _CURRENCY_STATES[0][1]))
         self._currency_btn.setChecked(text != _CURRENCY_STATES[0][0])
         self._grouped_hdr.set_sub_labels(self._current_sub_labels())
-        self._refresh_table()  # also redraws the inline chart for the new currency
+        self._refresh_table()
 
     def _update_rate_label(self, rate: float):
         self._rate_lbl.setText(f"USD/KRW: {rate:,.1f}" if rate > 0 else "USD/KRW: -")
@@ -594,11 +563,6 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
             self._start_metrics_preload()
             return (0.0, 0.0)
         return self._date_metrics_cache[date_str]
-
-    def _on_chart_clicked(self, event):
-        """Double-click on the inline chart opens the detailed weekly graph."""
-        if getattr(event, "dblclick", False) and event.button == 1:
-            self._show_graph()
 
     def _show_graph(self):
         if len(self._records) == 0:
@@ -798,9 +762,8 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
     def _compute_records_metrics(self) -> list:
         """One structured dict per record with every KRW/USD/KOSPI metric
         this tab displays (docs/ui.md 4) -- shared by table rendering
-        (which shows a currency-aware subset), export (full KRW+USD dump)
-        and the inline chart, so the underlying math lives in exactly one
-        place instead of being duplicated per consumer.
+        (which shows a currency-aware subset) and the graph dialog, so the
+        underlying math lives in exactly one place.
         """
         records = self._records
         n = len(records)
@@ -897,69 +860,6 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
 
         self._stretch_columns()
         self._update_live_asset_labels()
-        self._update_chart(metrics)
-
-    def _update_chart(self, metrics=None):
-        """Inline weekly-trend chart (docs/ui.md 4.4): Total Assets (in the
-        active currency) vs KOSPI, both rebased to first week = 100, with
-        the gap between them shaded to show excess return. The _show_graph
-        modal is kept separately for a zoomed/detailed view."""
-        if metrics is None:
-            metrics = self._compute_records_metrics()
-        ax = self._chart_ax
-        ax.clear()
-        if len(metrics) < 2:
-            # An empty state, not an empty 0..1 axis (docs/ui.md 8.16).
-            ax.set_axis_off()
-            msg = (tr("주간 기록을 추가하면 추이가 표시됩니다", "Add weekly records to see the trend") if not metrics
-                   else tr("주간 기록이 2주 이상 쌓이면 추이가 표시됩니다", "The trend appears once two or more weekly records exist"))
-            ax.text(0.5, 0.5, msg, ha="center", va="center",
-                     transform=ax.transAxes, color=TEXT_MUTED, fontsize=9)
-            self._draw_chart()
-            return
-        ax.set_axis_on()
-
-        usd = (self._currency == "USD")
-        total_key = "total_usd" if usd else "total_krw"
-        first_total = metrics[0][total_key]
-        first_kospi = metrics[0]["kospi_close"]
-
-        x = [mdates.date2num(_dt.datetime.strptime(m["date"], "%Y-%m-%d")) for m in metrics]
-        asset_rebased = [(100.0 * m[total_key] / first_total) if first_total else 100.0 for m in metrics]
-        kospi_rebased = [(100.0 * m["kospi_close"] / first_kospi) if first_kospi else 100.0 for m in metrics]
-
-        ax.plot(x, asset_rebased, color=ACCENT, linewidth=2, label=tr(f"총자산 ({self._currency})", f"Total Assets ({self._currency})"))
-        ax.plot(x, kospi_rebased, color=TEXT_MUTED, linewidth=1.4, label="KOSPI")
-        ax.fill_between(x, kospi_rebased, asset_rebased, color=PROFIT, alpha=0.14)
-
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%y.%m.%d"))
-        self._chart_fig.autofmt_xdate(rotation=30)
-        ax.margins(x=0.02)
-        ax.grid(True, linestyle=":", alpha=0.4)
-        ax.legend(fontsize=8, loc="upper left")
-        ax.set_ylabel(tr("지수 (첫 주 = 100)", "Index (first week = 100)"), fontsize=8)
-        # Same currency and period as the table under it (docs/ui.md 8.16).
-        ax.set_title(tr(f"{metrics[0]['date']} ~ {metrics[-1]['date']} · {self._currency} · 저장된 주간 기록", f"{metrics[0]['date']} ~ {metrics[-1]['date']} · {self._currency} · saved weekly records"),
-                     fontsize=8, loc="left", color=TEXT_MUTED)
-
-        self._draw_chart()
-
-    def _draw_chart(self):
-        """Render the inline chart now if it can be seen, else when the tab is
-        next shown: a matplotlib draw is about 0.13 s (constrained layout), and
-        it used to run at start-up and on every table refresh while this tab
-        was hidden behind another one (2026-11-16)."""
-        if self._chart_canvas.isVisible():
-            self._chart_dirty = False
-            self._chart_canvas.draw_idle()
-        else:
-            self._chart_dirty = True
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        if getattr(self, "_chart_dirty", False):
-            self._chart_dirty = False
-            self._chart_canvas.draw_idle()
 
     def update_live_asset(self, current_total: float):
         self._current_live_asset = current_total

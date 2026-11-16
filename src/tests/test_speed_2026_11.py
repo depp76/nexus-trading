@@ -1,8 +1,8 @@
 """tests/test_speed_2026_11.py — the 2026-11-16 speed pass (roadmap.md):
 one shared TLS context per session, the lazy FinanceDataReader import, the
 JP10Y incremental download and re-fetch window, indices fetched alongside the
-markets, investor-flow concurrency, and the Total Assets chart drawn only
-while it can be seen. No network."""
+markets and investor-flow concurrency (the Total Assets inline chart this pass
+first deferred was removed the same day). No network."""
 import datetime as dt
 import os
 import tempfile
@@ -226,7 +226,10 @@ class TestFlowConcurrency(unittest.TestCase):
         self.assertEqual(peak[0], flows.FLOW_FETCH_CONCURRENCY)
 
 
-class TestAssetsChartDrawsOnlyWhenSeen(unittest.TestCase):
+class TestAssetsTabHasNoInlineChart(unittest.TestCase):
+    """The inline trend chart (and its deferred draw from this pass) went the
+    same day: the 그래프 button opens the graph, the table takes the height."""
+
     def setUp(self):
         from PyQt6.QtWidgets import QApplication
         self.app = QApplication.instance() or QApplication([])
@@ -239,25 +242,24 @@ class TestAssetsChartDrawsOnlyWhenSeen(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
-    def test_hidden_tab_defers_the_draw_until_shown(self):
+    def test_no_canvas_and_the_table_fills_the_tab(self):
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+        from PyQt6.QtWidgets import QSplitter
         from ui.assets_tab import TradingRecordTab
         tab = TradingRecordTab()
-        with patch.object(tab._chart_canvas, "draw_idle") as draw_idle, \
-             patch.object(tab._chart_canvas, "draw") as draw:
-            tab._refresh_table()
-            tab._refresh_table()
-            draw_idle.assert_not_called()
-            draw.assert_not_called()
-            self.assertTrue(tab._chart_dirty)
-            self.assertEqual(len(tab._chart_ax.lines), 2)       # the axes are up to date, only the render waits
-            tab.show()
-            self.addCleanup(tab.close)
-            self.app.processEvents()
-            draw_idle.assert_called()                           # (the canvas' own show/resize asks too)
-            self.assertFalse(tab._chart_dirty)
-            before = draw_idle.call_count
-            tab._refresh_table()                                # visible: drawn right away
-            self.assertEqual(draw_idle.call_count, before + 1)
+        self.assertEqual(tab.findChildren(FigureCanvasQTAgg), [])
+        self.assertEqual(tab.findChildren(QSplitter), [])
+        self.assertFalse(hasattr(tab, "_chart_canvas"))
+        tab.resize(1200, 800)
+        tab.show()
+        self.addCleanup(tab.close)
+        self.app.processEvents()
+        self.assertGreater(tab._table.height(), 600)
+        self.assertEqual(tab._table.rowCount(), 2)
+        with patch("ui.assets_tab.TotalAssetsGraphDialog") as dlg:
+            tab._metrics_ready = True
+            tab._show_graph()
+        dlg.assert_called_once()
 
 
 if __name__ == "__main__":
