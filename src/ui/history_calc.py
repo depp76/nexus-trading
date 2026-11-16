@@ -228,6 +228,12 @@ def summarize_positions(open_data: list, closed_data: list, *, deposit: float,
     total_pl = cumulative_asset - principal
 
     _stamp_position_weights(open_data, closed_data, nav)
+    # Trading capital (user direction 2026-11-16): trades are made from the
+    # cash in the account, so the open positions' P/L is measured against
+    # the cash they came out of -- what is left (deposit) plus what was spent
+    # (cost of the open positions). Cash 100M, 50M bought, now worth 60M:
+    # P/L 10M on 100M = 10%.
+    capital = deposit + cost_total
 
     return {
         "kr_cost": kr_cost, "kr_pl": kr_eval - kr_cost, "kr_pl_pct": _pct(kr_eval - kr_cost, kr_cost),
@@ -238,4 +244,6 @@ def summarize_positions(open_data: list, closed_data: list, *, deposit: float,
         "total_pl": total_pl,
         "total_pl_pct": _pct(total_pl, principal) if principal > 0 else 0.0,
         "deposit_pct": _pct(deposit, nav) if nav > 0 else 0.0,
+        "capital": capital,
+        "pos_pl_pct_capital": _pct(eval_total - cost_total, capital) if capital > 0 else 0.0,
     }

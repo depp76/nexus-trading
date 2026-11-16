@@ -42,6 +42,7 @@ from ui.common import (
     fix_toolbar_widths, register_toolbar_labels,
 )
 from ui.colors import PROFIT, LOSS
+from ui.theme import ACCENT, LINE_STRONG
 from ui.history_calc import compute_pl_fields, build_monthly_rows, summarize_positions
 from ui.history_table import fill_table_rows, SectionTable, SECTIONS, COLUMNS
 from ui.delegates import TradeStateDelegate
@@ -197,18 +198,65 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         # Headline figures first at the KPI size, then the supporting ones
         # (and the three inputs) at body size after a divider (docs/ui.md
         # 8.16): every value and input stays in the strip.
-        cell("total_asset", tr("총자산", "Total Assets"), tr("평가액 + 현금", "Valuation + cash"))
-        cell("total_pl", tr("총 손익", "Total P/L"), tr("실현 + 평가 손익", "Realized + unrealized"))
-        cell("total_pl_pct", tr("총 손익 (%)", "Total P/L (%)"), tr("원금 대비", "vs Principal"))
+        # 총자산 = 평가액 + 예수금 + 출금 (user direction 2026-11-16): what the
+        # principal has grown into so far, withdrawals included, so the 원금
+        # input sits right next to it. The former "누적 자산" cell showed the
+        # same figure and is gone; the live NAV without withdrawals is no
+        # longer a cell of its own.
+        # No explanation lines under the figures (user direction 2026-11-16):
+        # the formulas are on the tooltips; only figures stay under a value
+        # (원금의 n배, 투자금의 n%).
+        cell("total_asset", tr("총자산", "Total Assets"))
+        self._principal_edit = self._make_money_input(tr("예: 350,000,000", "e.g. 350,000,000"))
+        cell("principal", tr("원금", "Principal"), "", self._principal_edit)
+        # Re-deposits (user decision 2026-11-16): money taken out and put back
+        # into the account lowers 출금 (net withdrawal) and lands in 예수금, so
+        # 총자산 does not jump on the day it comes back; only money beyond
+        # everything withdrawn so far is new principal.
+        self._principal_edit.setToolTip(tr("처음 넣은 돈. 출금했던 돈을 다시 넣으면 원금이 아니라 출금에서 빼고, "
+                                           "출금 누계보다 많이 넣은 초과분만 원금에 더합니다.",
+                                           "The money first put in. Money taken out and put back lowers the "
+                                           "withdrawal instead; only a deposit beyond all withdrawals so far "
+                                           "adds to the principal."))
+        # Left-aligned like the figures around them (all three inputs).
+        for edit in (self._principal_edit,):
+            edit.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        cell("total_pl", tr("총 손익", "Total P/L"))
+        cell("total_pl_pct", tr("총 손익 (%)", "Total P/L (%)"))
         card.add_divider()
-        cell("cumulative_asset", tr("누적 자산", "Cumulative Assets"), tr("실시간 평가액 + 출금액", "Live NAV + withdrawals"), primary=False)
-        self._principal_edit = self._make_money_input(tr("예: 50,000,000", "e.g. 50,000,000"))
-        cell("principal", tr("원금", "Principal"), tr("입금 − 출금", "Deposits − withdrawals"), self._principal_edit, primary=False)
-        cell("cost_basis", tr("매입 원가", "Cost Basis"), tr("보유 종목 매입액", "Open positions cost"), primary=False)
+        cell("cost_basis", tr("매입 원가", "Cost Basis"))
+        # Open positions at the current price and their P/L against the cash
+        # they were bought from (user direction 2026-11-16, ui.history_calc).
+        cell("eval_total", tr("평가액", "Valuation"))
+        cell("pos_pl", tr("평가 손익", "Position P/L"))
         self._deposit_edit = self._make_money_input(tr("예: 10,000,000", "e.g. 10,000,000"))
-        cell("deposit", tr("예수금", "Deposit"), "", self._deposit_edit, primary=False)
+        cell("deposit", tr("예수금", "Deposit"), "", self._deposit_edit)
         self._withdrawal_edit = self._make_money_input(tr("예: 5,000,000", "e.g. 5,000,000"))
-        cell("withdrawal", tr("출금", "Withdrawal"), tr("누적", "Cumulative"), self._withdrawal_edit, primary=False)
+        cell("withdrawal", tr("출금", "Withdrawal"), "", self._withdrawal_edit)
+        self._withdrawal_edit.setToolTip(tr("순출금: 뺀 돈 − 다시 넣은 돈(다시 넣은 돈은 예수금으로)",
+                                            "Net withdrawal: money taken out − money put back (which goes to the deposit)"))
+
+        # Figures only, all at the KPI size (user direction 2026-11-16): no
+        # line under any value, so the empty sub-labels take no height.
+        for _val, sub_lbl in self._kpi_labels.values():
+            sub_lbl.hide()
+        # The inputs as tall as a figure label, so their numbers sit on the same
+        # line as the figures beside them (a 28 px field rode ~5 px higher).
+        figure_h = self._kpi_labels["total_asset"][0].sizeHint().height()
+        for edit in (self._principal_edit, self._deposit_edit, self._withdrawal_edit):
+            edit.setFixedHeight(figure_h)
+            edit.setTextMargins(0, 0, 0, 0)
+
+        # The three inputs read as plain figures in the strip, so nothing showed
+        # they can be typed into (user report 2026-11-16: "출금을 편집할 수
+        # 없는 것으로 아는데"). A dashed underline marks them, solid accent
+        # while editing; the tooltip says what goes in.
+        for edit in (self._principal_edit, self._deposit_edit, self._withdrawal_edit):
+            edit.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            edit.setStyleSheet(
+                f"QLineEdit {{ border:none; border-bottom:1px dashed {LINE_STRONG}; padding:0px; background:transparent; }}"
+                f"QLineEdit:hover {{ border-bottom:1px solid {LINE_STRONG}; }}"
+                f"QLineEdit:focus {{ border-bottom:1px solid {ACCENT}; }}")
 
         # Every cell has the same stretch factor, so the columns come out
         # equal whenever the window is wide enough; when it is not, each cell
@@ -798,7 +846,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             self._open_data, self._closed_data,
             deposit=deposit, withdrawal=withdrawal, principal=principal,
         )
-        nav, cumulative_asset, total_pl = agg["nav"], agg["cumulative_asset"], agg["total_pl"]
+        cumulative_asset, total_pl = agg["cumulative_asset"], agg["total_pl"]
         # Account valuation + cumulative withdrawals (user direction
         # 2026-10-25): this feeds Total Assets' "Current Total Assets" and its
         # weekly-record autofill, which track the account's value as if
@@ -817,16 +865,23 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
                     val_lbl.setStyleSheet(f"color:{color};")
                 if tooltip:
                     val_lbl.setToolTip(tooltip)
-            if key == "deposit":
-                sub_lbl.setText(tr(f"투자금의 {agg['deposit_pct']:.1f}%", f"{agg['deposit_pct']:.1f}% of invested"))
 
-        set_kpi("total_asset", f"{nav:,.0f}")
-        set_kpi("cumulative_asset", f"{cumulative_asset:,.0f}")
+        # No lines under the figures (user direction 2026-11-16): the ratios
+        # (원금의 n배, 운용 자금 대비 %) are on the tooltips.
+        times = tr(f" · 원금의 {cumulative_asset / principal:.2f}배", f" · {cumulative_asset / principal:.2f}x principal")             if principal > 0 else ""
+        set_kpi("total_asset", f"{cumulative_asset:,.0f}",
+                tooltip=tr(f"평가액 {agg['eval_total']:,.0f} + 예수금 {deposit:,.0f} + 출금 {withdrawal:,.0f}",
+                           f"Valuation {agg['eval_total']:,.0f} + cash {deposit:,.0f} + withdrawals {withdrawal:,.0f}") + times)
         set_kpi("total_pl", f"{total_pl:+,.0f}", _pos_color(total_pl),
-                 tooltip=tr(f"누적 자산 ({cumulative_asset:,.0f}) - 원금 ({principal:,.0f})", f"Cumulative Assets ({cumulative_asset:,.0f}) - Principal ({principal:,.0f})"))
-        set_kpi("total_pl_pct", f"{agg['total_pl_pct']:+.1f}%", _pos_color(agg["total_pl_pct"]))
-        set_kpi("cost_basis", f"{agg['cost_total']:,.0f}")
-        set_kpi("deposit", None)  # value is the live QLineEdit; only the sub-label updates
+                 tooltip=tr(f"총자산 ({cumulative_asset:,.0f}) - 원금 ({principal:,.0f})", f"Total Assets ({cumulative_asset:,.0f}) - Principal ({principal:,.0f})"))
+        set_kpi("total_pl_pct", f"{agg['total_pl_pct']:+.1f}%", _pos_color(agg["total_pl_pct"]),
+                tooltip=tr("총 손익 ÷ 원금", "Total P/L ÷ principal"))
+        set_kpi("cost_basis", f"{agg['cost_total']:,.0f}", tooltip=tr("보유 종목 매입액", "Cost of the open positions"))
+        set_kpi("eval_total", f"{agg['eval_total']:,.0f}", tooltip=tr("보유 종목 현재가 평가액", "Open positions at the current price"))
+        pos_pl, capital = agg["pos_pl"], agg["capital"]
+        set_kpi("pos_pl", f"{pos_pl:+,.0f}", _pos_color(pos_pl) if pos_pl else None,
+                tooltip=tr(f"평가액 − 매입 원가 = 운용 자금 {capital:,.0f}(예수금 + 매입 원가)의 {agg['pos_pl_pct_capital']:+.1f}%",
+                           f"Valuation − cost = {agg['pos_pl_pct_capital']:+.1f}% of the trading capital {capital:,.0f} (deposit + cost)"))
 
     def _stock_history_rows(self, company: str, is_open: bool):
         """(matches, total P/L, total buy, total sell) of one company's closed

@@ -265,9 +265,10 @@ if __name__ == "__main__":
 class _FakeScoreThread:
     instances = []
 
-    def __init__(self, items, params=None, n_top=10):
+    def __init__(self, items, params=None, n_top=10, variant_id="C1"):
         self.items = list(items)
         self.n_top = n_top
+        self.variant_id = variant_id
         self.started = False
         self.progress = _FakeSignal()
         self.finished = _FakeSignal()
@@ -343,7 +344,7 @@ class TestTrendScoreButton(unittest.TestCase):
              patch("ui.universe_tab.QMessageBox.information") as info:
             tab._on_trend_score_clicked()
         info.assert_not_called()
-        self.assertTrue(any("채점할 KOSPI/KOSDAQ 종목이 없습니다" in s for s in statuses), statuses)
+        self.assertTrue(any("채점할 KOSPI/KOSDAQ 종목이 없습니다" in s for s in statuses), statuses)   # 전략 신호: ...
         self.assertIn("채점할 KOSPI/KOSDAQ 종목이 없습니다", tab.footer_lbl.text())
         self.assertEqual(_FakeScoreThread.instances, [])
         self.assertTrue(tab.trend_score_btn.isEnabled())
@@ -356,13 +357,12 @@ class TestTrendScoreButton(unittest.TestCase):
         return tab
 
     @staticmethod
-    def _rec():
-        from strategy.trend_following.config import StrategyParams
-        from strategy.trend_following.scoring import compute_scores, weekly_recommendation
+    def _rec(variant="C1"):
+        """The worker's result: universe_signals.SignalPicks of `variant`."""
+        from strategy.trend_following.universe_signals import pick_signals
         from tests.strategy.trend_following.test_scoring import score_book
-        book, _ = score_book()
-        p = StrategyParams()
-        return weekly_recommendation(compute_scores(book, p), book, p)
+        book, _dates = score_book()
+        return pick_signals(variant, book, None)
 
     def test_finished_pins_top_then_bottom_then_the_rest(self):
         tab = self._score_tab()
@@ -372,8 +372,9 @@ class TestTrendScoreButton(unittest.TestCase):
             tab._on_trend_score_clicked()
         self.assertFalse(tab.trend_score_btn.isChecked())
         worker = _FakeScoreThread.instances[0]
+        self.assertEqual(worker.variant_id, tab._signal_variant)
         worker.progress.emit("Daily history 25/40")
-        self.assertIn("추세 점수: Daily history 25/40", statuses[-1])
+        self.assertIn("전략 신호: Daily history 25/40", statuses[-1])
 
         rec = self._rec()
         top = [s.ticker for s in rec.top]
@@ -387,11 +388,12 @@ class TestTrendScoreButton(unittest.TestCase):
         self.assertTrue(tab.trend_score_btn.isChecked())
         # Top rows in rank order, then Bottom rows, then the rest in cap order.
         self.assertEqual([d["ticker"] for d in tab.all_data], top + bottom + ["AAA", "BBB", "THIN"])
-        self.assertTrue(tab.all_data[0]["trend_rank"].startswith("상위 1 ("))
-        self.assertTrue(tab.all_data[len(top)]["trend_rank"].startswith("하위 1 ("))
+        self.assertEqual(tab.all_data[0]["trend_rank"], "C1 상위 1")             # short tag (2026-11-16)
+        self.assertEqual(tab.all_data[len(top)]["trend_rank"], "C1 하위 1")
+        self.assertIn(" · C1 상위 1 · +", tab.table.item(0, 0).toolTip())       # ticker, market and figure on the tooltip
         self.assertNotIn("trend_rank", tab.all_data[-1])
         meta = tab.table.item(0, 0).data(0x0100)["meta"]      # identity UserRole payload
-        self.assertIn(" · 상위 1 (", meta)
+        self.assertEqual(meta, "C1 상위 1")                                  # the tag only, the name keeps the room
         self.assertEqual(tab.table.item(0, 0).text(), f"S{top[0]}")
         self.assertIn("고정", statuses[-1])
 
@@ -402,7 +404,7 @@ class TestTrendScoreButton(unittest.TestCase):
             tab.on_finished_all(fresh)
         self.assertEqual([d["ticker"] for d in tab.all_data][:2], top)
         self.assertEqual(tab.all_data[2]["ticker"], "BOUNCE")
-        self.assertTrue(tab.all_data[0]["trend_rank"].startswith("상위 1"))
+        self.assertTrue(tab.all_data[0]["trend_rank"].startswith("C1 상위 1"))
 
         # Clicking again unpins: default cap order, labels gone, button unchecked.
         tab._on_trend_score_clicked()
@@ -458,3 +460,73 @@ class TestTrendScoreButton(unittest.TestCase):
             tab.on_finished_all([_stock("UP", 800), _stock("PULL", 400)])
         self.assertFalse(tab.trend_score_btn.isChecked())
         self.assertFalse(any("trend_rank" in d for d in tab.all_data))
+
+
+class TestStrategySignalMenu(unittest.TestCase):
+    """2026-11-16: "전략 신호" is a menu of check boxes -- "선택 안 함" and one
+    per strategy row, exactly one ticked."""
+
+    def setUp(self):
+        p = patch("ui.universe_tab.atomic_save_json")
+        p.start()
+        self.addCleanup(p.stop)
+        _FakeScoreThread.instances.clear()
+
+    def _tab(self):
+        from ui.universe_tab import UniverseTab
+        with patch("ui.universe_tab.safe_load_json", side_effect=_no_disk):
+            tab = UniverseTab()
+        tab.all_data = [_stock("005930", 500), {**_stock("035720", 50), "market": "KOSDAQ"}]
+        return tab
+
+    @staticmethod
+    def _ticked(tab):
+        return ["none"] * tab._signal_none_check.isChecked() + [v for v, cb in tab._signal_checks.items() if cb.isChecked()]
+
+    def test_menu_has_none_and_every_variant_as_check_boxes(self):
+        from PyQt6.QtWidgets import QCheckBox
+        from strategy.trend_following import VARIANTS
+        tab = self._tab()
+        self.assertEqual(tab.trend_score_btn.text(), "전략 신호")
+        self.assertIs(tab.trend_score_btn.menu(), tab._signal_menu)
+        self.assertEqual(list(tab._signal_checks), list(VARIANTS))
+        self.assertTrue(all(isinstance(cb, QCheckBox) for cb in tab._signal_checks.values()))
+        self.assertEqual(tab._signal_none_check.text(), "선택 안 함")
+        self.assertEqual(self._ticked(tab), ["none"])                    # nothing pinned at start
+        with patch("ui.universe_tab.TrendScoreThread", _FakeScoreThread):
+            tab._signal_checks["A2"].click()
+        self.assertEqual(_FakeScoreThread.instances[-1].variant_id, "A2")
+        self.assertEqual(self._ticked(tab), ["A2"])
+
+    def test_exit_lists_are_tagged_and_none_unpins(self):
+        from strategy.trend_following.universe_signals import SignalName, SignalPicks
+        import datetime as dt
+        tab = self._tab()
+        picks = SignalPicks("A1", dt.date(2026, 11, 13),
+                            [SignalName("005930", "S", "KOSPI", 1.0, 0.1, "RS +10.0%p")],
+                            [SignalName("035720", "K", "KOSDAQ", 1.0, -0.2, "RS -20.0%p")],
+                            regime_on=False, uses_regime=True, n_universe=2, n_liquid=2,
+                            n_top_candidates=1, n_bottom_candidates=1, top_kind="entry", bottom_kind="exit")
+        statuses = []
+        tab.status_text_changed.connect(statuses.append)
+        tab._on_trend_score_finished(picks, "")
+        self.assertEqual([d["trend_rank"] for d in tab.all_data], ["A1 상위 1", "A1 이탈 1"])
+        self.assertEqual(tab.table.item(0, 0).toolTip(), "005930 · KOSPI · A1 상위 1 · RS +10.0%p")
+        self.assertIn("오늘 진입 신호 1/1", statuses[-1])
+        self.assertIn("시장 조건(L1) 꺼짐", statuses[-1])
+        self.assertTrue(tab.trend_score_btn.isChecked())
+        self.assertEqual(self._ticked(tab), ["A1"])
+        self.assertIsNone(tab._last_recommendation)                       # only C rows feed the MA chart panel
+        tab._signal_none_check.click()                                    # 선택 안 함
+        self.assertEqual(tab._trend_score_order, {})
+        self.assertFalse(tab.trend_score_btn.isChecked())
+        self.assertEqual(self._ticked(tab), ["none"])
+        self.assertFalse(any("trend_rank" in d for d in tab.all_data))
+
+    def test_a_failed_run_falls_back_to_none(self):
+        tab = self._tab()
+        with patch("ui.universe_tab.TrendScoreThread", _FakeScoreThread):
+            tab._signal_checks["B"].click()
+        with patch("ui.universe_tab.QMessageBox.warning"):
+            _FakeScoreThread.instances[-1].finished.emit(None, "boom")
+        self.assertEqual(self._ticked(tab), ["none"])

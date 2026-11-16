@@ -368,9 +368,12 @@ class TestButtonOrderAndSizing(unittest.TestCase):
         self.assertEqual(y(tab.refresh_btn), y(tab.search_input))       # filters | actions + primary
         self.assertEqual(y(tab.add_ticker_btn), y(tab.refresh_btn))     # Add Ticker opens a dialog (2026-11-16)
         x = lambda w: w.mapTo(tab, w.rect().topLeft()).x()   # noqa: E731
-        self.assertLess(x(tab.views_combo), x(tab.add_ticker_btn))
-        self.assertLess(x(tab.add_ticker_btn), x(tab.trend_score_btn))
+        # 종목 추가 right of the search box; 전략 신호 then the primary at the right end (2026-11-16)
+        self.assertLess(x(tab.search_input), x(tab.add_ticker_btn))
+        self.assertLess(x(tab.add_ticker_btn), x(next(iter(tab._market_buttons.values()))))
+        self.assertLess(x(tab.views_combo), x(tab.trend_score_btn))
         self.assertLess(x(tab.trend_score_btn), x(tab.refresh_btn))
+        self.assertEqual(tab.trend_score_btn.text(), "전략 신호")
         tab.hide()
 
 
