@@ -55,6 +55,8 @@ from data.fx import (
 
 from data.market import (
     INDEX_TICKERS,
+    MARKET_INDEX_MARKETS,
+    attach_market_index,
     fetch_market_data,
     fetch_single_stock,
     get_index_close_for_date,

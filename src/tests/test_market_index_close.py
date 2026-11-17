@@ -57,3 +57,27 @@ class TestGetIndexCloseForDate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAttachMarketIndex(unittest.TestCase):
+    """attach_market_index: the MA chart's market-index column (2026-11-17)."""
+
+    def _stock(self):
+        from datetime import datetime
+        days = [datetime(2026, 1, 1) + timedelta(days=i) for i in range(5)]
+        return pl.DataFrame({"Date": days, "Close": [10.0, 11.0, 12.0, 13.0, 14.0]})
+
+    def test_joins_the_index_close_by_date(self):
+        idx = _frame(date(2026, 1, 2), 3)        # misses the first and the last day
+        with patch("data.market._load_ohlcv_window", return_value=idx) as load:
+            out = market.attach_market_index(self._stock(), "KOSDAQ")
+        self.assertEqual(load.call_args.args, ("^KQ11", "2026-01-01"))
+        self.assertEqual(out.get_column("MarketIndex").to_list(), [None, 1000.0, 1001.0, 1002.0, None])
+
+    def test_other_markets_and_failures_leave_the_frame_alone(self):
+        stock = self._stock()
+        with patch("data.market._load_ohlcv_window") as load:
+            self.assertIs(market.attach_market_index(stock, "Index"), stock)
+            load.assert_not_called()
+        with patch("data.market._load_ohlcv_window", side_effect=RuntimeError("down")):
+            self.assertNotIn("MarketIndex", market.attach_market_index(stock, "S&P500").columns)

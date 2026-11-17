@@ -565,6 +565,35 @@ def fetch_stock_ma_multi(ticker, market, windows=(10, 20, 60), days=1825, target
         return None, str(e)
 
 
+# Stock markets whose MA chart can overlay the market's index (user direction
+# 2026-11-17); each name is also its INDEX_TICKERS label.
+MARKET_INDEX_MARKETS = ("KOSPI", "KOSDAQ", "NASDAQ 100", "S&P500")
+
+
+def attach_market_index(df: pl.DataFrame, market: str) -> pl.DataFrame:
+    """`df` (a stock's daily frame) with a "MarketIndex" column: the close of
+    the index of `market` on each of its dates (null where the index has no
+    bar). Returned unchanged for other markets or when the index cannot be
+    loaded -- the chart then simply has no index line."""
+    if market not in MARKET_INDEX_MARKETS or df is None or df.is_empty() or "Date" not in df.columns:
+        return df
+    fdr_ticker = INDEX_TICKERS[market][0]
+    try:
+        first = df.get_column("Date")[0]
+        idx = _load_ohlcv_window(fdr_ticker, first.strftime("%Y-%m-%d"))
+        if idx.is_empty() or "Close" not in idx.columns:
+            return df
+        idx = idx.select([
+            pl.col("Date").cast(df.schema["Date"]),
+            pl.col("Close").cast(pl.Float64).alias("MarketIndex"),
+        ]).unique(subset="Date", keep="last")
+        return df.join(idx, on="Date", how="left")
+    except Exception:
+        # kept broad: FinanceDataReader raises arbitrary third-party exception types.
+        logger.warning("attach_market_index failed for market=%s", market, exc_info=True)
+        return df
+
+
 def fetch_indice_as_stock(label_ticker):
     label, (fdr_ticker, _color) = label_ticker
     is_bond = label in ("US10YT", "JP10YT", "KR3YT")

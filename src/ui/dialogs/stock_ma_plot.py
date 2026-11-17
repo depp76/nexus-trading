@@ -25,7 +25,7 @@ from matplotlib.collections import PolyCollection
 from i18n import tr
 from ui.dialogs.stock_ma_consts import (
     _DEFAULT_MARGINS, _DEFAULT_PERIOD, _DEFAULT_SERIES, _MARGIN_PAD_PX, _MIN_RIGHT_PX, _PRICE_SERIES, _MA_KEYS,
-    _SLOT_RATIOS, _TICK_PT,
+    _SLOT_RATIOS, _TICK_PT, _INDEX_COLOR,
 )
 from ui.dialogs.stock_ma_helpers import _make_bars, _compact
 from ui.colors import PROFIT, LOSS, MA_RAMP, MA_DIV_NEUTRAL_PCT
@@ -97,28 +97,37 @@ class _PlotMixin:
         self._fit_margins()                 # baseline for the widest labels; toggles keep it
 
     def _plot_price_panel(self) -> None:
-        """Close (ink) + MA ramp; Equal Weight rebased onto the same axis."""
+        """Close (ink) + MA ramp; Equal Weight and the market index rebased
+        onto the same axis (_rescale_price_lines); _price_raw keeps the source
+        arrays."""
         ax = self._panel_axes["price"]
         x = self._x
-        self._lines["Close"], = ax.plot(x, self._col("Close"), color=TEXT, linewidth=1.7, label="Close", zorder=5)
+        self._price_raw = {}
+
+        def add(key, arr, **style):
+            self._price_raw[key] = np.asarray(arr, dtype=float)
+            self._lines[key], = ax.plot(x, self._price_raw[key].copy(), label=key, **style)
+
+        add("Close", self._col("Close"), color=TEXT, linewidth=1.7, zorder=5)
         if not self._is_simple_chart:
             for key in _MA_KEYS:
                 arr = self._col(key)
                 if arr is not None:
-                    self._lines[key], = ax.plot(x, arr, color=MA_RAMP[key], linewidth=1.3, label=key, zorder=4)
-        ew = self._col("EqualWeight")
-        if ew is not None and not self._is_simple_chart:
-            close = self._col("Close")
-            both = ~(np.isnan(ew) | np.isnan(close))
-            if both.any():
-                first = int(np.argmax(both))
-                rebased = ew * (close[first] / ew[first])
-                self._lines["EW"], = ax.plot(x, rebased, color=TEXT_MUTED, linewidth=1.2, linestyle="--",
-                                             label="EW", zorder=3, visible=False)
+                    add(key, arr, color=MA_RAMP[key], linewidth=1.3, zorder=4)
+            ew = self._col("EqualWeight")
+            if ew is not None and self._overlaps_close(ew):
+                add("EW", ew, color=TEXT_MUTED, linewidth=1.2, linestyle="--", zorder=3, visible=False)
+            if self._has_market_index():
+                add("IDX", self._col("MarketIndex"), color=_INDEX_COLOR, linewidth=1.3, zorder=3, visible=False)
+        self._rescale_price_lines(np.ones(len(x), dtype=bool))
         ax.set_ylabel(tr("가격", "Price") + (f" ({self._unit_suffix})" if self._unit_suffix else ""),
                       fontsize=_TICK_PT, color=TEXT_MUTED)
         ax.yaxis.set_major_formatter(lambda v, _pos: self._fmt_str.format(v))
         ax.tick_params(labelbottom=False)
+
+    def _overlaps_close(self, arr) -> bool:
+        close = np.asarray(self._col("Close"), dtype=float)
+        return bool((np.isfinite(np.asarray(arr, dtype=float)) & np.isfinite(close)).any())
 
     def _plot_volume_panel(self) -> None:
         """Up/down volume bars in PROFIT/LOSS (issue #1)."""
@@ -169,6 +178,52 @@ class _PlotMixin:
         ax.set_yticks([30, 50, 70])
         ax.set_ylabel("RSI 14", fontsize=_TICK_PT, color=TEXT_MUTED)
         ax.tick_params(labelbottom=False)
+
+    def _rescale_price_lines(self, mask) -> None:
+        """Set every price-panel line's Y from its source array (_price_raw).
+
+        Close and the MAs as they are; the market index scaled to the close
+        at the first bar of `mask` (the bars in view) so the two read as
+        relative performance over the window shown; Equal Weight scaled to
+        the close at its first bar. _rebase keeps each multiplier for the
+        labels. (A % axis toggle was tried and dropped on 2026-11-17: on a
+        linear axis it is the same picture with other tick labels.)"""
+        close = self._price_raw.get("Close")
+        if close is None:
+            return
+        mask = np.asarray(mask, dtype=bool)
+        has_close = np.isfinite(close)
+
+        def first_bar(valid, in_view=True):
+            sel = valid & mask if in_view else valid
+            if not sel.any():
+                sel = valid
+            return int(np.argmax(sel)) if sel.any() else None
+
+        i0 = first_bar(has_close)
+        if i0 is None or not close[i0]:
+            return
+        self._rebase = {}
+        for key, raw in self._price_raw.items():
+            if key in ("EW", "IDX"):
+                i = first_bar(np.isfinite(raw) & has_close, in_view=(key == "IDX"))
+                if i is None or not raw[i]:
+                    continue
+                scale = close[i] / raw[i]
+            else:
+                scale = 1.0
+            self._rebase[key] = float(scale)
+            self._lines[key].set_ydata(raw * scale)
+
+    def _price_value_text(self, key: str, y: float, compact: bool) -> str:
+        """A price-panel value as shown in end labels and hover badges: the
+        price, or the index's own level for "IDX" (undoing the rebase)."""
+        if key == "IDX":
+            scale = self._rebase.get("IDX")
+            return f"{y / scale:,.2f}" if scale else "—"
+        if compact:
+            return _compact(y)
+        return self._fmt_str.format(y)
 
     # --------------------------------------------------------- layout / view
     def _visible_panels(self) -> list:
@@ -260,10 +315,11 @@ class _PlotMixin:
             price.set_xlim(*saved_x)
             for k, ax in self._panel_axes.items():
                 ax.set_ylim(*saved_y[k])
+            self._rescale_price_lines(self._visible_mask())  # _autofit_y above rescaled to the full range
 
     def _price_lines(self) -> list:
         """[(key, Line2D)] of every price-panel series, shown or not."""
-        return [(k, self._lines[k]) for k in ("Close", *_MA_KEYS, "EW") if k in self._lines]
+        return [(k, self._lines[k]) for k in _PRICE_SERIES if k in self._lines]
 
     def _right_px_current(self, renderer) -> float:
         price = self._panel_axes["price"]
@@ -327,7 +383,7 @@ class _PlotMixin:
     def _price_series_visible(self) -> list:
         """[(key, Line2D)] of the price-panel lines currently shown, Close first."""
         out = []
-        for key in ("Close", *_MA_KEYS, "EW"):
+        for key in _PRICE_SERIES:
             line = self._lines.get(key)
             if line is not None and line.get_visible():
                 out.append((key, line))
@@ -336,10 +392,13 @@ class _PlotMixin:
     def _end_label_style(self, key: str, y: float) -> tuple:
         """(text, background, text color) of a price series' end label."""
         if key == "Close":
-            return self._fmt_str.format(y), TEXT, INK_ON_LIGHT
+            return self._price_value_text(key, y, compact=False), TEXT, INK_ON_LIGHT
+        v = self._price_value_text(key, y, compact=True)
         if key == "EW":
-            return tr(f"동일가중 {_compact(y)}", f"EW {_compact(y)}"), TEXT_MUTED, INK_ON_LIGHT
-        return f"{key} {_compact(y)}", MA_RAMP[key], INK_ON_LIGHT     # every MA_RAMP step is light
+            return tr(f"동일가중 {v}", f"EW {v}"), TEXT_MUTED, INK_ON_LIGHT
+        if key == "IDX":       # the index's own level, not the rebased Y
+            return f"{self._market} {v}", _INDEX_COLOR, INK_ON_LIGHT
+        return f"{key} {v}", MA_RAMP[key], INK_ON_LIGHT     # every MA_RAMP step is light
 
     def _place_end_labels(self) -> None:
         """A value label at each visible price-panel line's right edge (issue
