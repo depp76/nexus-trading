@@ -363,6 +363,28 @@ class StockTable(QTableWidget):
         data = self._row_identity(index.row())
         if data is not None:
             self.ma_chart_requested.emit(data["ticker"])
+        # No selection / current cell / focus left behind by the double-click
+        # (user direction 2026-11-17). Deferred so the double-click's own
+        # release cannot reselect the row. Enter keeps them (keyboard use).
+        QTimer.singleShot(0, self._drop_focus)
+
+    def _drop_focus(self):
+        """Clear the selection and current cell and hand keyboard focus to the
+        parent (the Universe tab, given ClickFocus): with no focus widget the
+        window would re-focus the table on reactivation (the MA chart
+        closing), and Qt then makes the first row current again."""
+        try:
+            self.clearSelection()
+            self.setCurrentIndex(self.model().index(-1, -1))
+            parent = self.parentWidget()
+            if parent is None:
+                self.clearFocus()
+                return
+            if parent.focusPolicy() == Qt.FocusPolicy.NoFocus:
+                parent.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+            parent.setFocus(Qt.FocusReason.OtherFocusReason)
+        except RuntimeError:        # the table is already gone
+            return
 
     def keyPressEvent(self, event):
         if event.matches(QKeySequence.StandardKey.Copy):

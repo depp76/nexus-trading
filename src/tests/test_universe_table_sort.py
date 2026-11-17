@@ -220,3 +220,32 @@ class TestFrozenColumnTracksIdentityWidth(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDoubleClickLeavesNoFocus(unittest.TestCase):
+    """2026-11-17 (user direction): a double-click opens the MA chart and
+    leaves no selected row, current cell or keyboard focus behind."""
+
+    def test_double_click_clears_selection_and_focus(self):
+        from PyQt6.QtWidgets import QVBoxLayout, QWidget
+        root = QWidget()
+        table = StockTable()
+        QVBoxLayout(root).addWidget(table)
+        table.load_data([_mk("005930", "Samsung", 70000), _mk("000660", "SK Hynix", 150000)])
+        root.show()
+        root.activateWindow()
+        app.processEvents()
+        asked = []
+        table.ma_chart_requested.connect(asked.append)
+        table.setFocus()
+        table.selectRow(1)
+        app.processEvents()
+        self.assertTrue(table.hasFocus())
+        table._on_row_activated(table.model().index(1, COL_PRICE))
+        app.processEvents()
+        self.assertEqual(len(asked), 1)
+        self.assertFalse(table.selectionModel().hasSelection())
+        self.assertFalse(table.currentIndex().isValid())
+        self.assertFalse(table.hasFocus())
+        self.assertIs(QApplication.focusWidget(), root)      # the tab holds it, so reactivation skips the table
+        root.close()
