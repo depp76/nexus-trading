@@ -577,6 +577,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
 
         dates = []
         kospi_returns = []
+        kospi_levels = []
         asset_returns = []
         usd_asset_returns = []
         totals = []
@@ -604,6 +605,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
             # KOSPI return
             k_pct = ((kospi - first_kospi) / first_kospi * 100) if first_kospi and first_kospi > 0 and kospi > 0 else 0.0
             kospi_returns.append(k_pct)
+            kospi_levels.append(kospi if kospi and kospi > 0 else None)
             
             # Asset return
             a_pct = ((total - first_total) / first_total * 100) if first_total and first_total > 0 else 0.0
@@ -617,7 +619,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
             usd_totals.append(usd_val)
             
         dlg = TotalAssetsGraphDialog(dates, kospi_returns, asset_returns, usd_asset_returns, totals, usd_totals, self,
-                                     on_report=self._start_report)
+                                     on_report=self._start_report, kospi_levels=kospi_levels)
         self._graph_dlg = dlg
         try:
             dlg.exec()

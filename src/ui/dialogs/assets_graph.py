@@ -89,10 +89,12 @@ def month_ticks(x0: float, x1: float) -> list[float]:
 # ---------------------------------------------------------------------------
 class TotalAssetsGraphDialog(QDialog):
     def __init__(self, dates, kospi_returns, asset_returns, usd_asset_returns, totals, usd_totals, parent=None,
-                 on_report=None):
+                 on_report=None, kospi_levels=None):
         """on_report: called with no arguments by the "Report" button (the
         owning tab fetches in a thread and opens AssetsReportDialog); the
-        button is hidden when it is None."""
+        button is hidden when it is None. kospi_levels: the KOSPI close of
+        each week, shown next to its return in the hover box (2026-11-17);
+        a week without one (None / 0) shows the return only."""
         super().__init__(parent)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint | Qt.WindowType.WindowMinimizeButtonHint)
         self.setWindowTitle(tr("총자산 — 누적 수익률", "Total Assets — Cumulative Return"))
@@ -102,6 +104,7 @@ class TotalAssetsGraphDialog(QDialog):
         self._dates = list(dates)
         self._x = np.asarray(mdates.date2num([pd.to_datetime(d) for d in self._dates]), dtype=float)
         self._kospi = list(kospi_returns)
+        self._kospi_levels = list(kospi_levels) if kospi_levels is not None else [None] * len(self._kospi)
         self._asset = list(asset_returns)
         self._usd = list(usd_asset_returns)
         self._totals = list(totals)
@@ -233,12 +236,16 @@ class TotalAssetsGraphDialog(QDialog):
 
     def tooltip_lines(self, i: int) -> list[tuple[str, str]]:
         """(text, color) lines of week `i`: the date, then Total Assets,
-        Total Assets ($) and KOSPI with return and amount."""
+        Total Assets ($) and KOSPI with return and amount (KOSPI: its level)."""
+        level = self._kospi_levels[i] if i < len(self._kospi_levels) else None
+        kospi = f"{_LBL_KOSPI}  {self._kospi[i]:+.1f}%"
+        if level:
+            kospi += f" · {level:,.2f}"
         return [
             (self._dates[i], TEXT_MUTED),
             (f"{_LBL_ASSETS}  {self._asset[i]:+.1f}% · {fmt_krw(self._totals[i])}", TEXT),
             (f"{_LBL_ASSETS_USD}  {self._usd[i]:+.1f}% · ${self._usd_totals[i]:,.0f}", ACCENT),
-            (f"{_LBL_KOSPI}  {self._kospi[i]:+.1f}%", TEXT_MUTED),
+            (kospi, TEXT_MUTED),
         ]
 
     def _hide_hover(self) -> None:

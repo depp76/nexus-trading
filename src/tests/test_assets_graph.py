@@ -156,3 +156,23 @@ class TestDialog(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestKospiLevelInTooltip(unittest.TestCase):
+    """2026-11-17 (user direction): the hover box shows the KOSPI level next
+    to its return; without levels (or for a week without one) only the %."""
+
+    def test_level_follows_the_return(self):
+        data = _series()
+        levels = [2500.0 + 10 * i for i in range(len(data[0]))]
+        levels[3] = None
+        dlg = TotalAssetsGraphDialog(*data, kospi_levels=levels)
+        self.addCleanup(dlg.close)
+        self.assertEqual(dlg.tooltip_lines(2)[3][0], f"KOSPI  {data[1][2]:+.1f}% · 2,520.00")
+        self.assertEqual(dlg.tooltip_lines(3)[3][0], f"KOSPI  {data[1][3]:+.1f}%")
+
+    def test_without_levels_only_the_return(self):
+        data = _series()
+        dlg = TotalAssetsGraphDialog(*data)
+        self.addCleanup(dlg.close)
+        self.assertEqual(dlg.tooltip_lines(0)[3][0], f"KOSPI  {data[1][0]:+.1f}%")
