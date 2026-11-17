@@ -70,7 +70,11 @@ class _HoverMixin:
             return f"RSI {v:.0f}"
         if key == "Vol":
             return tr(f"거래량 {_compact(v)}", f"Vol {_compact(v)}")
+        if key == "IDX":
+            return f"{self._market} {self._price_value_text(key, v, compact=False)}"
         prefix = "" if key == "Close" else f"{_SERIES.get(key, key)} "
+        if key in self._price_raw:
+            return prefix + self._price_value_text(key, v, compact=False)
         return prefix + self._fmt_str.format(v)
 
     def _hover_series(self, idx: int) -> list:

@@ -65,6 +65,7 @@ rows, number formatting and the right-panel alignment:
 """
 import logging
 
+import numpy as np
 import pandas as pd
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -79,7 +80,7 @@ from i18n import tr
 from ui.dialogs.stock_ma_consts import (  # noqa: F401 -- re-exported for callers of ui.dialogs.stock_ma
     _STOCK_MARKETS, _SIMPLE_CHART_TICKERS, _SCROLL_MAX, _TICK_PT, _SEG_H, _PERIODS, _PERIOD_LABELS,
     _DEFAULT_PERIOD, _DEFAULT_MARGINS, _MARGIN_PAD_PX, _MIN_RIGHT_PX, _SLOT_RATIOS, _SERIES,
-    _PRICE_SERIES, _DEFAULT_SERIES, _MA_KEYS,
+    _PRICE_SERIES, _DEFAULT_SERIES, _MA_KEYS, _INDEX_COLOR,
 )
 from ui.dialogs.stock_ma_hover import _HoverMixin
 from ui.dialogs.stock_ma_plot import _PlotMixin
@@ -149,7 +150,9 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
 
     def _init_chart_state(self) -> None:
         """Artists / state the interaction handlers refer to."""
-        self._lines = {}          # "Close" | "MA5" | ... | "EW" -> Line2D
+        self._lines = {}          # "Close" | "MA10" | ... | "EW" | "IDX" -> Line2D
+        self._price_raw = {}      # price-panel key -> source array (_rescale_price_lines)
+        self._rebase = {}         # price-panel key -> price-axis multiplier
         self._end_labels = {}     # same keys -> Annotation
         self._crosshairs = []     # one axvline per panel
         self._hover = {}          # series key -> (marker Line2D, Annotation) at the cursor
@@ -271,6 +274,7 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         self._series_buttons = {}
         self._panel_buttons = {}
         has_ew = self._has_data and "EqualWeight" in self._df.columns and not self._is_simple_chart
+        has_idx = self._has_market_index()
 
         def series_button(lay, key):
             btn = _segment_button(_SERIES[key], checked=(key in _DEFAULT_SERIES))
@@ -292,6 +296,11 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
                 series_button(ma, key)
             if has_ew:      # the equal-weight index line sits with the other price-panel lines
                 series_button(ma, "EW")
+            if has_idx:     # the stock's market index, right of MA50 (user direction 2026-11-17)
+                series_button(ma, "IDX")
+                self._series_buttons["IDX"].setToolTip(
+                    tr(f"{self._market} 지수를 가격축에 겹쳐 표시합니다 (보이는 구간의 첫날 종가에 맞춤).",
+                       f"Overlay the {self._market} index on the price axis (rebased to the first bar in view)."))
             row.addWidget(ma_w)
 
         # 보조지표 (the divergence series drives its panel; volume / RSI panel
@@ -421,6 +430,14 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         if self._change_mode == 'bp':
             return last, last - prev
         return last, ((last - prev) / prev * 100.0) if prev else None
+
+    def _has_market_index(self) -> bool:
+        """True when the frame carries the market index ("MarketIndex", from
+        StockMaThread) on at least one bar that also has a close."""
+        if not self._has_data or self._is_simple_chart or "MarketIndex" not in self._df.columns:
+            return False
+        idx, close = self._col("MarketIndex"), self._col("Close")
+        return bool((np.isfinite(np.asarray(idx, dtype=float)) & np.isfinite(np.asarray(close, dtype=float))).any())
 
     def _col(self, name: str):
         return self._df.get_column(name).to_numpy() if name in self._df.columns else None

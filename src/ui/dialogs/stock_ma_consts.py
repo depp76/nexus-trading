@@ -7,6 +7,7 @@ re-exports every name, so `from ui.dialogs.stock_ma import _PERIODS` keeps
 working.
 """
 from i18n import tr
+from ui.colors import SERIES_PALETTE
 from ui.common import BTN_H, FONT_BODY
 
 
@@ -38,12 +39,16 @@ _SLOT_RATIOS = {"price": 3, "vol": 1, "div": 1, "rsi": 1}
 _SERIES = {
     "Close": tr("종가", "Close"), "MA10": "MA10", "MA20": "MA20", "MA50": "MA50",
     "Div": tr("이격도", "Divergence"), "EW": tr("동일가중", "Equal Weight"),
+    "IDX": tr("시장지수", "Index"),
 }
 # The moving averages the chart draws and toggles. MA5 was dropped on
 # 2026-11-16 (user direction); its MA_RAMP color stays for the MA20
 # divergence line.
 _MA_KEYS = ("MA10", "MA20", "MA50")
-_PRICE_SERIES = ("Close", *_MA_KEYS, "EW")
+# "IDX" is the stock's market index ("MarketIndex" column), rebased onto the
+# price axis at the left edge of the view (user direction 2026-11-17).
+_PRICE_SERIES = ("Close", *_MA_KEYS, "EW", "IDX")
+_INDEX_COLOR = SERIES_PALETTE[1]     # teal: apart from the violet MA ramp
 # What the dialog opens with: close price plus the divergence panel, no moving
 # averages (user direction 2026-09-29: close only on the price panel).
 _DEFAULT_SERIES = frozenset({"Close", "Div"})

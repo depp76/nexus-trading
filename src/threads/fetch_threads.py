@@ -31,6 +31,8 @@ from data_fetcher import (
     is_us_market,
     start_date,
     INDEX_TICKERS,
+    MARKET_INDEX_MARKETS,
+    attach_market_index,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,6 +91,10 @@ class StockMaThread(QThread):
                 # kept broad: FinanceDataReader raises arbitrary third-party exception types.
                 logger.warning("Error fetching KODEX 200 EW: %s", e, exc_info=True)
         # ----------------------------------------
+
+        # The index of the stock's market, for the chart's "시장지수" toggle.
+        if self.market in MARKET_INDEX_MARKETS and df is not None:
+            df = attach_market_index(df, self.market)
 
         investor_data = []
         if self.market in ("KOSPI", "KOSDAQ") or (self.market == "Index" and self.ticker in ("KS11", "KQ11", "^KS11", "^KQ11")):

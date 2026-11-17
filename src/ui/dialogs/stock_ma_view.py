@@ -76,6 +76,7 @@ class _ViewMixin:
         mask = self._visible_mask()
         if not mask.any():
             return
+        self._rescale_price_lines(mask)
 
         def span(arrays, pad):
             arrays = [np.asarray(a, dtype=float)[mask] for a in arrays if a is not None]

@@ -20,7 +20,7 @@ from ui.colors import PROFIT, LOSS, MA_RAMP  # noqa: E402
 from ui.dialogs.stock_ma_consts import _MA_KEYS  # noqa: E402
 
 
-def _df(n=400, ew=False, volume=True):
+def _df(n=400, ew=False, volume=True, index=False):
     rng = np.random.default_rng(1)
     close = 100000 * np.cumprod(1 + rng.normal(0.0005, 0.02, n))
     dates = [date(2025, 1, 1) + timedelta(days=i) for i in range(n)]
@@ -31,6 +31,8 @@ def _df(n=400, ew=False, volume=True):
     df = _compute_indicators(df, windows=(5, 10, 20, 60))
     if ew:
         df = df.with_columns((pl.col("Close") * 0.5 + 1000).alias("EqualWeight"))
+    if index:
+        df = df.with_columns((pl.Series(np.linspace(2000.0, 3000.0, n))).alias("MarketIndex"))
     return df
 
 
@@ -116,6 +118,29 @@ class TestStockChart(unittest.TestCase):
         self.assertNotIn("Div(20)", {k for k, (m, _a) in d._hover.items() if m.get_visible()})
         d._series_buttons["Div"].click()
         self.assertTrue(d._panel_axes["div"].get_visible())
+
+    def test_market_index_toggle_sits_right_of_ma50(self):
+        """2026-11-17 (user direction): a 시장지수 button right of MA50 overlays
+        the stock's market index, rebased to the close at the view's first
+        bar; its end label and hover show the index level itself."""
+        d = StockMaDialog("005930", "Samsung", "KOSPI", _df(index=True))
+        self.assertEqual(list(d._series_buttons), ["MA10", "MA20", "MA50", "IDX", "Div"])
+        self.assertEqual(d._series_buttons["IDX"].text(), "시장지수")
+        self.assertFalse(d._lines["IDX"].get_visible())              # off by default
+        d._series_buttons["IDX"].click()
+        self.assertTrue(d._lines["IDX"].get_visible())
+        close = d._col("Close")
+        first = int(np.argmax(d._visible_mask()))
+        self.assertAlmostEqual(d._lines["IDX"].get_ydata()[first], close[first], places=6)
+        d._apply_period("All")                                        # rebased to the new first bar
+        self.assertAlmostEqual(d._lines["IDX"].get_ydata()[0], close[0], places=6)
+        self.assertTrue(d._end_labels["IDX"].get_text().startswith("KOSPI 3,000.00"))
+        d._set_cursor(0)
+        self.assertEqual(d._hover["IDX"][1].get_text(), "KOSPI 2,000.00")
+        d._series_buttons["IDX"].click()
+        self.assertNotIn("IDX", d._end_labels)
+        # no index column -> no button
+        self.assertNotIn("IDX", StockMaDialog("005930", "Samsung", "KOSPI", _df())._series_buttons)
 
     def test_close_is_always_drawn_so_the_price_panel_stays(self):
         """2026-11-16: no 종가 button -- Close is always on, so the price panel
