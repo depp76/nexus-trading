@@ -71,7 +71,9 @@ MA_DIV_NEUTRAL_PCT = 2.0
 # 3.1:1 step, so the four lines take the four steps, shorter = lighter. MA5
 # keeps its colour (the MA20 divergence line uses it) and the MA50
 # divergence line keeps its old colour through MA_DIV50_COLOR.
-MA_RAMP = {"MA5": "#d1c5ff", "MA20": "#d1c5ff", "MA50": "#bcabff", "MA60": "#a993ff", "MA200": "#977cff"}
+# Later the same day MA50 left the chart menu (spec v07): three lines on the ramp's first,
+# second and last steps (6.2 / 4.9 / 3.1:1), so neighbours stay well apart.
+MA_RAMP = {"MA5": "#d1c5ff", "MA20": "#d1c5ff", "MA60": "#bcabff", "MA200": "#977cff"}
 MA_DIV50_COLOR = "#a993ff"     # was MA_RAMP["MA20"] before 2026-11-18
 
 # Pre-allocated QColor instances -- avoids re-parsing the hex string on every

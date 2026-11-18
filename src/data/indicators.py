@@ -59,7 +59,7 @@ def _compute_indicators(df: pl.DataFrame, windows=(10, 20, 60)) -> pl.DataFrame:
 # They live in their own "SMA<w>" columns: the MA<w> columns above keep
 # min_samples=1 because the divergence ratios (and the Universe table) are
 # computed from them and stay unchanged.
-CHART_MA_WINDOWS = (20, 50, 60, 200)
+CHART_MA_WINDOWS = (20, 60, 200)      # MA50 left the chart menu on 2026-11-18 (spec v07)
 
 
 def chart_ma_column(window: int) -> str:

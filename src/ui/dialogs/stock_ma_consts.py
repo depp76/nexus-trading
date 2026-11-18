@@ -38,7 +38,7 @@ _SLOT_RATIOS = {"price": 3, "vol": 1, "div": 1, "rsi": 1}
 # Independent series toggles (user direction 2026-10-15), key -> label.
 # Price-panel lines use their _lines key; "Div" is the divergence panel.
 _SERIES = {
-    "Close": tr("종가", "Close"), "MA20": "MA20", "MA50": "MA50", "MA60": "MA60", "MA200": "MA200",
+    "Close": tr("종가", "Close"), "MA20": "MA20", "MA60": "MA60", "MA200": "MA200",
     "Div": tr("이격도", "Divergence"), "EW": tr("동일가중", "Equal Weight"),
     "IDX": tr("시장지수", "Index"),
     "CH": tr("돌파 채널", "Breakout channel"),
@@ -47,8 +47,9 @@ _SERIES = {
 # 2026-11-16 (user direction); its MA_RAMP color stays for the MA20
 # divergence line. 2026-11-18 (docs/ma60_unification_2026-11-18.md 1.2):
 # MA10 dropped; MA60 (the A rows' L1/L2 line) and MA200 (long reference)
-# added; MA50 stays for the C rows and the Universe MA50 Div.
-_MA_KEYS = ("MA20", "MA50", "MA60", "MA200")
+# added; MA50 stayed for the C rows and the Universe MA50 Div. 2026-11-18 (user direction, spec
+# v07 10-13: the C rows' trend line is 60 too): MA50 dropped -- only the periods the strategy uses.
+_MA_KEYS = ("MA20", "MA60", "MA200")
 # Each line's column: the strict "SMA<w>" (min_samples=window, warm-up
 # history loaded ahead) from data.indicators.add_chart_mas, not the MA<w>
 # columns the divergence ratios use.
