@@ -21,7 +21,7 @@ docs/ui.md "MA Chart Redesign" mockup (12 issues, phases A-D):
 
 2026-10-15 (user direction): the exclusive view segment (Short / Long /
 Close only / Divergence / Equal Weight) became independent, multi-select
-series toggles -- MA20, MA50, MA60, MA200 [, Equal Weight], Divergence (Close is
+series toggles -- MA20, MA60, MA200 [, Equal Weight], Divergence (Close is
 always drawn, no MA5: 2026-11-16; MA10 -> MA60 / MA200: 2026-11-18).
 Divergence shows/hides the divergence panel (the separate panel button is
 gone); with no price line selected the price panel is hidden too. The
@@ -267,7 +267,7 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
 
     def _build_view_row(self) -> QWidget:
         """One line of controls (user direction 2026-11-18): [이동평균 ▾] a
-        drop-down of check boxes (MA20 · MA50 · MA60 · MA200 (· 동일가중 · 시장지수),
+        drop-down of check boxes (MA20 · MA60 · MA200 (· 동일가중 · 시장지수 · 돌파 채널),
         several at once), [보조지표 이격도 · 거래량 · RSI] toggle buttons and
         [기간 ▾] a single-choice combo box, then the as-of date at the right
         end. Close is always drawn (no button). The three indicator buttons

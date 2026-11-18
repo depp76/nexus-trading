@@ -31,7 +31,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
-from paths import UNIVERSE_CACHE_FILE, CUSTOM_SETTINGS_FILE
+import paths
+from paths import CUSTOM_SETTINGS_FILE
 from threads.fetch_threads import (
     SingleStockFetchThread,
     AllDataFetchThread,
@@ -133,7 +134,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._refresh_views_combo()   # filled even before any data arrives
 
         # Try to load cached universe data to make startup instant, but always refresh to latest afterwards.
-        cached = safe_load_json(UNIVERSE_CACHE_FILE, default=None)
+        cached = safe_load_json(paths.UNIVERSE_CACHE_FILE, default=None)
         if cached:
             self.all_data = cached
             self._reload_table()
@@ -628,7 +629,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             # refresh that fetched nothing and had nothing to fall back on).
             return
         try:
-            atomic_save_json(UNIVERSE_CACHE_FILE, self.all_data)
+            # paths.UNIVERSE_CACHE_FILE is read here, not imported, so tests can point it elsewhere.
+            atomic_save_json(paths.UNIVERSE_CACHE_FILE, self.all_data)
         except Exception as e:
             logger.warning("Error caching universe data: %s", e, exc_info=True)
 

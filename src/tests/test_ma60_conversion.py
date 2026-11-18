@@ -91,5 +91,14 @@ class TestUniverseColumnAndFilter(unittest.TestCase):
         self.assertEqual(len([m for m in got if "MA60 Div" in m]), 1)
 
 
+class TestTestsLeaveTheRealCacheAlone(unittest.TestCase):
+
+    def test_universe_cache_path_is_temporary_in_tests(self):
+        import os
+        import paths
+        real = os.path.join(paths.BASE_DIR, "universe_cache.json")
+        self.assertNotEqual(os.path.abspath(paths.UNIVERSE_CACHE_FILE), os.path.abspath(real))
+
+
 if __name__ == "__main__":
     unittest.main()
