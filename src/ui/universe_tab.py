@@ -26,8 +26,7 @@ from collections import Counter
 from datetime import datetime
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLineEdit,
-    QPushButton, QMessageBox, QInputDialog, QMenu, QCheckBox, QWidgetAction,
+    QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QMessageBox, QInputDialog, QMenu, QCheckBox, QWidgetAction,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
@@ -59,7 +58,7 @@ logger = logging.getLogger(__name__)
 
 
 from ui.common import (
-    _MARKET_ORDER,
+    _MARKET_ORDER, SearchLineEdit,
     atomic_save_json,
     safe_load_json,
     ThreadOwnerMixin,
@@ -163,11 +162,11 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     def _build_filter_bar(self, bar: QHBoxLayout) -> None:
         """Left part of the toolbar: search, market toggles, status filter,
         range filters and saved views, then the stretch."""
-        self.search_input = QLineEdit()
+        self.search_input = SearchLineEdit()     # counts the IME syllable being composed
         self.search_input.setPlaceholderText(tr("종목명 또는 코드 검색", "Search name or ticker"))
         self.search_input.setMinimumWidth(180)
         self.search_input.setMaximumWidth(260)
-        self.search_input.textChanged.connect(self.filter_table)
+        self.search_input.searchTextChanged.connect(self.filter_table)
         bar.addWidget(self.search_input)
         # 종목 추가 right of the search box (user direction 2026-11-16): you
         # search for a name first and add it when it is not in the universe.
@@ -669,7 +668,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
     def filter_table(self, text=None):
         if text is None:
-            text = self.search_input.text()
+            text = self.search_input.search_text()
         self.table.apply_col_filters(text, status=self._status_filter, market=self.selected_markets(),
                                      ranges=self._ranges)
         self._update_filters_button()

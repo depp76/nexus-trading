@@ -14,13 +14,13 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QBrush, QColor, QGuiApplication
 from PyQt6.QtWidgets import (
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox, QTableWidget,
+    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QTableWidget,
     QTableWidgetItem, QHeaderView,
 )
 
 from i18n import tr
 from ui.colors import fg_for
-from ui.common import make_button, setup_table, install_table_keys, make_footer_label
+from ui.common import make_button, setup_table, install_table_keys, make_footer_label, SearchLineEdit
 from ui.strategy_widgets import reason_label, fmt_price, trade_summary
 from ui.table_items import NumericItem
 
@@ -89,11 +89,11 @@ class StrategyTradesView(QWidget):
         bar.setContentsMargins(0, 0, 0, 0)
         # Built either way so the filter code has one path; without filters
         # they are never shown and keep their "everything" value.
-        self.search = QLineEdit()
+        self.search = SearchLineEdit()           # counts the IME syllable being composed
         self.search.setPlaceholderText(tr("종목명 또는 티커 검색", "Search name or ticker"))
         self.search.setClearButtonEnabled(True)
         self.search.setMaximumWidth(260)
-        self.search.textChanged.connect(self._apply_filter)
+        self.search.searchTextChanged.connect(self._apply_filter)
         self.reason_combo = QComboBox()
         self.reason_combo.addItem(ALL_REASONS, "")
         self.reason_combo.currentIndexChanged.connect(self._apply_filter)
@@ -219,7 +219,7 @@ class StrategyTradesView(QWidget):
                      if (t.ticker, f"{t.entry_date:%Y-%m-%d}", f"{t.exit_date:%Y-%m-%d}") == key), None)
 
     def _apply_filter(self, *_):
-        text = self.search.text().strip().lower()
+        text = self.search.search_text().strip().lower()
         reason = self.reason_combo.currentData() or ""
         shown = []
         for row in range(self.table.rowCount()):

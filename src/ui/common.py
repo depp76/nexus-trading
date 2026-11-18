@@ -15,7 +15,7 @@ import datetime as _dt
 from typing import Any, Literal
 from collections.abc import Callable
 
-from PyQt6.QtCore import QObject, QEvent, Qt, QRect, QSize, QPoint
+from PyQt6.QtCore import QObject, QEvent, Qt, QRect, QSize, QPoint, pyqtSignal
 from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QTableWidget, QHeaderView, QLabel, QFrame, QHBoxLayout, QVBoxLayout,
     QWidget, QApplication, QGridLayout, QLayout, QSizePolicy, QTabBar,
@@ -405,6 +405,58 @@ class FlowLayout(QLayout):
         if lines:
             y -= self._v
         return y - rect.y() + m.bottom()
+
+
+# ---------------------------------------------------------------------------
+# Live search box (docs/ui.md 8.26)
+# ---------------------------------------------------------------------------
+class SearchLineEdit(QLineEdit):
+    """A QLineEdit for live filtering that also counts the IME syllable still
+    being composed.
+
+    QLineEdit keeps an input method's pre-edit text out of text() and emits no
+    textChanged while it changes. A Korean IME holds the last syllable in
+    pre-edit until the next key, so typing "삼성전기" filtered on "삼성전" (and
+    listed 삼성전자 too) until Enter or a click committed "기" (2026-11-18).
+    `searchTextChanged(str)` fires on every committed or pre-edit change with
+    `search_text()`: the committed text with the pre-edit spliced in at the
+    cursor. text() / setText() keep their usual meaning (what gets saved)."""
+
+    searchTextChanged = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._preedit = ""
+        self._emitted = False
+        self.textChanged.connect(self._on_text_changed)
+
+    def search_text(self) -> str:
+        text = self.text()
+        if not self._preedit:
+            return text
+        pos = self.cursorPosition()
+        return text[:pos] + self._preedit + text[pos:]
+
+    def inputMethodEvent(self, event):
+        # Record the pre-edit first: a commit inside super() emits textChanged,
+        # and search_text() must already see the new pre-edit then. A pre-edit
+        # change alone emits no textChanged, so it is signalled here.
+        before = self.search_text()
+        self._preedit = event.preeditString()
+        self._emitted = False
+        super().inputMethodEvent(event)
+        if not self._emitted and self.search_text() != before:
+            self.searchTextChanged.emit(self.search_text())
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        if self._preedit and not self.hasFocus():
+            self._preedit = ""          # the IME commits (or drops) it on focus loss
+            self.searchTextChanged.emit(self.search_text())
+
+    def _on_text_changed(self, _text):
+        self._emitted = True
+        self.searchTextChanged.emit(self.search_text())
 
 
 # ---------------------------------------------------------------------------

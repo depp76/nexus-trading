@@ -1059,3 +1059,12 @@ Phase 0~6 계획표는 `docs/history/ui_archive_2026-09_10.md`로 옮겼다. Pha
   MA60을 늘 계산한다(`windows`에 60이 있어도 한 번만).
 - **그 밖**: AI 종목 리포트 입력 `ma60_divergence`, 이평 차트 로딩 문구. 전략 패키지의 필드 이름(`ma50_div`, `pct_ma50`)과 청산 사유 키 `ma50_exit`는
   화면에 보이지 않는 식별자라 호환을 위해 유지한다(스펙 10-8 별도 작업). 테스트 `tests/test_ma60_conversion.py`.
+
+### 8.26 검색창: 조합 중인 한글 글자까지 검색 (2026-11-18)
+
+- **증상**: Trading History에서 "삼성전기"를 입력해도 삼성전자 행이 함께 남았다(Enter나 다른 곳 클릭 전까지).
+- **원인**: `QLineEdit`은 IME가 조합 중인 글자(pre-edit)를 `text()`에 넣지 않고, 조합 중에는 `textChanged`도 보내지 않는다. 한글 IME는
+  마지막 음절을 다음 키까지 조합 상태로 두므로, 검색은 늘 한 글자 모자란 "삼성전"으로 돌았다. 데이터·필터 로직은 정상이었다.
+- **수정**: `ui/common.py` `SearchLineEdit` — 확정 글자에 조합 중 글자를 커서 위치에 끼운 `search_text()`와, 확정·조합 변경마다 보내는
+  `searchTextChanged(str)`. `text()`/`setText()`는 그대로라 저장되는 검색어(`export_state`)는 확정 글자다.
+  같은 구조였던 세 검색창 모두 적용: Trading History, Trading Universe, Strategy 매매 내역 팝업. 테스트 `tests/test_history_toolbar.py`.

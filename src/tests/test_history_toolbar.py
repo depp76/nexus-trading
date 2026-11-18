@@ -45,6 +45,29 @@ class TestHistoryToolbar(unittest.TestCase):
         tab._search_edit.clear()
         self.assertEqual(len(self._companies()), 4)
 
+    def test_search_counts_the_korean_syllable_still_being_composed(self):
+        """2026-11-18: a Korean IME keeps the last syllable in pre-edit (out of
+        QLineEdit.text(), no textChanged), so "삼성전기" used to filter on "삼성전"
+        and list 삼성전자 as well until Enter."""
+        from PyQt6.QtGui import QInputMethodEvent
+        tab = self.tab
+        tab._open_data[0]["company"] = "삼성전자"
+        tab._closed_data[1]["company"] = "삼성전기"
+        tab._apply_filter()
+        for committed, preedit in (("삼", ""), ("", "성"), ("성", "ㅈ"), ("", "전"), ("전", "ㄱ"), ("", "기")):
+            ev = QInputMethodEvent(preedit, [])
+            ev.setCommitString(committed)
+            QApplication.sendEvent(tab._search_edit, ev)
+        self.assertEqual(tab._search_edit.text(), "삼성전")              # Qt's committed text
+        self.assertEqual(tab._search_edit.search_text(), "삼성전기")
+        self.assertEqual(self._companies(), ["삼성전기"])
+        ev = QInputMethodEvent("", [])
+        ev.setCommitString("기")                                           # Enter / next key commits it
+        QApplication.sendEvent(tab._search_edit, ev)
+        self.assertEqual(self._companies(), ["삼성전기"])
+        tab._search_edit.clear()
+        self.assertEqual(len(self._companies()), 4)
+
     def test_period_button_cycles_and_filters(self):
         tab, btn = self.tab, self.tab._period_btn
         self.assertEqual((btn.text(), btn.isChecked()), ("기간(전체)", False))
