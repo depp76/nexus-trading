@@ -145,11 +145,11 @@ def _score_check(vid: str, ticker: str, picks: SignalPicks | None, p: StrategyPa
     rec = picks.detail if picks is not None and picks.variant_id == vid else None
     s = rec.scored.get(ticker) if rec is not None else None
     gates = [(tr("유동성", "Liquidity"), lambda x: bool(x.liquid)),
-             ("MA50Div > 0", lambda x: bool(np.isfinite(x.ma50_div) and x.ma50_div > 0)),
+             (f"MA{p.score_ma_long}Div > 0", lambda x: bool(np.isfinite(x.ma50_div) and x.ma50_div > 0)),
              (f"Range52 ≥ {p.gate_range_min:.2f}",
               lambda x: bool(np.isfinite(x.range52) and x.range52 >= p.gate_range_min)),
              (tr("과열 아님", "Not overheated"), lambda x: not x.overheated)]
-    metric_defs = (("MA50Div", tr("추세 방향 +", "Trend direction +"), "pct_ma50"),
+    metric_defs = ((f"MA{p.score_ma_long}Div", tr("추세 방향 +", "Trend direction +"), "pct_ma50"),
                    ("Range52", tr("추세 위치 +", "Trend position +"), "pct_range52"),
                    ("R3", tr("최근 3일 −", "Last 3 days −"), "pct_r3"))
     metrics = [Metric(label, _f2(getattr(s, attr)) if s is not None else "-", help_)

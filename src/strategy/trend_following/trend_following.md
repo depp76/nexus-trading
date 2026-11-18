@@ -1089,7 +1089,7 @@ BM2·BM4와 개발 2구간(2021-22 / 2023-24)별 표, BM1 대비 알파·베타�
   테스트 `test_scoring.py`·`test_scoring_policy.py`·`test_factor_ic.py`·`test_lookahead.py`·`test_signal_provider.py`. 리포트 열 이름과 저장된 IC 리포트·스냅샷 키가 있으면 이전 이름의 호환 접근 또는 명시적 변환을 둔다.
 - 범위 밖(이름이 같지만 전략과 무관): `data/indicators.py`의 `MA50`/`MA50_Div`(Universe 표·차트 이격도), `ui/universe_table.py`, `gemini_helper.py`.
 
-### 10-9. [D] 구현 지시서 (승인 후 별도 작업 — 이 등록에서는 구현하지 않음)
+### 10-9. [D] 구현 지시서 (2026-11-18 구현 완료 — 결과는 10-10)
 
 규칙·결과 변경 없이 10-2의 30회를 **실행할 수 있게만** 만든다. 실행(백테스트)은 [V] 단계에서 한다. 스펙 규칙(CLAUDE.md)대로 이 md를 같은 커밋에서 갱신한다.
 
@@ -1100,7 +1100,8 @@ BM2·BM4와 개발 2구간(2021-22 / 2023-24)별 표, BM1 대비 알파·베타�
    `variant.apply()`가 `score_overrides`로 60을 다시 덮지 않도록, 주변값 필드는 변형의 override보다 **나중에** 적용한다(예: 그 필드를 뺀 override로 파생 변형을 만든다).
    테스트: N6·N7 실행의 실제 `score_ma_long`이 50·80이고 기준 실행과 **정확히 한 필드만** 다름(9-17의 확인을 C′에 확장), C1~C3에는 여전히 주변값 없음.
    웜업 확인: `score_ma_long` 80은 창 + 기울기 비교 없음 기준으로 필요 세션을 계산해 부족하면 '미수행'.
-3. **현금 이자 0 스위치**: `ResearchRequest`/`RobustnessRequest`에 `cash_interest: bool = True`, CLI `--no-cash-interest`. 끄면 엔진의 현금 이자 적립만 0이고
+3. **현금 이자 0 스위치** (구현 시 조정: 본 매트릭스는 이자 3% 그대로 두고 참고 실행만 추가하도록 `RobustnessRequest.cash_interest_reference`,
+   CLI `--cash-interest-ref`로 했다 — 10-10): 끄면 엔진의 현금 이자 적립만 0이고
    지표의 무위험수익률 차감(BM4, Sharpe)은 그대로. 리포트에 '현금 이자 0 (참고)' 표, E5 구분 '현금 이자 0'. 테스트: 현금만 있는 구간의 NAV가 평평함, 그 밖 지표 계산 불변.
 4. **E5 구분**: 10-2 표의 네 구분으로 세어 합계 30을 리포트에 낸다.
 5. **변경 없음 확인**: `StrategyParams()` 기본값(`score_ma_long = 50`)·v06 변형·9-19 수치 재현(같은 스냅샷에서 C1~C3 비용 1배가 9-19와 같음 — 이 확인 실행은 '재현 실행'으로 따로 적음).
@@ -1113,3 +1114,26 @@ trend_following.md 10-9의 [D] 구현을 해줘. 10-2의 30회를 실행할 수 
 StrategyParams 기본값·v06 변형·9-19 결과는 바꾸지 마. C′는 UI 변형 목록에 넣지 말고 헤드리스 실행기만 받게 해줘.
 10-9의 테스트를 추가하고 이 md를 같은 커밋에서 갱신해줘. pytest·ruff 결과를 보여주고 커밋해줘.
 ```
+
+### 10-10. [D] 구현 결과 (2026-11-18)
+
+v07 계획의 30회를 **실행할 수 있게만** 했다. 백테스트(실데이터·스냅샷)는 돌리지 않았고, 규칙·`StrategyParams()` 기본값(`score_ma_long = 50`)·v06 변형·9-19 결과는 그대로다(스펙 버전 v06 유지).
+
+- **C′ 변형** (`config.py`): `V07_VARIANTS` = `C1L`·`C2L`·`C3L`(각 C 행의 `score_overrides` + `("score_ma_long", 60)`), `RESEARCH_VARIANTS = VARIANTS + V07_VARIANTS`,
+  `get_variant(vid)`. `VARIANTS`(Strategy 탭 선택 창·Universe '전략 신호'·MA 차트 '전략 점검'이 읽는 목록)에는 넣지 않았다. `research.py`·`robustness.py`·`run.py`·
+  `variant_info.py`가 `get_variant`로 두 사전을 함께 본다. 헤드리스 실행에서는 이름으로 지정할 때만 실행된다(`--variants C1L,C2L,C3L`; 기본값은 여전히 A0~C3).
+  `run.py`는 모르는 ID를 스냅샷을 읽기 전에 거부한다.
+- **E2 N6·N7** (`config.E2_NEIGHBORS`): `("N6", "score_ma_long", 50, C1L~C3L)`, `("N7", "score_ma_long", 80, C1L~C3L)`. 전체 상수는 37행이고, v06 매트릭스(A0~C3)만 돌리면
+  E2는 그대로 31회다. **적용 순서 수정**: `robustness.variant_for_neighbor`가 주변값 필드를 변형 자신의 override에서 빼고 실행한다(10-6의 5).
+  웜업: `score_ma_long`은 창 길이만큼(기울기 비교 없음) 필요 세션으로 센다.
+- **현금 이자 0 참고 실행**: `Engine(..., cash_interest=True)`·`run_backtest(..., cash_interest=True)` 인자(끄면 현금 적립만 0, 결과의 `rf_period`와 지표의 무위험수익률 차감은 그대로).
+  `RobustnessRequest.cash_interest_reference`(CLI `--cash-interest-ref`)가 켜지면 각 변형을 비용 1배로 한 번 더 돌려 리포트에 '현금 이자 0 (참고, 스펙 10-4)' 표
+  (평균 현금, CAGR·Sharpe·MDD 이자 3% / 0)를 넣고 E5 구분 `cash interest 0 runs (reference)`로 센다. 판정에는 쓰지 않는다.
+- **표시 라벨**: `variant_info.py`의 게이트·점수 문구와 '전략 점검'의 게이트·지표 카드 이름이 `MA{score_ma_long}Div`로 만들어진다(기본 50이면 기존 문구와 같다).
+  코드 필드 이름(`ma50_div`, `pct_ma50`)의 일반화는 10-8대로 별도 작업이다.
+- **실행 명령** (승인된 [V]에서): `python -m strategy.trend_following.run --snapshot dev_2021_2024_nex23 --robustness --variants C1L,C2L,C3L --cash-interest-ref`
+  → 비용 0/1/2배 본 실행 9 + E1 12 + E2 6 + 현금 이자 0 3 = 30회(E5). 10-9의 5(9-19 재현 실행)는 [V]에서 '재현 실행'으로 따로 적는다.
+- **테스트**: `tests/strategy/trend_following/test_v07_candidates.py` 10건 — C′ = C 행 + `score_ma_long` 60만 다름, 화면 목록·`signal_api`에 없음,
+  설명 문구 MA60Div, N6이 C1 실행과 Sharpe 일치·N7이 80 실행과 일치(수정을 끄면 실패함을 확인), 웜업 80, 현금 이자 0이면 현금뿐인 NAV가 평평하고 `rf_period`는 같음,
+  합성 데이터에서 계획 30회(9·12·6·3)와 리포트 절, CLI 인자 전달·모르는 ID 거부. `test_robustness.py`의 E2 상수표(N6·N7 추가, v06 매트릭스 31회 유지)와
+  '정확히 한 필드만 다름' 확인을 변형별 실효 기준(C′는 60)으로 바꿨다.

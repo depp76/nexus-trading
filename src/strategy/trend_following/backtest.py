@@ -138,9 +138,12 @@ class Policy:
 
 class Engine:
     def __init__(self, book: PriceBook, rf_period: np.ndarray, params: StrategyParams, cost_model: CostModel,
-                 start_idx: int, label: str, adv: np.ndarray | None = None):
+                 start_idx: int, label: str, adv: np.ndarray | None = None, cash_interest: bool = True):
         self.book = book
         self.rf_period = np.asarray(rf_period, dtype=float)
+        # False: cash earns nothing (spec 10-4 reference runs); the result still carries rf_period,
+        # so the metrics' risk-free deduction (Sharpe, BM4) is unchanged.
+        self.cash_interest = bool(cash_interest)
         self.params = params
         self.cm = cost_model
         self.start_idx = int(start_idx)
@@ -401,7 +404,7 @@ class Engine:
         self.pending = list(policy.initial_orders(self, t0))
         for t in range(t0, T):
             self._fill(t)
-            if t > t0:
+            if t > t0 and self.cash_interest:
                 self.cash += self.cash * self.rf_period[t]
             self._mark(t)
             if self.params.annual_reset and self.is_year_end(t):
@@ -609,7 +612,7 @@ class TrendFollowingPolicy(Policy):
 
 
 def run_backtest(ds, feats: Features, params: StrategyParams, variant: Variant, cost_model: CostModel,
-                 label: str | None = None, scores=None) -> BacktestResult:
+                 label: str | None = None, scores=None, cash_interest: bool = True) -> BacktestResult:
     """One variant of the 6-2 matrix over `ds` under `cost_model`.
 
     C-series rows (mode "score") run ScoringPolicy on the variant's parameter overrides; `scores` is the
@@ -618,10 +621,12 @@ def run_backtest(ds, feats: Features, params: StrategyParams, variant: Variant, 
         from strategy.trend_following.scoring import compute_scores
         from strategy.trend_following.scoring_policy import ScoringPolicy
         params = variant.apply(params)
-        eng = Engine(ds.stocks, ds.rf_period, params, cost_model, ds.start_idx, label or variant.id, adv=feats.adv)
+        eng = Engine(ds.stocks, ds.rf_period, params, cost_model, ds.start_idx, label or variant.id, adv=feats.adv,
+                     cash_interest=cash_interest)
         sb = scores if scores is not None else compute_scores(ds.stocks, params)
         return eng.run(ScoringPolicy(feats, params, variant, sb))
-    eng = Engine(ds.stocks, ds.rf_period, params, cost_model, ds.start_idx, label or variant.id, adv=feats.adv)
+    eng = Engine(ds.stocks, ds.rf_period, params, cost_model, ds.start_idx, label or variant.id, adv=feats.adv,
+                 cash_interest=cash_interest)
     if variant.needs_flows and not feats.has_flows:
         eng.notes.append("variant needs investor flows but the dataset has none: no entries possible")
     return eng.run(TrendFollowingPolicy(feats, params, variant))

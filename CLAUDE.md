@@ -83,7 +83,8 @@ Dev tooling is in `requirements-dev.txt`
   daily-price / flow loader) and one sub-package per strategy.
 - **`src/strategy/trend_following/`** (spec `trend_following.md` v06 in the same folder,
   facade `strategy.trend_following`): `config.py` (`SPEC_VERSION`, `StrategyParams`, `VARIANTS`
-  A0-A5/B and C1-C3, `COST_MULTIPLIERS`, `PERIODS`, `E2_NEIGHBORS`, benchmark ETF codes), `costs.py` (`CostModel`/`TradeCost`,
+  A0-A5/B and C1-C3, `V07_VARIANTS` C1L-C3L (spec 10, headless runner only, never in the UI lists;
+  `get_variant` looks up both), `COST_MULTIPLIERS`, `PERIODS`, `E2_NEIGHBORS`, benchmark ETF codes), `costs.py` (`CostModel`/`TradeCost`,
   year-keyed tax table, 2023-01-25 tick-ladder reform, `scaled()`/`for_etf()`), `signals.py`
   (date x ticker arrays for L1-L4 and the exits; `regime_state` is the weekly-held L1 state),
   `dataset.py` (`PriceBook`/`Dataset`; `build_dataset` is pure and what tests feed,
