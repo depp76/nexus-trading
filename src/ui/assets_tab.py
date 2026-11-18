@@ -191,32 +191,37 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
     # weight live -- see _stretch_columns). Total Assets' own sub-label
     # ("KRW"/"USD") is relabeled live by _apply_currency_toggle(); the rest
     # are fixed.
+    # Layout (user direction 2026-11-18, docs/ui.md 8.30): 주차 | 날짜 | KOSPI
+    # (종가 · 주간 % · 누적 %) | 총자산(KRW) | KOSPI 대비(%) | 주간 손익 | 누적 손익.
+    # 주차, 날짜, 총자산 and KOSPI 대비 are one header cell over both rows
+    # (_MERGED); their label is the _COLUMNS label (총자산's carries the currency,
+    # _current_sub_labels).
     _GROUPS = [
-        (tr("날짜", "Date"), 0, 1, TEXT_SUB),
-        ("KOSPI", 1, 3, TEXT_SUB),
-        (tr("총자산", "Total Assets"), 4, 1, TEXT_SUB),
-        (tr("주간 손익", "Weekly P/L"), 5, 2, TEXT_SUB),
-        (tr("누적 손익", "Cumulative P/L"), 7, 2, TEXT_SUB),
-        (tr("KOSPI 대비", "vs KOSPI"), 9, 1, TEXT_SUB),
+        ("KOSPI", 2, 3, TEXT_SUB),
+        (tr("주간 손익", "Weekly P/L"), 7, 2, TEXT_SUB),
+        (tr("누적 손익", "Cumulative P/L"), 9, 2, TEXT_SUB),
     ]
     # Group and sub-labels are Korean (docs/ui.md's own table: 종가/주간 %/
     # 누적 %) with an English partner for the English UI (docs/ui.md 8.20).
     _COLUMNS = [
-        ColSpec("date",       tr("주차 · 날짜", "Week · Date"), 140, 1.3, None, None),
+        ColSpec("week",       tr("주차", "Week"),               56, 0.5, None, None),
+        ColSpec("date",       tr("날짜", "Date"),               96, 0.9, None, None),
         ColSpec("kospi",      tr("종가", "Close"),             80, 0.8, None, None),
         ColSpec("kospi_wk",   tr("주간 %", "Weekly %"),          70, 0.7, None, None),
         ColSpec("kospi_cum",  tr("누적 %", "Cumulative %"),      80, 0.8, None, None),
-        ColSpec("total",      "KRW",              110, 1.1, None, None),
+        ColSpec("total",      tr("총자산(KRW)", "Total Assets (KRW)"), 120, 1.1, None, None),
+        ColSpec("excess",     tr("KOSPI 대비(%)", "vs KOSPI (%)"), 100, 0.9, None, None),
         ColSpec("weekly_amt", tr("금액", "Amount"),           100, 1.0, None, None),
         ColSpec("weekly_pct", "%",                 70, 0.7, None, None),
         ColSpec("cum_amt",    tr("금액", "Amount"),           100, 1.0, None, None),
         ColSpec("cum_pct",    "%",                 70, 0.7, None, None),
-        ColSpec("excess",     tr("KOSPI 대비 (%p)", "vs KOSPI (%p)"),     96, 0.9, None, None),
     ]
-    # Derived rather than hardcoded so a future reorder of _COLUMNS can't
-    # silently desync the "Total Assets" column checks below it
-    # (review_agy.md #5).
-    COL_TOTAL_ASSETS = next(i for i, c in enumerate(_COLUMNS) if c.key == "total")
+    # Derived rather than hardcoded so a reorder of _COLUMNS can't silently
+    # desync the column checks below (review_agy.md #5).
+    COL = {c.key: i for i, c in enumerate(_COLUMNS)}
+    COL_TOTAL_ASSETS = COL["total"]
+    COL_DATE = COL["date"]            # carries the record's date in UserRole (sorted rows)
+    _MERGED = (COL["week"], COL["date"], COL["total"], COL["excess"])
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -340,6 +345,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
 
         self._grouped_hdr = GroupedHeaderView(
             self._GROUPS, self._current_sub_labels(), self._table, group_h=22, sub_h=18, sortable=True,
+            merged=self._MERGED,
         )
         self._table.setHorizontalHeader(self._grouped_hdr)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -349,7 +355,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         # Trading History's own default) -- pinned explicitly rather than
         # relying on QHeaderView's own default indicator state, since
         # setSortingEnabled(True) immediately applies whatever that is.
-        self._grouped_hdr.setSortIndicator(0, Qt.SortOrder.DescendingOrder)
+        self._grouped_hdr.setSortIndicator(self.COL_DATE, Qt.SortOrder.DescendingOrder)
         self._table.setSortingEnabled(True)
         for col_idx, spec in enumerate(self._COLUMNS):
             self._table.horizontalHeader().setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
@@ -384,10 +390,11 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         total_weight = sum(c.weight for c in self._COLUMNS)
         unit = vp_w / total_weight
         widths = {i: max(c.min_width, int(c.weight * unit)) for i, c in enumerate(self._COLUMNS)}
-        # Rounding residual - absorb into the Date column (index 0) using
-        # exact arithmetic, same rationale as StockTable._stretch_columns.
+        # Rounding residual - absorb into the Date column using exact
+        # arithmetic, same rationale as StockTable._stretch_columns.
         residual = vp_w - sum(widths.values())
-        widths[0] = max(self._COLUMNS[0].min_width, widths[0] + residual)
+        d = self.COL_DATE
+        widths[d] = max(self._COLUMNS[d].min_width, widths[d] + residual)
         if getattr(self, '_last_col_widths', None) == widths:
             return
         self._last_col_widths = widths
@@ -396,7 +403,8 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
 
     def _current_sub_labels(self) -> list:
         labels = [c.label for c in self._COLUMNS]
-        labels[self.COL_TOTAL_ASSETS] = self._currency  # "KRW" or "USD"
+        cur = self._currency                            # "KRW" or "USD"
+        labels[self.COL_TOTAL_ASSETS] = tr(f"총자산({cur})", f"Total Assets ({cur})")
         return labels
 
 
@@ -534,7 +542,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
             return
         dates_to_delete = set()
         for row in rows:
-            item = self._table.item(row, 0)
+            item = self._table.item(row, self.COL_DATE)
             if item is not None:
                 dates_to_delete.add(item.data(Qt.ItemDataRole.UserRole))
         if not dates_to_delete:
@@ -676,12 +684,12 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         # (KOSPI's close-price column), a stale index from before this
         # table had separate KOSPI weekly/cumulative columns in between.
         if col == self.COL_TOTAL_ASSETS:
-            # Look up by the date bound to column 0's UserRole, not the
+            # Look up by the date bound to the date column's UserRole, not the
             # visual row index -- the table is sorted (default: newest
             # first) while self._records stays ascending, so `row` doesn't
             # index the record the user actually double-clicked
             # (review_agy.md #1).
-            date_item = self._table.item(row, 0)
+            date_item = self._table.item(row, self.COL_DATE)
             if date_item is None:
                 return
             target_date = date_item.data(Qt.ItemDataRole.UserRole)
@@ -806,10 +814,18 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         self._table.setRowCount(len(metrics))
 
         usd = (self._currency == "USD")
+        c = self.COL
         for i, m in enumerate(metrics):
-            # Date cell: week badge + date together (docs/ui.md 4.6)
-            label = f"{m['week_label']} · {m['date']}" if m['week_label'] else m['date']
-            d_it = QTableWidgetItem(label)
+            # Week and date in their own columns (2026-11-18, docs/ui.md 8.30;
+            # was one "W46 · 2026-11-13" cell, 4.6). The week sorts by date,
+            # so W01 of a new year follows W52.
+            parsed = _safe_parse_date(m["date"])
+            ordinal = parsed.toordinal() if parsed is not None else 0
+            w_it = NumericItem(m["week_label"], ordinal)
+            w_it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            w_it.setData(Qt.ItemDataRole.UserRole, m["date"])
+            self._table.setItem(i, c["week"], w_it)
+            d_it = NumericItem(m["date"], ordinal)
             d_it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             if m["manual"]:
                 d_it.setToolTip(tr("직접 입력/수정한 값", "Manually entered/edited"))
@@ -821,13 +837,13 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
             # UserRole carries the real date so those lookups go by date,
             # not position.
             d_it.setData(Qt.ItemDataRole.UserRole, m["date"])
-            self._table.setItem(i, 0, d_it)
+            self._table.setItem(i, c["date"], d_it)
 
             k_it = NumericItem(f"{m['kospi_close']:,.0f}" if m['kospi_close'] > 0 else "-", m['kospi_close'])
             k_it.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self._table.setItem(i, 1, k_it)
-            self._table.setItem(i, 2, self._pct_item(m["kospi_weekly_pct"]))
-            self._table.setItem(i, 3, self._pct_item(m["kospi_cum_pct"]))
+            self._table.setItem(i, c["kospi"], k_it)
+            self._table.setItem(i, c["kospi_wk"], self._pct_item(m["kospi_weekly_pct"]))
+            self._table.setItem(i, c["kospi_cum"], self._pct_item(m["kospi_cum_pct"]))
 
             if usd:
                 total_val = m["total_usd"]
@@ -846,12 +862,12 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
                 cum_pct_it    = self._pct_item(m["cum_pct_krw"])
                 excess_it     = self._pct_item(m["excess_pct_krw"])
             total_it.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self._table.setItem(i, 4, total_it)
-            self._table.setItem(i, 5, weekly_amt_it)
-            self._table.setItem(i, 6, weekly_pct_it)
-            self._table.setItem(i, 7, cum_amt_it)
-            self._table.setItem(i, 8, cum_pct_it)
-            self._table.setItem(i, 9, excess_it)
+            self._table.setItem(i, c["total"], total_it)
+            self._table.setItem(i, c["excess"], excess_it)
+            self._table.setItem(i, c["weekly_amt"], weekly_amt_it)
+            self._table.setItem(i, c["weekly_pct"], weekly_pct_it)
+            self._table.setItem(i, c["cum_amt"], cum_amt_it)
+            self._table.setItem(i, c["cum_pct"], cum_pct_it)
 
         self._table.setSortingEnabled(True)
 

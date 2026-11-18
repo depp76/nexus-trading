@@ -106,14 +106,18 @@ class GroupedHeaderView(QHeaderView):
 
     sections: list of (group_label, start_col, col_span, color_hex)
     sub_labels: list of per-column label strings (len == columnCount)
+    merged: columns whose header is one cell over both rows (no group; the
+            column's sub_labels entry is drawn there in the group style,
+            e.g. Total Assets' 주차 / 날짜 / 총자산(KRW), docs/ui.md 8.30)
     """
 
-    def __init__(self, sections, sub_labels, parent=None, group_h=22, sub_h=22, sortable=False):
+    def __init__(self, sections, sub_labels, parent=None, group_h=22, sub_h=22, sortable=False, merged=()):
         super().__init__(Qt.Orientation.Horizontal, parent)
         self._GROUP_H = group_h
         self._SUB_H = sub_h
         self._sections   = sections    # [(label, start, span, color), ...]
         self._sub_labels = sub_labels  # [str, ...]
+        self._merged = frozenset(merged)
         self.setDefaultSectionSize(72)
         # Clicking a section is what QTableView's own sortingEnabled hooks
         # into (QHeaderView.mousePressEvent -> setSortIndicator ->
@@ -139,8 +143,12 @@ class GroupedHeaderView(QHeaderView):
 
     # ---painting ---
     def paintSection(self, painter, rect, logical_index):
-        """Paint the bottom sub-label row only (group row drawn in paintEvent)."""
+        """Paint the bottom sub-label row only (group row drawn in paintEvent);
+        a merged column gets one cell over both rows."""
         if not rect.isValid():
+            return
+        if logical_index in self._merged:
+            self._paint_merged(painter, logical_index)
             return
         painter.save()
 
@@ -168,6 +176,25 @@ class GroupedHeaderView(QHeaderView):
         label = self._sub_labels[logical_index] if logical_index < len(self._sub_labels) else ""
         painter.drawText(sub_rect, Qt.AlignmentFlag.AlignCenter, label)
 
+        painter.restore()
+
+    def _paint_merged(self, painter, logical_index):
+        """One header cell over both rows: the frame (sort indicator included)
+        over the full height, the group-row background and the label in the
+        group-row font, centred."""
+        painter.save()
+        opt = self._style_option(logical_index)
+        opt.rect = QRect(self.sectionViewportPosition(logical_index), 0,
+                         self.sectionSize(logical_index), self._GROUP_H + self._SUB_H)
+        self.style().drawControl(self.style().ControlElement.CE_Header, opt, painter, self)
+        painter.fillRect(opt.rect.adjusted(1, 1, -1, -1), QColor(GRP_BG))
+        painter.setPen(QColor(TEXT_SUB))
+        f = painter.font()
+        f.setPointSize(FONT_BODY)
+        f.setBold(True)
+        painter.setFont(f)
+        label = self._sub_labels[logical_index] if logical_index < len(self._sub_labels) else ""
+        painter.drawText(opt.rect, Qt.AlignmentFlag.AlignCenter, label)
         painter.restore()
 
     def paintEvent(self, event):
@@ -213,14 +240,21 @@ class GroupedHeaderView(QHeaderView):
             painter.drawText(group_rect, Qt.AlignmentFlag.AlignCenter, label)
 
         # ---Section boundary vertical lines drawn LAST (on top of everything) ---
-        last_section_end = max(s + sp - 1 for _, s, sp, _ in self._sections)
+        # A merged column is a section of its own (one column wide).
+        spans = [(s, sp) for _, s, sp, _ in self._sections] + [(c, 1) for c in self._merged]
+        last_section_end = max((s + sp - 1 for s, sp in spans), default=-1)
         pen_sec = QPen()
         pen_sec.setWidth(1)
         pen_sec.setCosmetic(True)
-        for _, start, span, _color in self._sections:
+        for start, span in spans:
             if start >= self.count():
                 continue
             end_col = min(start + span - 1, self.count() - 1)
+            if start in self._merged:          # its top edge (group rows draw their own)
+                pen_sec.setColor(QColor(LINE_GROUP))
+                painter.setPen(pen_sec)
+                xl0 = self.sectionViewportPosition(start)
+                painter.drawLine(xl0, 0, xl0 + self.sectionSize(start) - 1, 0)
             pen_sec.setColor(QColor(LINE_GROUP))
             painter.setPen(pen_sec)
             # Left border of this section
