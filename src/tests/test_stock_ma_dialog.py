@@ -157,48 +157,51 @@ class TestStockChart(unittest.TestCase):
         d, ax = self.dlg, self.dlg._panel_axes["price"]
         d._apply_period("1M")
         self.assertAlmostEqual(ax.get_xlim()[1] - ax.get_xlim()[0], 31, delta=1)
-        self.assertTrue(d._period_buttons["1M"].isChecked())
+        self.assertEqual(d._period_combo.currentData(), "1M")
+        d._period_combo.setCurrentIndex(d._period_combo.findData("3M"))   # picking from the combo
+        self.assertAlmostEqual(ax.get_xlim()[1] - ax.get_xlim()[0], 92, delta=1)
         d._apply_period("All")
         self.assertGreater(ax.get_xlim()[1] - ax.get_xlim()[0], 399)
         d._apply_period("1Y")
 
-    def test_view_row_groups_with_period_beside_the_indicators(self):
-        """2026-11-16 (user direction): [이동평균 MA10-MA50 (동일가중)] and
-        [보조지표 이격도 · 거래량 · RSI  기간 1개월-전체] -- no 종가 button, no
-        MA5, 기간 on the 보조지표 line; captioned, every button one width;
-        still a FlowLayout of unsplittable groups (2026-11-15)."""
-        from PyQt6.QtWidgets import QLabel
-        from ui.common import FlowLayout
+    def test_view_row_is_one_line_with_drop_downs(self):
+        """2026-11-18 (user direction): one line -- [이동평균 ▾] a check-box
+        drop-down (several at once), [보조지표 이격도 · 거래량 · RSI] buttons
+        of one width, [기간 ▾] a combo box, then the as-of date."""
+        from PyQt6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel
         d = StockMaDialog("005930", "Samsung", "KOSPI", _df(ew=True))
-        row = next(iter(d._period_buttons.values())).parentWidget().parentWidget()
-        self.assertIsInstance(row.layout(), FlowLayout)
-        items = [row.layout().itemAt(i).widget() for i in range(row.layout().count())]
-        groups = items[:2]
-        b = d._series_buttons
+        row = d._period_combo.parentWidget()
+        self.assertIsInstance(row.layout(), QHBoxLayout)
+        ws = [row.layout().itemAt(i).widget() for i in range(row.layout().count())]
+        ws = [w for w in ws if w is not None]
 
-        def members(g):
-            lay = g.layout()
-            ws = [lay.itemAt(i).widget() for i in range(lay.count())]
-            return [w.text() for w in ws if w is not None]
-        self.assertEqual([members(g) for g in groups], [
-            ["이동평균", "MA10", "MA20", "MA50", "동일가중"],
-            ["보조지표", "이격도", "거래량", "RSI", "기간", "1개월", "3개월", "6개월", "1년", "3년", "전체"],
-        ])
-        self.assertTrue(all(isinstance(g.layout().itemAt(0).widget(), QLabel) for g in groups))
-        self.assertIs(d._period_buttons["1M"].parentWidget(), d._panel_buttons["rsi"].parentWidget())
-        self.assertEqual(items[2:], [d._as_of_lbl])                   # the as-of date ends the row
-        buttons = [*b.values(), *d._panel_buttons.values(), *d._period_buttons.values()]
+        def text(w):
+            return w.currentText() if isinstance(w, QComboBox) else w.text()
+        self.assertEqual([text(w) for w in ws[:-1]],
+                         ["이동평균", "없음", "보조지표", "이격도", "거래량", "RSI", "기간", "1년"])
+        self.assertIs(ws[1], d._ma_btn)
+        self.assertIs(ws[-1], d._as_of_lbl)                           # the as-of date ends the row
+        self.assertTrue(all(isinstance(w, QLabel) for w in d._group_captions))
+        # MA drop-down: a check box per line, several on at once, the button names them
+        self.assertIs(d._ma_btn.menu(), d._ma_menu)
+        self.assertEqual([k for k, w in d._series_buttons.items() if isinstance(w, QCheckBox)],
+                         ["MA10", "MA20", "MA50", "EW"])
+        width = d._ma_btn.width()
+        d._series_buttons["MA10"].click()
+        d._series_buttons["MA50"].click()
+        self.assertEqual(d._ma_btn.text(), "MA10 외 1")
+        self.assertEqual({k for k in _MA_KEYS if d._lines[k].get_visible()}, {"MA10", "MA50"})
+        d._set_series("EW", True)
+        self.assertEqual(d._ma_btn.text(), "MA10 외 2")
+        self.assertEqual(d._ma_btn.width(), width)                    # fixed: ticking never moves the row
+        self.assertEqual(d._period_combo.width(), width)              # 이동평균 and 기간 share one width
+        self.assertGreaterEqual(width, d._period_combo.sizeHint().width())
+        # period combo: every period, single choice
+        self.assertEqual([d._period_combo.itemText(i) for i in range(d._period_combo.count())],
+                         ["1개월", "3개월", "6개월", "1년", "3년", "전체"])
+        buttons = [d._series_buttons["Div"], *d._panel_buttons.values()]
         self.assertEqual(len({x.width() for x in buttons}), 1)
         self.assertTrue(all(x.width() >= x.sizeHint().width() for x in buttons))
-        # wide: one line; narrow: the second group moves down whole
-        self.assertEqual(len(row.layout().lines(4000)), 1)
-        narrow = row.layout().lines(max(g.sizeHint().width() for g in groups) + 10)
-        self.assertEqual([item.widget() for line in narrow for item in line][:2], groups)
-        # one width for the segment, wide enough for every label ("3개월" was cut at 52 px)
-        widths = {b.width() for b in d._period_buttons.values()}
-        self.assertEqual(len(widths), 1)
-        for b in d._period_buttons.values():
-            self.assertGreaterEqual(b.width(), b.sizeHint().width())
 
     def test_axis_and_end_labels_fit_a_narrow_chart(self):
         """2026-11-15: fixed 7.5% / 10% margins cut "100,000" and the axis
@@ -269,7 +272,7 @@ class TestStockChart(unittest.TestCase):
             d.show()
             for _ in range(3):
                 QApplication.processEvents()
-            row = next(iter(d._period_buttons.values())).parentWidget().parentWidget()
+            row = d._period_combo.parentWidget()
             self.assertIs(d._as_of_lbl.parentWidget(), row)
             self.assertTrue(d._as_of_lbl.text())
 
@@ -279,17 +282,11 @@ class TestStockChart(unittest.TestCase):
             def mid(w):
                 return gy(w, w.height() // 2)
 
-            first_btn = next(iter(d._series_buttons.values()))
-            self.assertLessEqual(abs(mid(d._right_title) - mid(first_btn)), 1, width)
+            self.assertLessEqual(abs(mid(d._right_title) - mid(d._ma_btn)), 1, width)
             self.assertLessEqual(abs(gy(d._right_table) - gy(d._canvas)), 1, width)
             self.assertGreater(gy(d.strategy_section), gy(d._right_table))
-            # the as-of date comes last: on the period buttons' line (the last group)
-            # when it fits there, else on the line under it (offscreen fonts are wider)
-            self.assertGreaterEqual(mid(d._as_of_lbl) + 2, mid(d._period_buttons["All"]))
-            lines = row.layout().lines(row.width())
-            self.assertIs(lines[-1][-1].widget(), d._as_of_lbl)
-            if width >= 1900:
-                self.assertLessEqual(abs(mid(d._as_of_lbl) - mid(d._period_buttons["All"])), 2)
+            # one line: the as-of date sits level with the period combo
+            self.assertLessEqual(abs(mid(d._as_of_lbl) - mid(d._period_combo)), 2)
             widths = [d._right_table.columnWidth(c) for c in (2, 3, 4)]   # Foreigner, Institution, Retail
             self.assertLessEqual(max(widths) - min(widths), 1, widths)
             self.assertFalse([b for b in d.findChildren(QPushButton) if b.text() in ("닫기", "Close")])
@@ -304,15 +301,15 @@ class TestStockChart(unittest.TestCase):
             QApplication.processEvents()
         self.assertIsNone(d._right_table)
         title = d.strategy_section.title_lbl                 # "전략 점검" + strategy button line (2026-11-16)
-        btn = next(iter(d._series_buttons.values()))
+        btn = d._ma_btn
         mid = lambda w: w.mapToGlobal(QPoint(0, w.height() // 2)).y()   # noqa: E731
         self.assertLessEqual(abs(mid(title) - mid(btn)), 2)
         d.close()
 
     def test_simple_chart_row_has_no_series_group(self):
         d = StockMaDialog("KR3YT", "KR 3Y", "Index", _df(volume=False), change_mode="bp")
-        row = next(iter(d._period_buttons.values())).parentWidget().parentWidget()
-        self.assertEqual(row.layout().count(), 2)                 # [보조지표 + 기간] + as-of
+        self.assertIsNone(d._ma_btn)                              # no 이동평균 drop-down
+        self.assertEqual(d._group_captions[0].text(), "보조지표")
 
     def test_panel_toggles_regrid(self):
         d = self.dlg

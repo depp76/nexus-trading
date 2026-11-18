@@ -10,7 +10,7 @@ Dialog state it uses
 --------------------
 reads   _df, _is_simple_chart, _fmt_str, _unit_suffix, _fig, _canvas,
         _series_buttons, _panel_buttons, _cursor_idx, _x_lo, _x_hi;
-        _col() (dialog), _autofit_y / _install_pan_zoom / _apply_period
+        _col() / _sync_ma_button() (dialog), _autofit_y / _install_pan_zoom / _apply_period
         (_ViewMixin), _install_crosshair / _update_hover (_HoverMixin)
 writes  _x, _dates, _panel_axes, _panel_on, _series_on, _lines,
         _end_labels, _crosshairs, _div_bands, _margins
@@ -357,6 +357,7 @@ class _PlotMixin:
         btn = self._series_buttons.get(key)
         if btn is not None and btn.isChecked() != bool(on):
             btn.setChecked(bool(on))
+        self._sync_ma_button()
         if key == "Div":
             self._panel_on["div"] = bool(on)
         else:
