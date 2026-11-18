@@ -23,6 +23,13 @@ the screens and a backtest of the variant cannot drift apart:
   weakest relative strength first.
 
 The L1 market regime is reported (``regime_on``) but does not empty the lists.
+
+Chart overlays (strategy.signal_api 1.7, docs/ma60_unification_2026-11-18.md
+[1b]): ``breakout_channel`` -- the prior ``breakout_window``-session high and
+prior ``exit_window``-session low, today excluded, exactly the 2-3 / 3-1
+arrays of ``compute_features`` -- and ``regime_spans_of`` -- ``regime_state``
+over one market's own index, cut into spans. Both reuse the signals.py code;
+nothing here changes a signal or a parameter.
 """
 from __future__ import annotations
 
@@ -33,11 +40,13 @@ import numpy as np
 
 from i18n import tr
 from strategy.common.inputs import DailyInputs, load_daily_inputs
-from strategy.common.prices import PriceBook, check_stop, say
-from strategy.signal_api import CheckRow, ListLabels, Metric, SignalName, SignalPicks, StockCheck
+from strategy.common.prices import PriceBook, check_stop, say, to_date
+from strategy.signal_api import (
+    ChartLine, CheckRow, ListLabels, Metric, RegimeSpan, SignalName, SignalPicks, StockCheck,
+)
 from strategy.trend_following.config import VARIANTS, StrategyParams
 from strategy.trend_following.scoring import compute_scores, weekly_recommendation
-from strategy.trend_following.signals import compute_features, rank_desc_score, rolling, shift
+from strategy.trend_following.signals import compute_features, rank_desc_score, regime_state, rolling, shift
 from strategy.trend_following.variant_info import describe_variant
 
 logger = logging.getLogger(__name__)
@@ -47,7 +56,7 @@ MARKETS = ("KOSPI", "KOSDAQ")   # spec 2-0: KR stocks (the scoring and the flows
 INDEX_TICKER = "KS11"           # KOSPI: the calendar and the L1 regime input
 
 __all__ = ["pick_signals", "check_stock", "layout_templates", "run_universe_signals", "load_inputs",
-           "DEFAULT_VARIANT", "MARKETS", "PROVIDER"]
+           "breakout_channel", "regime_spans_of", "DEFAULT_VARIANT", "MARKETS", "PROVIDER"]
 
 
 def _pct(x: float) -> str:
@@ -299,6 +308,76 @@ def check_stock(variant_id: str, ticker: str, book: PriceBook | None, index_clos
 
 
 # ---------------------------------------------------------------------------
+# Chart overlays (signal_api 1.7)
+# ---------------------------------------------------------------------------
+def _values(arr: np.ndarray) -> list[float | None]:
+    return [float(v) if np.isfinite(v) else None for v in arr]
+
+
+def breakout_channel(dates, high, low, params: StrategyParams,
+                     provisional_last: bool = False) -> list[ChartLine]:
+    """The 2-3 breakout level and the 3-1 exit level on each session: the
+    highest high of the prior ``breakout_window`` sessions and the lowest low
+    of the prior ``exit_window`` sessions, the session itself excluded (the
+    same ``shift(rolling(...), 1)`` as compute_features). A window holding a
+    missing bar has no value. With `provisional_last` the last session's bar is
+    intraday, so a close compared with its level is not final yet."""
+    p = params
+    days = [to_date(d) for d in dates]
+    hi = shift(rolling(np.asarray(high, dtype=float), p.breakout_window, "max"), 1)
+    lo = shift(rolling(np.asarray(low, dtype=float), p.exit_window, "min"), 1)
+    prov = days[-1] if provisional_last and days else None
+    bw, ew = p.breakout_window, p.exit_window
+    return [
+        ChartLine("breakout_high", tr(f"직전 {bw}일 최고가", f"Prior {bw}-day high"), days, _values(hi),
+                  provisional_from=prov,
+                  tooltip=tr(f"당일 제외, 직전 {bw}거래일 고가의 최고값 — 종가가 넘으면 돌파(진입 조건)",
+                             f"Highest high of the prior {bw} sessions, today excluded; "
+                             "a close above it is a breakout"),
+                  short_label=tr(f"{bw}일 최고", f"{bw}d high")),
+        ChartLine("exit_low", tr(f"직전 {ew}일 최저가", f"Prior {ew}-day low"), days, _values(lo),
+                  provisional_from=prov,
+                  tooltip=tr(f"당일 제외, 직전 {ew}거래일 저가의 최저값 — 종가가 밑돌면 추세 이탈(청산)",
+                             f"Lowest low of the prior {ew} sessions, today excluded; "
+                             "a close below it is a trend-break exit"),
+                  short_label=tr(f"{ew}일 최저", f"{ew}d low")),
+    ]
+
+
+def regime_spans_of(dates, index_close, params: StrategyParams,
+                    provisional_last: bool = False) -> list[RegimeSpan]:
+    """``regime_state`` of one index (close > MA60, MA60 above its value 5
+    sessions back, judged on the weekly check day and held to the next one)
+    as spans of equal state. A span is provisional when its state came from an
+    intraday last bar, or from a check day ``weekly_check_days`` only picked
+    because the current week has no later session yet (the check weekday has
+    not come, so the week's real check may still change it)."""
+    p = params
+    days = [to_date(d) for d in dates]
+    n = len(days)
+    if n == 0:
+        return []
+    state, check = regime_state(np.asarray(index_close, dtype=float), days, p)
+    prov = np.zeros(n, dtype=bool)
+    if provisional_last and (check[-1] or not check.any()):
+        prov[-1] = True
+    last_week = days[-1].isocalendar()[:2]
+    for k in range(n - 1, -1, -1):
+        if days[k].isocalendar()[:2] != last_week:
+            break
+        if check[k] and days[k].weekday() < min(max(p.check_weekday, 0), 4):
+            prov[k:] = True             # a fallback check in an unfinished week
+            break
+    spans: list[RegimeSpan] = []
+    start = 0
+    for t in range(1, n + 1):
+        if t == n or state[t] != state[start] or prov[t] != prov[start]:
+            spans.append(RegimeSpan(days[start], days[t - 1], bool(state[start]), bool(prov[start])))
+            start = t
+    return spans
+
+
+# ---------------------------------------------------------------------------
 # Network side + provider
 # ---------------------------------------------------------------------------
 def load_inputs(variant_id: str, items: list[dict], progress=None, should_stop=None) -> DailyInputs:
@@ -357,6 +436,35 @@ class _TrendFollowingSignals:
         if inputs is None:
             return check_stock(vid, ticker, None, None, None, None, picks)
         return check_stock(vid, ticker, inputs.book, inputs.index_close, inputs.flow_fi, None, picks)
+
+    # Chart overlays (signal_api 1.7): KR markets only, like the lists.
+    def uses_regime(self, vid) -> bool:
+        return bool(VARIANTS[vid].regime)
+
+    def regime_legend(self, vid) -> tuple[str, str]:
+        p = VARIANTS[vid].apply(StrategyParams())
+        ma, lb = p.regime_ma, p.regime_slope_lookback
+        return (tr("L1 Risk-on(종가 판단)", "L1 risk-on (judged at the close)"),
+                tr(f"지수 종가 > {ma}일선이고 {ma}일선이 {lb}거래일 전보다 높음. 매주 점검일 종가로 판단해 "
+                   "다음 점검일까지 유지하며, 다음 거래일부터의 신규 매수 허용 조건 중 하나다(추세·돌파 등 다른 "
+                   "매수 조건도 따로 있고, A0은 이 조건을 쓰지 않는다). 옅은 칸은 장중 값이나 끝나지 않은 주로 "
+                   "판단한 잠정 구간.",
+                   f"Index close > MA{ma} and MA{ma} above its value {lb} sessions back, judged at the weekly "
+                   "check day's close and held to the next check; one of the conditions for new entries from "
+                   "the next session (trend, breakout and the rest still apply; A0 does not use it). Paler "
+                   "cells: provisional (intraday bar or unfinished week)."))
+
+    def chart_overlays(self, vid, ticker, market, ohlc, provisional_last=False) -> list[ChartLine]:
+        if market not in MARKETS:
+            return []
+        p = VARIANTS[vid].apply(StrategyParams())
+        return breakout_channel(list(ohlc["Date"]), ohlc["High"], ohlc["Low"], p, provisional_last)
+
+    def regime_spans(self, vid, market, dates, index_close, provisional_last=False) -> list[RegimeSpan]:
+        if market not in MARKETS or not VARIANTS[vid].regime:
+            return []
+        p = VARIANTS[vid].apply(StrategyParams())
+        return regime_spans_of(dates, index_close, p, provisional_last)
 
 
 PROVIDER = _TrendFollowingSignals()

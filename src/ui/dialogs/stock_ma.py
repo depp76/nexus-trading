@@ -81,7 +81,7 @@ from i18n import tr
 from ui.dialogs.stock_ma_consts import (  # noqa: F401 -- re-exported for callers of ui.dialogs.stock_ma
     _STOCK_MARKETS, _SIMPLE_CHART_TICKERS, _SCROLL_MAX, _TICK_PT, _SEG_H, _PERIODS, _PERIOD_LABELS,
     _DEFAULT_PERIOD, _DEFAULT_MARGINS, _MARGIN_PAD_PX, _MIN_RIGHT_PX, _SLOT_RATIOS, _SERIES,
-    _PRICE_SERIES, _DEFAULT_SERIES, _MA_KEYS, _MA_COLUMNS, _INDEX_COLOR,
+    _PRICE_SERIES, _DEFAULT_SERIES, _MA_KEYS, _MA_COLUMNS, _INDEX_COLOR, _CHANNEL_KEYS, _PRICE_TOGGLES,
 )
 from ui.dialogs.stock_ma_hover import _HoverMixin
 from ui.dialogs.stock_ma_plot import _PlotMixin
@@ -113,8 +113,11 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
     pan/zoom live in the mixins (see the module docstring)."""
 
     def __init__(self, ticker, name, market, df, investor_data=None, parent=None, change_mode='pct',
-                 signal_ctx=None):
+                 signal_ctx=None, overlays=None):
         super().__init__(parent)
+        # The strategy's chart lines (strategy.signal_api.ChartLine; the breakout
+        # channel), computed by StockMaThread; only the keys this dialog draws.
+        self._overlays = [o for o in (overlays or []) if o.key in _CHANNEL_KEYS]
         # "전략 점검" context (ui.strategy_check_section.SignalContext) from the
         # Universe tab: its KR rows and its shared universe runs.
         self._signal_ctx = signal_ctx
@@ -160,7 +163,11 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         self._date_badges = {}    # panel key -> Annotation with the cursor date
         self._panel_axes = {}     # "price" | "vol" | "div" | "rsi" -> Axes
         self._panel_on = {"vol": False, "div": False, "rsi": False}
-        self._series_on = {k: (k in _DEFAULT_SERIES) for k in _PRICE_SERIES}
+        self._series_on = {k: (k in _DEFAULT_SERIES) for k in _PRICE_TOGGLES}
+        self._overlay_label = {}  # "CH_HI" | "CH_LO" -> its ChartLine label (hover)
+        self._overlay_short = {}  # same keys -> its short label (end label)
+        self._overlay_prov = {}   # same keys -> first bar index of provisional values
+        self._overlay_prov_artists = []   # faded markers on the provisional bars
         self._x = None
         self._pan_start = None
         self._cursor_idx = None
@@ -289,7 +296,9 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
 
         if not self._is_simple_chart:
             caption(tr("이동평균", "MA"))
-            keys = [*_MA_KEYS, *(["EW"] if has_ew else []), *(["IDX"] if has_idx else [])]
+            has_ch = self._has_data and bool(self._overlays)
+            keys = [*_MA_KEYS, *(["EW"] if has_ew else []), *(["IDX"] if has_idx else []),
+                    *(["CH"] if has_ch else [])]
             row.addWidget(self._build_ma_dropdown(keys))
             row.addSpacing(12)
 
@@ -366,6 +375,8 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
                 cb.setEnabled(False)
                 cb.setToolTip(tr(f"{key}을 계산할 만큼 거래일 이력이 없습니다.",
                                  f"Not enough trading history for {key}."))
+        if "CH" in self._series_buttons:
+            self._series_buttons["CH"].setToolTip("\n".join(f"{o.label}: {o.tooltip}" for o in self._overlays))
         if "IDX" in self._series_buttons:
             self._series_buttons["IDX"].setToolTip(
                 tr(f"{self._market} 지수를 가격축에 겹쳐 표시합니다 (보이는 구간의 첫날 종가에 맞춤).",

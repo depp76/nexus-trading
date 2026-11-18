@@ -43,15 +43,96 @@ _AUTO_BACKUP_FILES = [DB_FILE, CUSTOM_SETTINGS_FILE]
 _AUTO_BACKUP_MAX_KEEP = 7  # keep only the most recent N automatic backups
 
 
+# KRX regular session ends 15:30; the day's bar is final a little after.
+_KR_CLOSE_FINAL = _dt.time(15, 40)
+# Index tickers whose panels get the regime shading (each its own market's
+# index, docs/ma60_unification_2026-11-18.md 1.2-4), and how far back their
+# history is read: MA60 + its 5-session slope + the previous weekly check
+# before the first shown day, with room to spare.
+_REGIME_INDEX = {"KOSPI": "KS11", "KOSDAQ": "KQ11"}
+_REGIME_LOOKBACK_DAYS = 200
+
+
+def kr_bar_is_provisional(last_date, now=None) -> bool:
+    """True when a KR daily bar dated `last_date` is still the intraday one
+    (today, a weekday, before the close is final)."""
+    now = now or _dt.datetime.now()
+    if isinstance(last_date, _dt.datetime):
+        last_date = last_date.date()
+    return last_date == now.date() and now.weekday() < 5 and now.time() < _KR_CLOSE_FINAL
+
+
+def index_regimes(results: dict, variant: str | None = None, now=None) -> dict | None:
+    """The KOSPI / KOSDAQ panels' regime shading under `variant` (default:
+    the screens' default variant): {"variant", "uses", "legend": (label,
+    tooltip), "spans": {panel label: [RegimeSpan]}}. Each index is judged on
+    its own history, read from before the first shown day so the state on
+    that day is the one the strategy would have. None when the strategy layer
+    cannot be loaded."""
+    from strategy import signal_api
+    try:
+        vid = variant or signal_api.default_variant()
+        out = {"variant": vid, "uses": signal_api.uses_regime(vid),
+               "legend": signal_api.regime_legend(vid), "spans": {}}
+    except Exception:
+        # boundary: the strategy registry imports every provider module.
+        logger.warning("regime shading unavailable", exc_info=True)
+        return None
+    if not out["uses"]:
+        return out
+    for label, ticker in _REGIME_INDEX.items():
+        df = (results.get(label) or (None, None))[0]
+        if df is None or df.is_empty():
+            continue
+        try:
+            first = df.get_column("Date")[0]
+            first = first.date() if isinstance(first, _dt.datetime) else first
+            start = (first - _dt.timedelta(days=_REGIME_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+            hist = get_historical_data(ticker, start)
+            if hist is None or hist.is_empty():
+                continue
+            dates = list(hist.get_column("Date"))
+            closes = hist.get_column("Close").to_numpy()
+            out["spans"][label] = signal_api.regime_spans(
+                vid, label, dates, closes, provisional_last=kr_bar_is_provisional(dates[-1], now))
+        except Exception:
+            # kept broad: one panel's history (third-party sources) must not drop the others.
+            logger.warning("regime spans failed for %s", label, exc_info=True)
+    return out
+
+
 # ---------------------------------------------------------------------------
-# Index MA20 fetch thread
+# Index MA fetch thread
 # ---------------------------------------------------------------------------
 class IndexMaThread(QThread):
-    finished = pyqtSignal(object)  # dict {label: (df|None, err)}
+    # {label: (df|None, err)}, index_regimes() result (or None)
+    finished = pyqtSignal(object, object)
+
+    def __init__(self, variant: str | None = None):
+        super().__init__()
+        self.variant = variant
 
     def run(self):
         results = fetch_all_indices_mas()
-        self.finished.emit(results)
+        self.finished.emit(results, index_regimes(results, self.variant))
+
+
+def stock_chart_overlays(ticker: str, market: str, df, variant: str | None = None, now=None) -> list:
+    """The strategy's price-panel lines for a stock chart (the breakout
+    channel, strategy.signal_api.chart_overlays) under `variant` (default:
+    the screens' default variant); [] for other markets or on failure."""
+    if df is None or df.is_empty() or not all(c in df.columns for c in ("Date", "High", "Low", "Close")):
+        return []
+    try:
+        from strategy import signal_api
+        vid = variant or signal_api.default_variant()
+        last = df.get_column("Date")[-1]
+        return signal_api.chart_overlays(vid, ticker, market, df,
+                                         provisional_last=kr_bar_is_provisional(last, now))
+    except Exception:
+        # boundary: provider code runs here; the chart opens without the channel.
+        logger.warning("chart overlays failed for %s", ticker, exc_info=True)
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -61,17 +142,19 @@ class StockMaThread(QThread):
     """Background thread: one stock's daily frame for the MA chart -- RSI,
     the divergence ratios and the chart's strict SMA20/50/60/200 (with their
     warm-up history, data.market.fetch_stock_ma_multi) in one call."""
-    # ticker, name, df|None, error, investor_data, market, change_mode -- the last
-    # two echo the constructor args so slots can be plain bound methods instead of
-    # closures capturing per-request context (CLAUDE.md threads rule).
-    finished = pyqtSignal(str, str, object, str, list, str, str)
+    # ticker, name, df|None, error, investor_data, market, change_mode, overlays --
+    # market / change_mode echo the constructor args so slots can be plain bound
+    # methods instead of closures capturing per-request context (CLAUDE.md threads
+    # rule); overlays are the strategy's chart lines (stock_chart_overlays).
+    finished = pyqtSignal(str, str, object, str, list, str, str, object)
 
-    def __init__(self, ticker, name, market, change_mode='pct'):
+    def __init__(self, ticker, name, market, change_mode='pct', variant=None):
         super().__init__()
         self.ticker = ticker
         self.name = name
         self.market = market
         self.change_mode = change_mode
+        self.variant = variant      # the strategy variant whose chart lines to draw (None: default)
 
     def run(self):
         # MA20 feeds the MA20 divergence ratio; the chart's lines are the SMA columns.
@@ -106,7 +189,9 @@ class StockMaThread(QThread):
         elif self.ticker == "CL=F":
             from data_fetcher import fetch_wti_futures_curve
             investor_data = fetch_wti_futures_curve()
-        self.finished.emit(self.ticker, self.name, df, err or "", investor_data, self.market, self.change_mode)
+        overlays = stock_chart_overlays(self.ticker, self.market, df, self.variant)
+        self.finished.emit(self.ticker, self.name, df, err or "", investor_data, self.market, self.change_mode,
+                           overlays)
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ writes  _x, _dates, _panel_axes, _panel_on, _series_on, _lines,
 Moved out of ui/dialogs/stock_ma.py (2026-11-15); method names unchanged.
 """
 import numpy as np
+import pandas as pd
 import polars as pl
 import matplotlib.dates as mdates
 from matplotlib.collections import PolyCollection
@@ -25,6 +26,7 @@ from matplotlib.collections import PolyCollection
 from i18n import tr
 from ui.dialogs.stock_ma_consts import (
     _DEFAULT_MARGINS, _DEFAULT_PERIOD, _DEFAULT_SERIES, _MARGIN_PAD_PX, _MIN_RIGHT_PX, _PRICE_SERIES, _MA_KEYS, _MA_COLUMNS,
+    _CHANNEL_KEYS, _CHANNEL_COLOR, _LINE_TOGGLE, _PRICE_TOGGLES,
     _SLOT_RATIOS, _TICK_PT, _INDEX_COLOR,
 )
 from ui.dialogs.stock_ma_helpers import _make_bars, _compact
@@ -90,7 +92,7 @@ class _PlotMixin:
         self._install_pan_zoom()
         self._install_crosshair()
         if self._is_simple_chart:
-            self._series_on = {k: (k == "Close") for k in _PRICE_SERIES}
+            self._series_on = {k: (k == "Close") for k in _PRICE_TOGGLES}
         self._apply_series_visibility()
         self._apply_layout()
         self._apply_period(_DEFAULT_PERIOD)
@@ -119,11 +121,45 @@ class _PlotMixin:
                 add("EW", ew, color=TEXT_MUTED, linewidth=1.2, linestyle="--", zorder=3, visible=False)
             if self._has_market_index():
                 add("IDX", self._col("MarketIndex"), color=_INDEX_COLOR, linewidth=1.3, zorder=3, visible=False)
+            self._plot_channel(ax, add)
         self._rescale_price_lines(np.ones(len(x), dtype=bool))
         ax.set_ylabel(tr("가격", "Price") + (f" ({self._unit_suffix})" if self._unit_suffix else ""),
                       fontsize=_TICK_PT, color=TEXT_MUTED)
         ax.yaxis.set_major_formatter(lambda v, _pos: self._fmt_str.format(v))
         ax.tick_params(labelbottom=False)
+
+    def _plot_channel(self, ax, add) -> None:
+        """The strategy's breakout channel (docs/ma60_unification_2026-11-18.md
+        1.2-3): step lines on this chart's bars, broken where a value is
+        missing; bars from a ChartLine's ``provisional_from`` (an intraday
+        bar) also get a faded marker and "잠정(장중)" in their hover label.
+        The end label uses the short name ("20일 최고 249.0k") so the right
+        margin, sized for every price line, stays narrow."""
+        if not self._overlays:
+            return
+        days = list(pd.to_datetime(self._dates).date)
+        pos = {d: i for i, d in enumerate(days)}
+        for o in self._overlays:
+            key = _CHANNEL_KEYS[o.key]
+            arr = np.full(len(days), np.nan)
+            for d, v in zip(o.dates, o.values):
+                i = pos.get(d)
+                if i is not None and v is not None:
+                    arr[i] = v
+            add(key, arr, color=_CHANNEL_COLOR, linewidth=1.1, linestyle=(0, (4, 3)),
+                drawstyle="steps-post", zorder=3, visible=False)
+            self._overlay_label[key] = o.label
+            self._overlay_short[key] = o.short_label or o.label
+            if o.provisional_from is not None and o.provisional_from in pos:
+                i0 = pos[o.provisional_from]
+                self._overlay_prov[key] = i0
+                art, = ax.plot(self._x[i0:], arr[i0:], linestyle="none", marker="_", markersize=12,
+                               markeredgewidth=2, color=_CHANNEL_COLOR, alpha=0.45, zorder=3, visible=False)
+                self._overlay_prov_artists.append(art)
+
+    def _provisional_suffix(self, key: str, idx) -> str:
+        i0 = self._overlay_prov.get(key)
+        return tr(" · 잠정(장중)", " · provisional (intraday)") if i0 is not None and idx is not None and idx >= i0 else ""
 
     def _overlaps_close(self, arr) -> bool:
         close = np.asarray(self._col("Close"), dtype=float)
@@ -367,8 +403,11 @@ class _PlotMixin:
 
     def _apply_series_visibility(self) -> None:
         for name, line in self._lines.items():
-            if name in self._series_on:
-                line.set_visible(self._series_on[name])
+            toggle = _LINE_TOGGLE.get(name, name)
+            if toggle in self._series_on:
+                line.set_visible(self._series_on[toggle])
+        for art in self._overlay_prov_artists:
+            art.set_visible(self._series_on.get("CH", False))
 
     def _refresh_after_toggle(self) -> None:
         if self._x is None:
@@ -399,6 +438,8 @@ class _PlotMixin:
             return tr(f"동일가중 {v}", f"EW {v}"), TEXT_MUTED, INK_ON_LIGHT
         if key == "IDX":       # the index's own level, not the rebased Y
             return f"{self._market} {v}", _INDEX_COLOR, INK_ON_LIGHT
+        if key in self._overlay_short:
+            return f"{self._overlay_short[key]} {v}", _CHANNEL_COLOR, INK_ON_LIGHT
         return f"{key} {v}", MA_RAMP[key], INK_ON_LIGHT     # every MA_RAMP step is light
 
     def _place_end_labels(self) -> None:

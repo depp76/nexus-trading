@@ -95,9 +95,9 @@ class TestSignalSlotArity(unittest.TestCase):
         with patch("threads.fetch_threads.fetch_stock_ma_multi", return_value=(None, "boom")):
             t.run()
         self.assertEqual(len(got), 1)
-        ticker, name, df, err, inv, market, cm = got[0]
-        self.assertEqual((ticker, name, df, err, inv, market, cm),
-                         ("AAPL", "Apple", None, "boom", [], "NASDAQ 100", "pct"))
+        ticker, name, df, err, inv, market, cm, overlays = got[0]
+        self.assertEqual((ticker, name, df, err, inv, market, cm, overlays),
+                         ("AAPL", "Apple", None, "boom", [], "NASDAQ 100", "pct", []))
 
     def test_auto_backup_covers_every_hand_entered_state_file(self):
         # Everything typed in by hand lives in portfolio.db (trades + asset

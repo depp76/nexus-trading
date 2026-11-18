@@ -72,6 +72,9 @@ class _HoverMixin:
             return tr(f"거래량 {_compact(v)}", f"Vol {_compact(v)}")
         if key == "IDX":
             return f"{self._market} {self._price_value_text(key, v, compact=False)}"
+        if key in self._overlay_label:
+            return (f"{self._overlay_label[key]} {self._price_value_text(key, v, compact=False)}"
+                    + self._provisional_suffix(key, self._cursor_idx))
         prefix = "" if key == "Close" else f"{_SERIES.get(key, key)} "
         if key in self._price_raw:
             return prefix + self._price_value_text(key, v, compact=False)

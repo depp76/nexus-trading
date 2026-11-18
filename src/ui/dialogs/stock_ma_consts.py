@@ -9,6 +9,7 @@ working.
 from i18n import tr
 from ui.colors import SERIES_PALETTE
 from ui.common import BTN_H, FONT_BODY
+from ui.theme import TEXT_EMPTY
 
 
 _STOCK_MARKETS = ("KOSPI", "KOSDAQ", "NASDAQ 100", "S&P500")
@@ -40,6 +41,7 @@ _SERIES = {
     "Close": tr("종가", "Close"), "MA20": "MA20", "MA50": "MA50", "MA60": "MA60", "MA200": "MA200",
     "Div": tr("이격도", "Divergence"), "EW": tr("동일가중", "Equal Weight"),
     "IDX": tr("시장지수", "Index"),
+    "CH": tr("돌파 채널", "Breakout channel"),
 }
 # The moving averages the chart draws and toggles. MA5 was dropped on
 # 2026-11-16 (user direction); its MA_RAMP color stays for the MA20
@@ -53,7 +55,16 @@ _MA_KEYS = ("MA20", "MA50", "MA60", "MA200")
 _MA_COLUMNS = {k: "S" + k for k in _MA_KEYS}
 # "IDX" is the stock's market index ("MarketIndex" column), rebased onto the
 # price axis at the left edge of the view (user direction 2026-11-17).
-_PRICE_SERIES = ("Close", *_MA_KEYS, "EW", "IDX")
+# The strategy's breakout channel (docs/ma60_unification_2026-11-18.md 1.2-3,
+# [1b]): two price-panel step lines from strategy.signal_api.chart_overlays,
+# switched together by the one "CH" toggle (off by default).
+_CHANNEL_KEYS = {"breakout_high": "CH_HI", "exit_low": "CH_LO"}    # ChartLine.key -> line key
+_LINE_TOGGLE = {"CH_HI": "CH", "CH_LO": "CH"}                      # line key -> its toggle
+_CHANNEL_COLOR = TEXT_EMPTY          # neutral grey, dashed: apart from the MA ramp and the index
+_PRICE_SERIES = ("Close", *_MA_KEYS, "EW", "IDX", "CH_HI", "CH_LO")
+# The price-panel toggles (_series_on keys): every line key except the
+# channel's two, which share "CH".
+_PRICE_TOGGLES = (*[k for k in _PRICE_SERIES if k not in _LINE_TOGGLE], "CH")
 _INDEX_COLOR = SERIES_PALETTE[1]     # teal: apart from the violet MA ramp
 # What the dialog opens with: close price plus the divergence panel, no moving
 # averages (user direction 2026-09-29: close only on the price panel).
