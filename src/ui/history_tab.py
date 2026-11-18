@@ -6,6 +6,7 @@ Contains:
 """
 from i18n import tr
 import logging
+import sqlite3
 import datetime as _dt
 
 from PyQt6.QtWidgets import (
@@ -20,7 +21,7 @@ from data_fetcher import is_kr_code
 
 from threads.fetch_threads import (
     PositionPriceFetchThread,
-    AccountDepositThread,
+    KisAccountThread,
     SingleStockFetchThread,
 )
 from threads.realtime import RealtimePriceThread
@@ -30,7 +31,9 @@ from ui.dialogs import (
     SellEditDialog,
     TradeEntryDialog,
     StockTradeHistoryDialog,
+    KisSyncDialog,
 )
+from ui.kis_sync import plan_kis_import
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +79,8 @@ def _toolbar_hbox() -> QHBoxLayout:
 
 # Message boxes are titled with the tab name (docs/ui.md 8.5).
 _TITLE = "Trading History"
+# KIS 조회 with nothing imported yet: how far back to ask for executions (the recent TR covers ~3 months).
+_KIS_FIRST_LOOKBACK_DAYS = 89
 # Toolbar cycle buttons (user direction 2026-11-16, like the Universe
 # 종목(전체) button): (value, label) in click order, the first is the default
 # and shows unchecked. The values stay what the filter code compares.
@@ -117,6 +122,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._price_req_id = 0
         self._price_req: list = []
         self._deposit_thread = None
+        self._kis_dialog = None          # the last KIS 조회 preview (tests drive it)
         self._row_data: list = []   # (kind, rec) per visible table row
         self._settings = QSettings("PortfolioManagement", "PortfolioManagement")
         self._settings_save_timer = QTimer(self)
@@ -312,11 +318,18 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         row.addStretch()
 
         self._summary_btn = make_button(tr("종목별 요약", "Summary"), on_click=self._show_holdings_summary)
-        self._fetch_dep_btn = make_button(tr("예수금 조회", "Fetch Deposit"), on_click=self._fetch_account_deposit)
-        self._reload_btn = make_button(tr("다시 읽기", "Reload"), on_click=self._reload_current)
+        # KIS 조회 (was 예수금 조회; 2026-11-18, docs/ui.md 8.28): deposit + executed orders in one go.
+        self._fetch_dep_btn = make_button(
+            tr("KIS 조회", "KIS Sync"), on_click=self._fetch_kis_account,
+            tooltip=tr("KIS 계좌의 예수금과 새 체결 내역을 가져와, 확인 후 Trading History에 반영합니다",
+                       "Fetch the KIS account's deposit and new executions and apply them after a review"))
+        # No 다시 읽기 (Reload) button since 2026-11-18 (user decision, docs/ui.md 8.27): every
+        # Trading Universe refresh runs _reload_current (MainWindow wires refresh_started),
+        # this tab refreshes itself after its own edits, and portfolio.db is not edited
+        # from outside the app.
         # Add Trade is the tab's one primary (docs/ui.md 8.1), last.
         self._add_trade_btn = make_button(tr("거래 추가", "Add Trade"), "primary", self._show_add_trade_dialog)
-        for btn in (self._summary_btn, self._fetch_dep_btn, self._reload_btn):
+        for btn in (self._summary_btn, self._fetch_dep_btn):
             row.addWidget(btn)
         row.addSpacing(_GROUP_GAP)
         row.addWidget(self._add_trade_btn)
@@ -341,7 +354,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         (ui.common.toolbar_button_width; this tab's labels, every cycle label
         included, are registered at the bottom of this module)."""
         fix_toolbar_widths([self._period_btn, self._group_btn, self._stale_btn, self._summary_btn,
-                            self._fetch_dep_btn, self._reload_btn, self._add_trade_btn])
+                            self._fetch_dep_btn, self._add_trade_btn])
 
     def _sync_cycle_buttons(self) -> None:
         """Label and checked state of the three cycle buttons from the current
@@ -810,29 +823,73 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         except ValueError:
             return 0.0
 
-    def _fetch_account_deposit(self):
-        """Fetch button: run the KIS balance inquiry off the UI thread (roadmap 6-1c)."""
+    def _kis_query_start(self) -> _dt.date:
+        """First day to ask KIS for executions: the last imported order's day (an
+        order may have filled more since; kis_imports keeps only the difference),
+        else _KIS_FIRST_LOOKBACK_DAYS back."""
+        last = trade_db.last_kis_import_date()
+        if last:
+            try:
+                return _dt.datetime.strptime(last, "%Y-%m-%d").date()
+            except ValueError:
+                logger.warning("kis_imports: bad order date %r", last)
+        return _dt.date.today() - _dt.timedelta(days=_KIS_FIRST_LOOKBACK_DAYS)
+
+    def _fetch_kis_account(self):
+        """KIS 조회: deposit, holdings and executions off the UI thread (roadmap 6-1c)."""
         if self._deposit_thread is not None and self._deposit_thread.isRunning():
             return
         self._fetch_dep_btn.setEnabled(False)
-        self.status_message.emit(tr("KIS에서 계좌 예수금 조회 중...", "Fetching account deposit from KIS..."))
-        self._track_thread(AccountDepositThread(), '_deposit_thread')
-        self._deposit_thread.finished.connect(self._on_account_deposit_fetched)
+        self.status_message.emit(tr("KIS에서 예수금·체결 내역 조회 중...", "Fetching deposit and executions from KIS..."))
+        self._track_thread(KisAccountThread(self._kis_query_start()), '_deposit_thread')
+        self._deposit_thread.finished.connect(self._on_kis_account_fetched)
         self._deposit_thread.start()
 
-    def _on_account_deposit_fetched(self, val: float, err: str):
+    def _on_kis_account_fetched(self, result: dict, err: str):
         self._fetch_dep_btn.setEnabled(True)
         if err:
-            self.status_message.emit(tr("계좌 예수금 조회 실패", "Account deposit fetch failed"))
-            QMessageBox.critical(self, _TITLE, tr(f"계좌 예수금을 조회하지 못했습니다:\n{err}", f"Failed to fetch the account deposit:\n{err}"))
+            self.status_message.emit(tr("KIS 조회 실패", "KIS fetch failed"))
+            QMessageBox.critical(self, _TITLE, tr(f"KIS 계좌를 조회하지 못했습니다:\n{err}",
+                                                  f"Failed to query the KIS account:\n{err}"))
             return
+        val = result["deposit"]
         self._deposit_edit.setText(f"{int(val):,}")
         self._on_deposit_changed()
-        # Result on the status bar (docs/ui.md 8.4: one place for transient
-        # results), not a modal -- the field stays focused for an edit.
-        self.status_message.emit(tr(f"계좌 예수금: {int(val):,} KRW (추정) -- 예수금에 입력했습니다", f"Account deposit: {int(val):,} KRW (estimate) -- filled into Deposit"))
-        self._deposit_edit.selectAll()
-        self._deposit_edit.setFocus()
+        # Results on the status bar (docs/ui.md 8.4), not a modal.
+        deposit_msg = tr(f"계좌 예수금: {int(val):,} KRW (추정) -- 예수금에 입력했습니다",
+                         f"Account deposit: {int(val):,} KRW (estimate) -- filled into Deposit")
+        if result.get("exec_error"):
+            self.status_message.emit(deposit_msg)
+            QMessageBox.warning(self, _TITLE, tr(
+                f"예수금은 입력했지만 체결 내역을 조회하지 못했습니다:\n{result['exec_error']}",
+                f"The deposit was filled in, but the executions could not be fetched:\n{result['exec_error']}"))
+            return
+        try:
+            imported = trade_db.load_kis_imports()
+        except sqlite3.Error as e:
+            logger.error("kis_imports read failed", exc_info=True)
+            QMessageBox.critical(self, _TITLE, tr(f"DB를 읽지 못했습니다:\n{e}", f"Could not read the DB:\n{e}"))
+            return
+        plan = plan_kis_import(result["executions"], imported, self._open_data, result.get("markets"),
+                               result.get("holdings"))
+        if not plan.rows and not plan.warnings:
+            self.status_message.emit(deposit_msg + tr(" · 새 체결 없음", " · no new executions"))
+            return
+        dlg = KisSyncDialog(plan, val, self)
+        self._kis_dialog = dlg               # tests drive it
+        if dlg.exec() != QDialog.DialogCode.Accepted or not plan.applicable:
+            self.status_message.emit(deposit_msg)
+            return
+        try:
+            trade_db.apply_kis_import(plan.records, plan.imports)
+        except (sqlite3.Error, ValueError) as e:
+            logger.error("KIS import save failed", exc_info=True)
+            QMessageBox.critical(self, _TITLE, tr(f"체결 내역을 저장하지 못했습니다:\n{e}",
+                                                  f"Could not save the executions:\n{e}"))
+            return
+        n = sum(1 for r in plan.rows if r.applied)
+        self.load_from_db()          # one source of truth after a multi-row change
+        self.status_message.emit(deposit_msg + tr(f" · 체결 {n}건 반영", f" · {n} execution(s) applied"))
 
     # ---Summary ---
     def _refresh_summary(self):
@@ -1270,6 +1327,6 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
 # ui.common.toolbar_button_width).
 register_toolbar_labels(
     *(label for states in (_PERIOD_STATES, _GROUP_STATES, _STALE_STATES) for _, label in states),
-    tr("종목별 요약", "Summary"), tr("예수금 조회", "Fetch Deposit"), tr("다시 읽기", "Reload"),
+    tr("종목별 요약", "Summary"), tr("KIS 조회", "KIS Sync"),
     tr("거래 추가", "Add Trade"),
 )

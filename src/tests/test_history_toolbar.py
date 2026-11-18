@@ -96,7 +96,7 @@ class TestHistoryToolbar(unittest.TestCase):
     def test_every_toolbar_button_has_one_width_that_fits_every_label(self):
         tab = self.tab
         btns = [tab._period_btn, tab._group_btn, tab._stale_btn, tab._summary_btn,
-                tab._fetch_dep_btn, tab._reload_btn, tab._add_trade_btn]
+                tab._fetch_dep_btn, tab._add_trade_btn]
         self.assertEqual(len({b.width() for b in btns}), 1)
         width = btns[0].width()
         for btn in (tab._period_btn, tab._group_btn, tab._stale_btn):
@@ -114,10 +114,11 @@ class TestHistoryToolbar(unittest.TestCase):
         y = lambda w: w.mapTo(tab, w.rect().center()).y()   # noqa: E731
         x = lambda w: w.mapTo(tab, w.rect().topLeft()).x()  # noqa: E731
         order = [tab._search_edit, tab._period_btn, tab._group_btn, tab._stale_btn, tab._summary_btn,
-                 tab._fetch_dep_btn, tab._reload_btn, tab._add_trade_btn]
+                 tab._fetch_dep_btn, tab._add_trade_btn]
         self.assertEqual(len({y(w) for w in order}), 1)
         self.assertEqual([x(w) for w in order], sorted(x(w) for w in order))
         self.assertFalse(hasattr(tab, "_open_stocks_combo"))
+        self.assertFalse(hasattr(tab, "_reload_btn"))          # 2026-11-18: Universe refresh reloads this tab
 
     def test_stock_history_uses_open_lots_or_closed_trades(self):
         tab = self.tab

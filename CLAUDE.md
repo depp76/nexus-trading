@@ -175,7 +175,7 @@ Dev tooling is in `requirements-dev.txt`
 - **`src/threads/`**: every network call the UI triggers runs in a `QThread` subclass here
   (`AllDataFetchThread`, `UniverseLightweightFetchThread`, `PositionPriceFetchThread`,
   `RealtimePriceThread`, `StockMaThread`, `IndexMaThread`, `SingleStockFetchThread`,
-  `TickerValidateThread`, `AssetMetricsPreloadThread`, `AssetReportThread`, `AccountDepositThread`,
+  `TickerValidateThread`, `AssetMetricsPreloadThread`, `AssetReportThread`, `KisAccountThread` (Trading History's KIS 조회: deposit, holdings, executed orders),
   `GeminiStockReportThread`, `AutoBackupThread`; `strategy_threads.py` holds
   `TrendFollowingResearchThread`, which loads the dataset and runs the research matrix, and
   `SignalPicksThread` / `StrategyCheckThread`, the `signal_api` universe run and one-stock check).
@@ -218,6 +218,8 @@ Dev tooling is in `requirements-dev.txt`
   2026-09-19), so add a name there when a new UI/thread caller needs it rather than
   importing `data.*` directly.
 - **`src/trade_db.py`**: SQLite persistence (`portfolio.db`, WAL mode): the `trades` table and,
+  since 2026-11-18, `kis_imports` (KIS orders already imported by Trading History's KIS 조회 —
+  `apply_kis_import()` saves trades and these marks in one transaction; `ui/kis_sync.py` plans the import),
   since 2026-09-19, `asset_records` (the Total Assets tab's weekly snapshots —
   `load_asset_records()` / `save_asset_records()`, a full replace per save). Prefer
   `upsert_trades()` for trade batches. Do not generate `orig_key` values in callers:

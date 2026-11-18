@@ -341,9 +341,20 @@ def fetch_kis_holiday_page(base_date: str) -> list:
     return d.get("output") or []
 
 
-def fetch_account_deposit() -> float:
-    """Fetches the account deposit (cash balance) via KIS inquire-balance (TTTC8434R).
-    Unlike the old Kiwoom flow, KIS balance inquiry needs no account password/OTP."""
+def _to_float(s) -> float:
+    try:
+        return float(str(s).replace(",", "").strip() or "0")
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def fetch_account_balance() -> dict:
+    """The account's deposit and stock holdings via KIS inquire-balance (TTTC8434R).
+
+    Returns {"deposit": float KRW, "holdings": [{"ticker", "name", "qty", "avg_price"}]}
+    (holdings with a positive quantity; the first page, up to 50 names). Unlike
+    the old Kiwoom flow, KIS balance inquiry needs no account password/OTP.
+    Raises a KIS_ERRORS member on failure."""
     cano, acnt_prdt_cd = _get_kis_account()
     headers = _kis_headers("TTTC8434R")
     params = {
@@ -367,26 +378,113 @@ def fetch_account_deposit() -> float:
     d = r.json()
     if d.get("rt_cd") != "0":
         raise RuntimeError(f"[inquire-balance] KIS API error: {d.get('msg1', d)}")
-    output2 = d.get("output2", [])
+    holdings = []
+    for row in d.get("output1") or []:
+        qty = _to_float(row.get("hldg_qty"))
+        if qty > 0:
+            holdings.append({"ticker": str(row.get("pdno", "")).strip(), "name": str(row.get("prdt_name", "")).strip(),
+                             "qty": qty, "avg_price": _to_float(row.get("pchs_avg_pric"))})
+    output2 = d.get("output2") or []
     if not output2:
-        return 0.0
+        return {"deposit": 0.0, "holdings": holdings}
     row = output2[0]
-
-    def _to_float(s):
-        try:
-            return float(str(s).replace(",", "").strip() or "0")
-        except (ValueError, TypeError):
-            return 0.0
-
     primary = _to_float(row.get("dnca_tot_amt", "0"))
     secondary = _to_float(row.get("prvs_rcdl_excc_amt", "0"))
     # Mirrors the old Kiwoom flow's rule: don't trust a "0" in the primary deposit
     # field when a secondary field shows a real balance — a plain truthy-OR chain
     # would never even look at the secondary field here, since the string "0" is
     # truthy in Python even though it's numerically zero.
-    if primary == 0.0 and secondary > 0.0:
-        return secondary
-    return primary
+    deposit = secondary if primary == 0.0 and secondary > 0.0 else primary
+    return {"deposit": deposit, "holdings": holdings}
+
+
+def fetch_account_deposit() -> float:
+    """The account deposit (cash balance) in KRW; see fetch_account_balance."""
+    return fetch_account_balance()["deposit"]
+
+
+# inquire-daily-ccld comes as two TRs: TTTC0081R for the last three months and
+# CTSC9215R for anything older. Days at or after today - _CCLD_RECENT_DAYS go to
+# the first (a little inside three months, so a range edge never falls between).
+_CCLD_RECENT_DAYS = 89
+_CCLD_MAX_PAGES = 50
+_SIDE_CODES = {"01": "sell", "02": "buy"}
+
+
+def _fetch_ccld_range(tr_id: str, cano: str, prdt: str, start, end) -> list:
+    """Every executed-order row of inquire-daily-ccld for start..end (dates), all pages."""
+    rows: list = []
+    fk = nk = ""
+    for _page in range(_CCLD_MAX_PAGES):
+        headers = _kis_headers(tr_id)
+        if fk or nk:
+            headers["tr_cont"] = "N"
+        params = {
+            "CANO": cano, "ACNT_PRDT_CD": prdt,
+            "INQR_STRT_DT": start.strftime("%Y%m%d"), "INQR_END_DT": end.strftime("%Y%m%d"),
+            "SLL_BUY_DVSN_CD": "00",      # both sides
+            "INQR_DVSN": "00",            # oldest first
+            "PDNO": "", "CCLD_DVSN": "01",   # executed orders only
+            "ORD_GNO_BRNO": "", "ODNO": "", "INQR_DVSN_3": "00", "INQR_DVSN_1": "",
+            "CTX_AREA_FK100": fk, "CTX_AREA_NK100": nk,
+            "EXCG_ID_DVSN_CD": "ALL",     # KRX and NXT
+        }
+        r = _KIS_SESSION.get(f"{_KIS_BASE_URL}/uapi/domestic-stock/v1/trading/inquire-daily-ccld",
+                             headers=headers, params=params, timeout=10)
+        r.raise_for_status()
+        d = r.json()
+        if d.get("rt_cd") != "0":
+            raise RuntimeError(f"[inquire-daily-ccld {tr_id}] KIS API error: {d.get('msg1', d)}")
+        rows.extend(d.get("output1") or [])
+        if r.headers.get("tr_cont") not in ("M", "F"):
+            return rows
+        fk, nk = d.get("ctx_area_fk100", ""), d.get("ctx_area_nk100", "")
+        time.sleep(0.1)           # KIS allows ~20 calls a second; stay well under
+    logger.warning("[inquire-daily-ccld] stopped after %d pages", _CCLD_MAX_PAGES)
+    return rows
+
+
+def parse_execution(row: dict) -> dict | None:
+    """One inquire-daily-ccld output1 row -> {"date" (YYYY-MM-DD), "time", "order_no",
+    "ticker", "name", "side" ("buy"/"sell"), "qty", "amount", "price"} with the
+    order's cumulative fill so far; None for a row with no fill or an unknown side."""
+    side = _SIDE_CODES.get(str(row.get("sll_buy_dvsn_cd", "")).strip())
+    qty = _to_float(row.get("tot_ccld_qty"))
+    ord_dt = str(row.get("ord_dt", "")).strip()
+    if side is None or qty <= 0 or len(ord_dt) != 8:
+        return None
+    amount = _to_float(row.get("tot_ccld_amt"))
+    price = _to_float(row.get("avg_prvs")) or (amount / qty)
+    if amount <= 0:
+        amount = price * qty
+    return {
+        "date": f"{ord_dt[:4]}-{ord_dt[4:6]}-{ord_dt[6:]}",
+        "time": str(row.get("ord_tmd", "")).strip(),
+        "order_no": str(row.get("odno", "")).strip(),
+        "ticker": str(row.get("pdno", "")).strip(),
+        "name": str(row.get("prdt_name", "")).strip(),
+        "side": side, "qty": qty, "amount": amount, "price": price,
+    }
+
+
+def fetch_kis_executions(start, end=None, today=None) -> list:
+    """The account's executed orders between `start` and `end` (dates, inclusive;
+    end defaults to today), oldest first, each parsed by parse_execution. Splits
+    the range over the recent / older TRs. Raises a KIS_ERRORS member on failure."""
+    today = today or datetime.now(_KST).date()
+    end = min(end or today, today)
+    if start > end:
+        return []
+    cano, prdt = _get_kis_account()
+    recent_from = today - timedelta(days=_CCLD_RECENT_DAYS)
+    raw: list = []
+    if start < recent_from:
+        raw += _fetch_ccld_range("CTSC9215R", cano, prdt, start, min(end, recent_from - timedelta(days=1)))
+    if end >= recent_from:
+        raw += _fetch_ccld_range("TTTC0081R", cano, prdt, max(start, recent_from), end)
+    out = [e for e in (parse_execution(r) for r in raw) if e is not None]
+    out.sort(key=lambda e: (e["date"], e["time"], e["order_no"]))
+    return out
 
 
 def fetch_investor_trend(ticker: str, days: int = 60) -> list:
