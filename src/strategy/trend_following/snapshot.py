@@ -11,11 +11,22 @@ The SHA-256 in the manifest is computed from the *array contents* (a canonical
 header plus little-endian float64 bytes), not from the parquet files, so it is
 independent of the parquet encoder and any changed cell changes it.
 ``load_snapshot`` recomputes it and refuses to return a mismatching Dataset.
+
+A published snapshot is immutable (review_codex.md 2026-11-18 #1): the name
+identifies a research input, so ``save_snapshot`` writes into a temporary
+sibling folder, reads it back and checks the hash, and only then renames it to
+the target -- and refuses a target that already exists
+(SnapshotExistsError). Saving over an old snapshot used to overwrite its
+arrays one by one, so a failure part way left the old manifest next to new
+arrays with the old data gone.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
+import uuid
 from datetime import date, datetime
 from pathlib import Path
 
@@ -33,6 +44,18 @@ _PRICE_FIELDS = ("open", "high", "low", "close", "volume")
 
 class SnapshotIntegrityError(RuntimeError):
     """The arrays read back from a snapshot do not match the manifest hash."""
+
+
+class SnapshotExistsError(FileExistsError):
+    """A snapshot (or something else) already sits at the target path; snapshots
+    are never overwritten -- pick another name or delete the old one."""
+
+
+def check_snapshot_target_free(path) -> None:
+    """Raise SnapshotExistsError when `path` exists (call it before fetching data)."""
+    if os.path.lexists(path):
+        raise SnapshotExistsError(f"snapshot already exists: {path} (snapshots are not overwritten; "
+                                  "choose another name or delete it first)")
 
 
 def _arrays(ds: Dataset) -> dict[str, np.ndarray]:
@@ -130,14 +153,35 @@ def check_snapshot_supported(ds: Dataset) -> None:
 
 
 def save_snapshot(ds: Dataset, path, allow_holdout: bool = False) -> dict:
-    """Write `ds` into folder `path` and return the manifest. A dataset with
-    dates after DEV_END is refused unless `allow_holdout`."""
+    """Write `ds` as a new snapshot folder `path` and return the manifest. A
+    dataset with dates after DEV_END is refused unless `allow_holdout`; an
+    existing `path` raises SnapshotExistsError. The folder appears only once
+    complete and verified: everything is written to a temporary sibling,
+    loaded back with the hash check, then renamed into place; any failure
+    removes the temporary folder and leaves `path` as it was."""
     if ds.dates:
         check_dev_window(ds.dates[-1], allow_holdout, "dataset last date")
     check_snapshot_supported(ds)        # before anything is written
-    folder = Path(path)
-    folder.mkdir(parents=True, exist_ok=True)
+    target = Path(path)
+    check_snapshot_target_free(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging = target.parent / f".{target.name}.tmp-{uuid.uuid4().hex[:8]}"
+    staging.mkdir()
+    try:
+        manifest = _write_snapshot_files(ds, staging)
+        load_snapshot(staging, allow_holdout=allow_holdout)      # read back: the hash must match
+        # A target created meanwhile is not overwritten: on Windows the rename
+        # fails on any existing target, elsewhere on a non-empty folder.
+        check_snapshot_target_free(target)
+        os.rename(staging, target)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return manifest
 
+
+def _write_snapshot_files(ds: Dataset, folder: Path) -> dict:
+    """The arrays, the series and the manifest of `ds` into `folder` (which exists)."""
     files: dict[str, str] = {}
     for name, a in _arrays(ds).items():
         cols = ds.bm.tickers if name.startswith("bm_") else ds.stocks.tickers

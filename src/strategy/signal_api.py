@@ -298,14 +298,40 @@ class SignalCache:
     """Universe runs by variant id, shared by the Universe tab and the MA
     charts it opens. A run counts only on the day it was computed (prices
     move overnight); the Universe tab also clears it when a refresh brings
-    new prices."""
+    new prices.
+
+    `generation` names the Universe rows the runs were computed from
+    (review_codex.md 2026-11-18 #3): a run records it when it starts
+    (`generation` of the cache, or of the SignalContext an MA chart got), and
+    `put(picks, generation=...)` refuses a run whose rows were replaced since
+    -- a refresh calls `bump()` when it starts replacing the rows and `clear()`
+    (which bumps too) when they are in. Without it a run started before a
+    refresh landed after it and filled the cache with the old population's
+    ranks for the rest of the day."""
 
     def __init__(self, today=date.today):
         self._today = today
         self._runs: dict[str, tuple[SignalPicks, date]] = {}
+        self._generation = 0
 
-    def put(self, picks: SignalPicks) -> None:
+    @property
+    def generation(self) -> int:
+        return self._generation
+
+    def bump(self) -> None:
+        """The Universe rows are being replaced: runs started before now are stale."""
+        self._generation += 1
+
+    def is_current(self, generation: int | None) -> bool:
+        return generation is None or generation == self._generation
+
+    def put(self, picks: SignalPicks, generation: int | None = None) -> bool:
+        """Store `picks`; False (nothing stored) when `generation` is given and
+        the rows have changed since that run started."""
+        if not self.is_current(generation):
+            return False
         self._runs[picks.variant_id] = (picks, self._today())
+        return True
 
     def get(self, vid: str) -> SignalPicks | None:
         hit = self._runs.get(vid)
@@ -321,7 +347,9 @@ class SignalCache:
         return self.get(vid) is not None
 
     def clear(self, keep: SignalPicks | None = None) -> None:
-        """Drop every run (except `keep`, e.g. the run pinned to the table)."""
+        """Drop every run (except `keep`, e.g. the run pinned to the table) and
+        start a new generation (new rows)."""
+        self.bump()
         kept = self._runs.get(keep.variant_id) if keep is not None else None
         self._runs.clear()
         if kept is not None and kept[0] is keep:

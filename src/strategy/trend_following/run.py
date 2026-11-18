@@ -27,7 +27,8 @@ from strategy.trend_following.factor_ic import run_factor_ic
 from strategy.trend_following.research import ResearchRequest, run_research
 from strategy.trend_following.robustness import RobustnessRequest, run_robustness
 from strategy.trend_following.snapshot import (
-    SNAPSHOT_ROOT, default_snapshot_dir, load_snapshot, read_manifest, save_snapshot,
+    SNAPSHOT_ROOT, SnapshotExistsError, check_snapshot_target_free, default_snapshot_dir, load_snapshot,
+    read_manifest, save_snapshot,
 )
 
 DEFAULT_REPORT_DIR = Path(CACHE_DIR) / "dev_reports"
@@ -97,6 +98,26 @@ def report_header(manifest: dict, commit: str) -> list[str]:
     ]
 
 
+def write_report(md: str, out_dir, kind: str, manifest: dict, now: datetime | None = None) -> Path:
+    """Save a finished Markdown report as a new file and return its path:
+    <kind>_<spec>_<data hash>_<YYYYmmdd_HHMMSS>[_n].md under `out_dir` (default
+    DEFAULT_REPORT_DIR). The file is created exclusively, so two reports
+    finishing in the same second get _2, _3, ... instead of the second
+    overwriting the first (review_codex.md 2026-11-18 #4)."""
+    out = Path(out_dir) if out_dir else DEFAULT_REPORT_DIR
+    out.mkdir(parents=True, exist_ok=True)
+    stem = f"{kind}_{SPEC_VERSION}_{manifest['sha256'][:12]}_{(now or datetime.now()):%Y%m%d_%H%M%S}"
+    for n in range(1, 1000):
+        path = out / (f"{stem}.md" if n == 1 else f"{stem}_{n}.md")
+        try:
+            with open(path, "x", encoding="utf-8") as f:
+                f.write(md)
+            return path
+        except FileExistsError:
+            continue
+    raise FileExistsError(f"no free report name for {out / stem}")
+
+
 def resolve_snapshot(arg: str) -> Path:
     p = Path(arg)
     return p if (p / "manifest.json").exists() else default_snapshot_dir(arg)
@@ -114,11 +135,7 @@ def run_from_snapshot(snapshot, out_dir=None, variants: tuple[str, ...] | None =
     )
     result = run_research(ds, req, progress=progress)
     md = result.to_markdown(report_header(manifest, commit if commit is not None else git_commit()))
-    out = Path(out_dir) if out_dir else DEFAULT_REPORT_DIR
-    out.mkdir(parents=True, exist_ok=True)
-    path = out / f"trend_following_{SPEC_VERSION}_{manifest['sha256'][:12]}_{datetime.now():%Y%m%d_%H%M%S}.md"
-    path.write_text(md, encoding="utf-8")
-    return path
+    return write_report(md, out_dir, "trend_following", manifest)
 
 
 def run_robustness_from_snapshot(snapshot, out_dir=None, variants: tuple[str, ...] | None = None,
@@ -137,11 +154,7 @@ def run_robustness_from_snapshot(snapshot, out_dir=None, variants: tuple[str, ..
         cash_interest_reference=cash_interest_reference)
     result = run_robustness(ds, req, progress=progress)
     md = result.to_markdown(report_header(manifest, commit if commit is not None else git_commit()))
-    out = Path(out_dir) if out_dir else DEFAULT_REPORT_DIR
-    out.mkdir(parents=True, exist_ok=True)
-    path = out / f"robustness_{SPEC_VERSION}_{manifest['sha256'][:12]}_{datetime.now():%Y%m%d_%H%M%S}.md"
-    path.write_text(md, encoding="utf-8")
-    return path
+    return write_report(md, out_dir, "robustness", manifest)
 
 
 def run_factor_ic_from_snapshot(snapshot, out_dir=None, commit: str | None = None) -> Path:
@@ -150,17 +163,17 @@ def run_factor_ic_from_snapshot(snapshot, out_dir=None, commit: str | None = Non
     manifest = read_manifest(folder)
     ds = load_snapshot(folder)                       # verifies the content hash
     md = run_factor_ic(ds).to_markdown(report_header(manifest, commit if commit is not None else git_commit()))
-    out = Path(out_dir) if out_dir else DEFAULT_REPORT_DIR
-    out.mkdir(parents=True, exist_ok=True)
-    path = out / f"factor_ic_{SPEC_VERSION}_{manifest['sha256'][:12]}_{datetime.now():%Y%m%d_%H%M%S}.md"
-    path.write_text(md, encoding="utf-8")
-    return path
+    return write_report(md, out_dir, "factor_ic", manifest)
 
 
 def build_snapshot(name: str, start: date = DEV_START, end: date = DEV_END, universe_size: int = 200,
                    include_flows: bool = True, progress=None, tickers_from=None) -> dict:
     """Fetch and save a snapshot. `tickers_from` (a snapshot folder / name) pins the stock list to
-    that manifest's tickers instead of ranking the current market caps."""
+    that manifest's tickers instead of ranking the current market caps. An existing
+    snapshot of that name is refused before any data is fetched (snapshots are
+    immutable, SnapshotExistsError)."""
+    target = default_snapshot_dir(name)
+    check_snapshot_target_free(target)
     fixed: dict = {}
     if tickers_from:
         src = resolve_snapshot(str(tickers_from))
@@ -169,7 +182,7 @@ def build_snapshot(name: str, start: date = DEV_START, end: date = DEV_END, univ
                      fixed_source=str(src), excluded_etf=list(man.get("info", {}).get("excluded_etf", [])))
     ds = load_dataset(start, end, universe_size=universe_size, include_flows=include_flows,
                       progress=progress, **fixed)
-    return save_snapshot(ds, default_snapshot_dir(name))
+    return save_snapshot(ds, target)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -201,8 +214,12 @@ def main(argv: list[str] | None = None) -> int:
         print(msg, flush=True)
 
     if args.build_snapshot:
-        man = build_snapshot(args.build_snapshot, universe_size=args.universe_size,
-                             include_flows=not args.no_flows, progress=say, tickers_from=args.tickers_from)
+        try:
+            man = build_snapshot(args.build_snapshot, universe_size=args.universe_size,
+                                 include_flows=not args.no_flows, progress=say, tickers_from=args.tickers_from)
+        except SnapshotExistsError as e:
+            say(f"error: {e}")
+            return 2
         say(f"snapshot saved: {default_snapshot_dir(args.build_snapshot)} sha256={man['sha256']}")
         return 0
     if args.factor_ic:
@@ -217,7 +234,7 @@ def main(argv: list[str] | None = None) -> int:
                                             cash_interest_reference=args.cash_interest_ref)
         say(f"report saved: {path}")
         return 0
-    path =run_from_snapshot(args.snapshot, args.out, variants, not args.no_event_study, progress=say)
+    path = run_from_snapshot(args.snapshot, args.out, variants, not args.no_event_study, progress=say)
     say(f"report saved: {path}")
     return 0
 

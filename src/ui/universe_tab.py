@@ -932,7 +932,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         from ui.strategy_check_section import SignalContext
         return SignalContext(items=list(self.all_data), cache=self._signal_cache,
                              default_variant=self._signal_variant if self._signal_order else "",
-                             track=self._track_thread)
+                             track=self._track_thread, generation=self._signal_cache.generation)
 
     def _signal_items(self, vid: str) -> list:
         """The rows a run of `vid` takes: the markets its strategy applies to
@@ -964,6 +964,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
                                          f"Computing {vid} signals ({len(items)} names)..."))
         thread = self._track_thread(SignalPicksThread(items, vid, n_top=self.SIGNAL_TOP_N),
                                     "_signal_thread")
+        thread.cache_generation = self._signal_cache.generation    # the rows `items` came from
         thread.progress.connect(self._on_signals_progress)
         thread.finished.connect(self._on_signals_finished)
         thread.start()
@@ -971,9 +972,20 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     def _on_signals_progress(self, text: str):
         self.status_text_changed.emit(tr(f"전략 신호: {text}", f"Signals: {text}"))
 
-    def _on_signals_finished(self, picks, error: str):
-        """`picks`: universe_signals.SignalPicks (None on failure)."""
+    def _on_signals_finished(self, picks, error: str, generation: int | None = None):
+        """`picks`: universe_signals.SignalPicks (None on failure). A run whose
+        rows were replaced by a refresh since it started is dropped
+        (SignalCache.generation; review_codex.md 2026-11-18 #3)."""
         self.signal_btn.setEnabled(True)
+        if generation is None:
+            generation = getattr(self.sender(), "cache_generation", None)
+        if picks is not None and not self._signal_cache.is_current(generation):
+            self.signal_btn.setChecked(False)
+            self._sync_signal_checks(None)
+            self.status_text_changed.emit(tr(
+                f"{picks.variant_id} 전략 신호: 계산 중에 유니버스가 새로 고쳐져 결과를 버렸습니다 -- 다시 누르세요",
+                f"{picks.variant_id} signals: the universe was refreshed while computing; result dropped -- press again"))
+            return
         if picks is None:
             self.signal_btn.setChecked(False)
             self._sync_signal_checks(None)
@@ -1059,6 +1071,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         # the table and the cache, or empty both when the network was down.
         self._prev_data = list(self.all_data)
         self._full_failure = None
+        self._signal_cache.bump()      # signal runs started on the old rows are stale from here
         self.all_data = []
         self._refresh_markets = set(self._markets)
         self.market_status = {m: tr("대기", "Waiting") for m in ["Indices"] + self.selected_markets()}

@@ -28,6 +28,7 @@ from ui.common import (
     FONT_HEADING,
     FONT_BODY,
     cancel_thread,
+    retire_when_idle,
     refresh_state,
     RefreshFailures,
     EqualWidthTabBar,
@@ -122,12 +123,16 @@ def _install_qt_translator(app) -> None:
 
 def switch_language(old: "MainWindow", lang: str) -> "MainWindow":
     """Rebuild the main window in `lang` without restarting the app
-    (docs/ui.md 8.20): save the language, carry each tab's state over, stop
-    the old window's work, re-import the ui modules, build a new window and
-    retire the old one. Data caches (data.*) and the database are untouched."""
+    (docs/ui.md 8.20): save the language, carry each tab's state over, ask the
+    old window's work to stop, re-import the ui modules, build a new window and
+    retire the old one once its workers have finished. Nothing waits on the UI
+    thread and no worker is killed: the old window is hidden at once and
+    destroyed after its last worker ends (review_codex.md 2026-11-18 #2; it
+    used to wait up to 2 s per thread here and then terminate() it). Data
+    caches (data.*) and the database are untouched."""
     app = QApplication.instance()
     state = old.export_state()
-    old.stop_background_work()
+    pending = old.request_stop_background_work()
     i18n.save_language(lang)
     i18n.set_language(lang)
     _install_qt_translator(app)
@@ -139,7 +144,7 @@ def switch_language(old: "MainWindow", lang: str) -> "MainWindow":
     else:
         new.show()
     app._nexus_main_window = new      # the only strong reference to the live window
-    old.retire()
+    retire_when_idle(app, old, pending)
     return new
 
 
@@ -356,24 +361,43 @@ class MainWindow(QMainWindow):
         if state["universe"].get("refreshing"):
             self.universe_tab.refresh_data()     # the old window's refresh was stopped midway
 
-    def stop_background_work(self) -> None:
-        """Stop the timers and every worker thread this window started."""
-        self.global_auto_timer.stop()
-        self._indicator_timer.stop()
-        threads_to_stop = []
+    def _threads_to_stop(self) -> list:
+        threads = []
         if self._auto_backup_thread is not None:
-            threads_to_stop.append(self._auto_backup_thread)
+            threads.append(self._auto_backup_thread)
         for tab in ("universe_tab", "trading_history_tab", "trading_record_tab", "strategy_tab"):
             if hasattr(self, tab):
-                threads_to_stop.extend(getattr(self, tab).collect_threads_to_stop())
-        for t in threads_to_stop:
+                threads.extend(getattr(self, tab).collect_threads_to_stop())
+        return threads + list(getattr(self, "_pending_threads", []))
+
+    def request_stop_background_work(self) -> list:
+        """Stop the timers and ask every running worker to stop, without
+        waiting: cancellable workers exit at their next check, the rest (the
+        backup, a data fetch) run to the end. Their signals are blocked so a
+        late result never reaches this window. Returns the running threads."""
+        self.global_auto_timer.stop()
+        self._indicator_timer.stop()
+        running = []
+        for t in self._threads_to_stop():
             try:
                 if t.isRunning():
-                    cancel_thread(t)   # cancellable workers exit at their next check
+                    t.blockSignals(True)
+                    cancel_thread(t)
                     t.quit()
-                    if not t.wait(2000):   # wait up to 2 s
-                        t.terminate()     # force-kill if still alive
-                        t.wait(500)
+                    running.append(t)
+            except RuntimeError:       # the C++ object is gone
+                continue
+        return running
+
+    def stop_background_work(self) -> None:
+        """App shutdown: ask every worker to stop, then wait up to 2 s each and
+        terminate what is still alive (the process is ending)."""
+        for t in self.request_stop_background_work():
+            try:
+                if not t.wait(2000):   # wait up to 2 s
+                    t.terminate()     # force-kill if still alive
+                    if not t.wait(500):
+                        logger.warning("Background thread %s did not stop", type(t).__name__)
             except Exception:  # boundary: shutdown must go on whatever one thread does
                 logger.warning("Failed to cleanly stop background thread", exc_info=True)
 
@@ -459,6 +483,9 @@ class MainWindow(QMainWindow):
             event.accept()
             return
         self.stop_background_work()
+        # Windows a language switch replaced that still wait for a worker.
+        for w in list(getattr(QApplication.instance(), "_nexus_retiring", [])):
+            w.stop_background_work()
         QApplication.instance().quit()
         event.accept()
 
