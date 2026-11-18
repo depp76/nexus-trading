@@ -49,6 +49,54 @@ def _price_value_and_text(item, mode):
     return price_raw, price_text
 
 
+def _usd_market_cap(item) -> float:
+    """A US row's market cap in USD: `usd_market_cap`, else (rows cached before
+    2026-11-18) the KRW cap converted back at the row's own price ratio."""
+    usd = item.get('usd_market_cap')
+    if usd is not None:
+        return float(usd or 0)
+    price, usd_price = float(item.get('price', 0) or 0), float(item.get('usd_price', 0) or 0)
+    if price <= 0 or usd_price <= 0:
+        return 0.0
+    return float(item.get('market_cap', 0) or 0) * usd_price / price
+
+
+def _fmt_usd_cap(usd: float) -> str:
+    """$3.41T / $512.3B / $850M."""
+    if usd >= 1e12:
+        return f"${usd / 1e12:,.2f}T"
+    if usd >= 1e9:
+        return f"${usd / 1e9:,.1f}B"
+    return f"${usd / 1e6:,.0f}M"
+
+
+class _MarketCapItem(NumericItem):
+    """The 시총 cell (2026-11-18, user direction; docs/ui.md 8.31). Sorting by
+    cap with Korean and US rows on screen gives two blocks -- the Korean rows by
+    their KRW cap, then the US rows by their USD cap -- in either direction,
+    instead of one mixed list on the KRW-converted value. `_sort_key` is the
+    cap in the row's own currency (KRW 억 / USD); `_filter_value` keeps the KRW
+    cap in 억 for the 시총 range filter (one unit for every row, row_values).
+
+    Qt sorts descending by calling `right < left`, so the block order is fixed
+    by reading the header's current direction (every sort of this table goes
+    through the header indicator: header clicks, load_data, setSortingEnabled)."""
+
+    def __init__(self, text: str, value, group: int, krw_eok):
+        super().__init__(text, value)
+        self._group = group               # 0 Korean, 1 US
+        self._filter_value = krw_eok
+
+    def __lt__(self, other):
+        other_group = getattr(other, "_group", None)
+        if other_group is None or other_group == self._group:
+            return super().__lt__(other)
+        table = self.tableWidget()
+        descending = (table is not None and
+                      table.horizontalHeader().sortIndicatorOrder() == Qt.SortOrder.DescendingOrder)
+        return self._group > other_group if descending else self._group < other_group
+
+
 def _empty_numeric_item():
     """A centred, muted "-" cell that sorts below every real value (a missing
     cap, PER or MA divergence)."""
@@ -678,17 +726,26 @@ class StockTable(QTableWidget):
 
     def _set_cap_cell(self, row, item):
         """COL_CAP: Cap (market_cap is in KRW; 100,000,000 = 100M KRW). Index,
-        yield and commodity rows have no market cap."""
+        yield and commodity rows have no market cap. US rows show their cap in
+        dollars ($3.41T, user direction 2026-11-18, docs/ui.md 8.31) with the
+        KRW figure on the tooltip and sort by it, as a block after the Korean
+        rows (_MarketCapItem); the 시총 range filter stays in KRW 억 for all."""
         cap_eok = None
         if not item.get('is_index'):
             try:
                 cap_eok = int(item.get('market_cap', 0)) // 100_000_000
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 cap_eok = 0
         if cap_eok is None:
             cap_item = _empty_numeric_item()
         else:
-            cap_item = NumericItem(f"{cap_eok:,}", cap_eok)
+            is_usd = item.get('currency', '') == '$' and 'usd_price' in item
+            usd = _usd_market_cap(item) if is_usd else 0.0
+            if usd > 0:
+                cap_item = _MarketCapItem(_fmt_usd_cap(usd), usd, 1, cap_eok)
+                cap_item.setToolTip(tr(f"약 {cap_eok:,}억 원 (USD/KRW 환산)", f"about {cap_eok:,} x100M KRW (at USD/KRW)"))
+            else:
+                cap_item = _MarketCapItem(f"{cap_eok:,}", cap_eok, 0, cap_eok)
             cap_item.setTextAlignment(_RIGHT)
         cap_item.setFont(self._numeric_font)
         self.setItem(row, COL_CAP, cap_item)
@@ -812,7 +869,8 @@ class StockTable(QTableWidget):
         values = {}
         for key, col in _RANGE_FILTER_COLS.items():
             item = self.item(row, col)
-            v = getattr(item, "_sort_key", None) if item is not None else None
+            # _filter_value when a cell sorts on something else (US caps sort in USD, filter in KRW 억).
+            v = getattr(item, "_filter_value", getattr(item, "_sort_key", None)) if item is not None else None
             if v is None or v == float('-inf') or (col == COL_RANGE52W and v < 0):
                 v = None
             values[key] = v

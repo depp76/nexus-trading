@@ -382,6 +382,7 @@ def _process_us_symbol(symbol: str, name: str, meta: _UsChunkMeta, run: _UsBulkR
             "market": run.market_name,
             "price": usd_price * run.fx_rate,
             "market_cap": usd_marcap * run.fx_rate,
+            "usd_market_cap": usd_marcap,
             "usd_price": usd_price,
             "currency": "$",
             "changes": changes,

@@ -177,6 +177,51 @@ class TestIndexRowsFormatByChangeMode(unittest.TestCase):
         self.assertEqual(cell("KS11", COL_CAP), "-")
         self.assertEqual(cell("005930", COL_CAP), "1,000")   # 100,000,000,000 KRW -> 1,000 eok
 
+    def test_us_cap_shows_dollars_and_sorts_in_krw(self):
+        """2026-11-18 (user direction, docs/ui.md 8.31): US rows show the cap in
+        USD; the sort key stays the KRW cap (억) so mixed markets keep one scale."""
+        from ui.widgets import COL_CAP
+        table = StockTable()
+        us = {"ticker": "AAPL", "name": "Apple", "market": "NASDAQ 100", "price": 280_000.0, "usd_price": 200.0,
+              "currency": "$", "market_cap": 3.0e12 * 1400, "usd_market_cap": 3.0e12, "changes": {}}
+        old = {**us, "ticker": "MSFT", "name": "Microsoft", "market_cap": 512.3e9 * 1400}
+        del old["usd_market_cap"]                          # a row cached before the field existed
+        small = {**us, "ticker": "TINY", "name": "Tiny", "market_cap": 850e6 * 1400, "usd_market_cap": 850e6}
+        table.load_data([us, old, small, _mk("005930", "Samsung", 70000)])
+        item = lambda t: table.item(self._row(table, t), COL_CAP)   # noqa: E731
+        self.assertEqual((item("AAPL").text(), item("MSFT").text(), item("TINY").text()), ("$3.00T", "$512.3B", "$850M"))
+        self.assertEqual(item("005930").text(), "1,000")
+        self.assertEqual(item("AAPL")._sort_key, 3.0e12)                                   # sorts in USD
+        self.assertEqual(item("AAPL")._filter_value, int(3.0e12 * 1400) // 100_000_000)    # filters in KRW 억
+        values = table.row_values(self._row(table, "AAPL"))["values"]
+        self.assertEqual(values["cap"], int(3.0e12 * 1400) // 100_000_000)
+        self.assertIn("억 원", item("AAPL").toolTip())
+
+    def test_cap_sort_keeps_korea_then_us_each_by_its_own_cap(self):
+        """2026-11-18 (user direction): with both markets on screen, sorting by 시총
+        gives the Korean rows by KRW cap, then the US rows by USD cap, either way."""
+        from ui.widgets import COL_CAP
+        table = StockTable()
+
+        def us(t, usd):
+            return {"ticker": t, "name": t, "market": "NASDAQ 100", "price": 1400.0, "usd_price": 1.0,
+                    "currency": "$", "market_cap": usd * 1400, "usd_market_cap": usd, "changes": {}}
+
+        # The US caps in KRW (4,200조 / 70조) straddle and exceed the Korean ones.
+        kr_big = dict(_mk("005930", "Samsung", 70000), market_cap=500e12)
+        kr_small = dict(_mk("000660", "Hynix", 70000), market_cap=100e12)
+        table.load_data([us("AAPL", 3.0e12), kr_small, us("TINY", 50e9), kr_big,
+                         {"ticker": "KS11", "name": "KOSPI", "market": "Index", "is_index": True, "price": 1.0,
+                          "market_cap": float("inf"), "changes": {}}])
+
+        def order():
+            return [table.item(r, COL_IDENTITY).data(Qt.ItemDataRole.UserRole)["ticker"] for r in range(table.rowCount())]
+
+        table.horizontalHeader().setSortIndicator(COL_CAP, Qt.SortOrder.DescendingOrder)
+        self.assertEqual(order(), ["005930", "000660", "AAPL", "TINY", "KS11"])
+        table.horizontalHeader().setSortIndicator(COL_CAP, Qt.SortOrder.AscendingOrder)
+        self.assertEqual(order(), ["KS11", "000660", "005930", "TINY", "AAPL"])
+
 
 class TestFrozenColumnTracksIdentityWidth(unittest.TestCase):
     """The frozen Name overlay is a second QTableWidget whose own column

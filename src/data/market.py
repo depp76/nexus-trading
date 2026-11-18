@@ -400,6 +400,7 @@ def _fetch_single_us(market, ticker):
         "market": market,
         "price": usd_price * fx_rate,
         "market_cap": usd_marcap * fx_rate,
+        "usd_market_cap": usd_marcap,
         "usd_price": usd_price,
         "currency": "$",
         "changes": changes,
