@@ -14,6 +14,7 @@ from strategy.trend_following.research import ResearchRequest, run_research  # n
 from tests.strategy.trend_following.helpers import synthetic_dataset  # noqa: E402
 from ui.strategy_tab import StrategyTab  # noqa: E402
 from ui.trend_following_tab import TrendFollowingTab  # noqa: E402
+from ui.dialogs.strategy_trades import COL_ENTRY, COL_EXIT, COL_NAME, COL_PNL, COL_REASON, COL_TICKER  # noqa: E402
 
 
 class _FakeThread:
@@ -375,8 +376,8 @@ class TestResultScreen(unittest.TestCase):
         self.assertEqual(tab.trades_table.rowCount(), len(a0.trades))
         if a0.trades:                                            # name column next to the ticker
             t = max(a0.trades, key=lambda t: (t.exit_date, t.entry_date))
-            self.assertEqual(tab.trades_table.item(0, 3).text(), t.ticker)
-            self.assertEqual(tab.trades_table.item(0, 2).text(), self.result.dataset_info["names"].get(t.ticker, ""))
+            self.assertEqual(tab.trades_table.item(0, COL_TICKER).text(), t.ticker)
+            self.assertEqual(tab.trades_table.item(0, COL_NAME).text(), self.result.dataset_info["names"].get(t.ticker, ""))
         self.assertEqual(tab.ax.get_legend().get_texts()[-1].get_text(), "A0")
 
     def test_result_basis_line_comes_from_the_result_not_the_form(self):
@@ -905,15 +906,17 @@ class TestTradeList(unittest.TestCase):
         t = max(run.trades, key=lambda t: (t.exit_date, t.entry_date))
         headers = [tab.trades_table.horizontalHeaderItem(c).text() for c in range(tab.trades_table.columnCount())]
         self.assertEqual(headers, [h for h, _ in COLUMNS])
+        self.assertEqual(headers, ["종목명", "시장", "티커", "진입일", "매입가", "수량", "매입금액", "청산일", "보유일",
+                                   "매도가", "매도금액", "손익(원)", "수익률", "비용(원)", "청산 사유"])   # Trading History order
         cells = {h: tab.trades_table.item(0, c).text() for c, h in enumerate(headers)}
         self.assertEqual(cells["매입가"], fmt_price(t.entry_price))
         self.assertEqual(cells["매도가"], fmt_price(t.exit_price))
         self.assertEqual(cells["수량"], f"{t.qty:,}")
         self.assertEqual(cells["시장"], "KOSPI")
-        for c in (0, 1):
+        for c in (COL_ENTRY, COL_EXIT):
             self.assertEqual(tab.trades_table.item(0, c).textAlignment(), int(Qt.AlignmentFlag.AlignCenter))
         self.assertEqual(cells["청산 사유"], reason_label(t.reason))
-        self.assertEqual(tab.trades_table.item(0, 14).toolTip(), t.reason)
+        self.assertEqual(tab.trades_table.item(0, COL_REASON).toolTip(), t.reason)
         self.assertIn(f"{len(run.trades)}건", tab.trades_summary_lbl.text())
         self.assertTrue(tab.trades_detail_btn.isEnabled())
         # same rows, same order, same text as the popup
@@ -984,7 +987,7 @@ class TestTradeList(unittest.TestCase):
         self.assertEqual(cells["손익(원)"], f"{t.pnl:+,.0f}")
         self.assertEqual(cells["비용(원)"], f"{t.cost.total:,.0f}")
         self.assertEqual(cells["시장"], "KOSPI")
-        self.assertEqual(dlg.table.item(row, 0).textAlignment(), int(Qt.AlignmentFlag.AlignCenter))
+        self.assertEqual(dlg.table.item(row, COL_ENTRY).textAlignment(), int(Qt.AlignmentFlag.AlignCenter))
         self.assertEqual(t.exit_date, max(x.exit_date for x in run.trades))   # newest exit first
         dlg.close()
 
@@ -992,7 +995,7 @@ class TestTradeList(unittest.TestCase):
         tab = self._tab()
         run = self._run()
         dlg = tab.open_trades_dialog()
-        dlg.table.sortItems(10, Qt.SortOrder.DescendingOrder)          # 손익(원)
+        dlg.table.sortItems(COL_PNL, Qt.SortOrder.DescendingOrder)     # 손익(원)
         pnl = [dlg._row_trade(r).pnl for r in range(dlg.table.rowCount())]
         self.assertEqual(pnl, sorted(pnl, reverse=True))
         reasons = {t.reason for t in run.trades}
@@ -1012,14 +1015,14 @@ class TestTradeList(unittest.TestCase):
         tab = self._tab()
         n = tab.trades_table.rowCount()
         row = n - 1
-        ticker = tab.trades_table.item(row, 3).text()
-        exit_date = tab.trades_table.item(row, 1).text()
+        ticker = tab.trades_table.item(row, COL_TICKER).text()
+        exit_date = tab.trades_table.item(row, COL_EXIT).text()
         tab.trades_table.cellDoubleClicked.emit(row, 2)
         dlg = tab._trades_dialog
         sel = dlg.table.selectionModel().selectedRows()
         self.assertEqual(len(sel), 1)
         r = sel[0].row()
-        self.assertEqual((dlg.table.item(r, 3).text(), dlg.table.item(r, 1).text()), (ticker, exit_date))
+        self.assertEqual((dlg.table.item(r, COL_TICKER).text(), dlg.table.item(r, COL_EXIT).text()), (ticker, exit_date))
         dlg.close()
 
     def test_popup_rows_copy_as_tsv(self):
