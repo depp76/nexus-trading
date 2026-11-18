@@ -15,7 +15,7 @@ import datetime as _dt
 from typing import Any, Literal
 from collections.abc import Callable
 
-from PyQt6.QtCore import QObject, QEvent, Qt, QRect, QSize, QPoint, pyqtSignal
+from PyQt6.QtCore import QObject, QEvent, Qt, QRect, QSize, QPoint, pyqtSignal, QTimer
 from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QTableWidget, QHeaderView, QLabel, QFrame, QHBoxLayout, QVBoxLayout,
     QWidget, QApplication, QGridLayout, QLayout, QSizePolicy, QTabBar,
@@ -894,6 +894,50 @@ def cancel_thread(thread) -> None:
             cancel()
         except Exception:
             logger.debug("thread cancel() failed", exc_info=True)
+
+
+# How often a window replaced by a language switch checks whether its last
+# worker has finished (then it is destroyed).
+RETIRE_POLL_MS = 100
+
+
+def _thread_running(thread) -> bool:
+    try:
+        return bool(thread.isRunning())
+    except RuntimeError:          # the C++ object is gone
+        return False
+
+
+def retire_when_idle(app, old, threads: list) -> None:
+    """Hide window `old` now and call its retire() once every thread in
+    `threads` has finished (main.switch_language; review_codex.md 2026-11-18
+    #2). The window keeps the thread references alive meanwhile and nothing
+    waits on the UI thread: a timer polls. `app._nexus_retiring` lists the
+    windows still waiting, so quitting the app can stop their workers too
+    (MainWindow.closeEvent)."""
+    old.hide()
+    old._pending_threads = list(threads)
+    retiring = getattr(app, "_nexus_retiring", None)
+    if retiring is None:
+        retiring = app._nexus_retiring = []
+    retiring.append(old)
+    timer = QTimer(app)
+
+    def check():
+        if any(_thread_running(t) for t in old._pending_threads):
+            return
+        timer.stop()
+        timer.deleteLater()
+        if old in retiring:
+            retiring.remove(old)
+        old._pending_threads = []
+        old.retire()
+
+    timer.setInterval(RETIRE_POLL_MS)
+    timer.timeout.connect(check)
+    old._retire_timer = timer
+    timer.start()
+    check()                       # nothing running: retire at once
 
 
 def retire_thread(owner, attr_name: str) -> None:

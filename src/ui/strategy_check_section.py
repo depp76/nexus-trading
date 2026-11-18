@@ -55,6 +55,7 @@ class SignalContext:
     cache: signal_api.SignalCache = field(default_factory=signal_api.SignalCache)   # shared with the Universe tab
     default_variant: str = ""                          # the pinned "전략 신호" row; "" -> signal_api.default_variant()
     track: Callable | None = None                      # the owner's _track_thread (shutdown bookkeeping)
+    generation: int | None = None                      # cache.generation of `items` (None: unchecked)
 
 
 def has_section(market: str) -> bool:
@@ -400,6 +401,7 @@ class StrategyCheckSection(QWidget):
         self._running.add(vid)
         self._errors.pop(vid, None)
         thread = SignalPicksThread(self._ctx.items, vid, n_top=10)
+        thread.cache_generation = self._ctx.generation      # the rows this dialog was opened with
         thread.progress.connect(self._on_universe_progress)
         thread.finished.connect(self._on_universe_done)
         self._track(thread)
@@ -419,8 +421,13 @@ class StrategyCheckSection(QWidget):
         self._running.discard(vid)
         if picks is None:
             self._errors[vid] = "" if error == CANCELLED_MESSAGE else tr(f"계산 실패: {error}", f"Failed: {error}")
+        elif not self._ctx.cache.put(picks, generation=getattr(thread, "cache_generation", None)):
+            # The Universe was refreshed after this dialog opened: its rows (this run's
+            # input) are old, so the run is neither cached nor shown.
+            self._errors[vid] = tr("유니버스가 새로 고쳐져 이전 종목 목록의 계산 결과를 버렸습니다. 창을 다시 열어 계산하세요.",
+                                   "The universe was refreshed, so this run on the old rows was dropped. "
+                                   "Reopen the chart and compute again.")
         else:
-            self._ctx.cache.put(picks)        # the Universe tab sees it too
-            self._checks.pop(vid, None)       # a B check may now show its rank
+            self._checks.pop(vid, None)       # cached for the Universe tab too; a B check may now show its rank
         if vid == self.variant():
             self._show()
