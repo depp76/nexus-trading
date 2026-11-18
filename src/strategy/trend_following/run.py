@@ -179,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--build-snapshot", metavar="NAME", help=f"load the development window and save it as {SNAPSHOT_ROOT}/NAME")
     ap.add_argument("--out", help=f"report folder (default {DEFAULT_REPORT_DIR})")
     ap.add_argument("--variants", help="comma separated variant ids (default: the 6-2 matrix A0-C3; "
-                                       "the v07 candidates C1L,C2L,C3L only when named, spec 10)")
+                                       "the v06 reproduction ids C1S,C2S,C3S only when named, spec 10-13)")
     ap.add_argument("--no-event-study", action="store_true")
     ap.add_argument("--factor-ic", action="store_true",
                     help="--snapshot: write the 6-1-2 factor IC / quintile report instead of the backtest matrix")

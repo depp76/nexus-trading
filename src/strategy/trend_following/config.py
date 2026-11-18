@@ -1,5 +1,5 @@
 """strategy/trend_following/config.py — Parameters of the Trend Following
-strategy (trend_following.md v06, sections 2-4, 2-5 and 6-2).
+strategy (trend_following.md v07, sections 2-4, 2-5 and 6-2).
 
 Everything a backtest can vary lives here as a frozen dataclass so a run can
 be reproduced from its parameter snapshot. Defaults are the spec's proposed
@@ -115,12 +115,9 @@ SCORE_LABELS = {
     "C1": "L1 + trend/pullback score (ATR-normalised, Range52)",
     "C2": "C1 without volatility normalisation",
     "C3": "C1 with Range52 -> 52w-high proximity",
-    "C1L": "= C1 (v07 default; spec 10-11 reproduction id)",
-    "C2L": "= C2 (v07 default; spec 10-11 reproduction id)",
-    "C3L": "= C3 (v07 default; spec 10-11 reproduction id)",
-    "C1S": "C1 at the v06 50-day trend line (spec 9-19 reproduction id)",
-    "C2S": "C2 at the v06 50-day trend line (spec 9-19 reproduction id)",
-    "C3S": "C3 at the v06 50-day trend line (spec 9-19 reproduction id)",
+    "C1S": "C1, v06 (intermediate) 50-day reproduction id",
+    "C2S": "C2, v06 (intermediate) 50-day reproduction id",
+    "C3S": "C3, v06 (intermediate) 50-day reproduction id",
 }
 
 VARIANTS: dict[str, Variant] = {
@@ -139,21 +136,12 @@ VARIANTS: dict[str, Variant] = {
                   score_overrides=(("score_range_mode", "high52_prox"),)),
 }
 
-# Spec 10: C1'-C3' (C1L-C3L) = C1-C3 with score_ma_long 60. Since v07 (10-13) 60 is the
-# default, so they equal C1-C3 and stay only to reproduce the 10-11 runs. C1S-C3S pin the
-# v06 50-day line to reproduce 9-19. Headless runner only (run.py --variants / --robustness):
-# kept out of VARIANTS so the Strategy tab picker, the Universe "전략 신호" menu and the MA
-# chart "전략 점검" never offer them.
-_V07_MA = (("score_ma_long", 60),)
+# C1S-C3S pin the v06 (intermediate) 50-day trend line to reproduce 9-19. Headless runner only
+# (run.py --variants / --robustness): kept out of VARIANTS so the Strategy tab picker, the
+# Universe "전략 신호" menu and the MA chart "전략 점검" never offer them. The 10-11 ids C1L-C3L
+# were removed on 2026-11-18 (identical to C1-C3 since v07, spec 10-14): rerun 10-11 with
+# --variants C1,C2,C3.
 _V06_MA = (("score_ma_long", 50),)
-V07_VARIANTS: dict[str, Variant] = {
-    "C1L": Variant("C1L", regime=True, volume=False, flow=False, flow_exit=False, mode="score",
-                   score_overrides=_V07_MA),
-    "C2L": Variant("C2L", regime=True, volume=False, flow=False, flow_exit=False, mode="score",
-                   score_overrides=(("score_vol_normalize", False),) + _V07_MA),
-    "C3L": Variant("C3L", regime=True, volume=False, flow=False, flow_exit=False, mode="score",
-                   score_overrides=(("score_range_mode", "high52_prox"),) + _V07_MA),
-}
 V06_C_VARIANTS: dict[str, Variant] = {
     "C1S": Variant("C1S", regime=True, volume=False, flow=False, flow_exit=False, mode="score",
                    score_overrides=_V06_MA),
@@ -163,11 +151,11 @@ V06_C_VARIANTS: dict[str, Variant] = {
                    score_overrides=(("score_range_mode", "high52_prox"),) + _V06_MA),
 }
 # Every variant the research / robustness runners accept: the matrix rows plus the reproduction ids.
-RESEARCH_VARIANTS: dict[str, Variant] = {**VARIANTS, **V07_VARIANTS, **V06_C_VARIANTS}
+RESEARCH_VARIANTS: dict[str, Variant] = {**VARIANTS, **V06_C_VARIANTS}
 
 
 def get_variant(vid: str) -> Variant:
-    """A matrix row (VARIANTS) or a reproduction id (V07_VARIANTS, V06_C_VARIANTS) by id."""
+    """A matrix row (VARIANTS) or a v06 reproduction id (V06_C_VARIANTS) by id."""
     try:
         return RESEARCH_VARIANTS[vid]
     except KeyError:
@@ -191,7 +179,7 @@ IC_VERDICT_HORIZON = 20
 # One field at a time, everything else at StrategyParams() defaults; the runner reads only this constant
 # and refuses any (field, value) pair that is not in it. Rows: (id, field, value, variants it applies to).
 # No grid combinations. N6 / N7 (spec 10-2, registered 2026-11-18): the C-series trend line,
-# 60 -> 50 / 80; since v07 (10-13) they apply to C1-C3 as well as to C1L-C3L. The runner applies
+# 60 -> 50 / 80, on C1-C3 (since v07, 10-13; 37 rows = the matrix's E2 runs). The runner applies
 # the neighbour value after the variant's own score_overrides (10-9 item 2).
 E2_NEIGHBORS: tuple[tuple[str, str, object, tuple[str, ...]], ...] = (
     ("N1", "breakout_window", 15, ("A0", "A1", "A2", "A3", "A4", "A5")),
@@ -199,8 +187,8 @@ E2_NEIGHBORS: tuple[tuple[str, str, object, tuple[str, ...]], ...] = (
     ("N3", "trend_ma_long", 120, ("A0", "A1", "A2", "A3", "A4", "A5", "B")),
     ("N4", "regime_ma", 20, ("A1", "A2", "A3", "A4", "A5", "B")),
     ("N5", "regime_ma", 120, ("A1", "A2", "A3", "A4", "A5", "B")),
-    ("N6", "score_ma_long", 50, ("C1", "C2", "C3", "C1L", "C2L", "C3L")),
-    ("N7", "score_ma_long", 80, ("C1", "C2", "C3", "C1L", "C2L", "C3L")),
+    ("N6", "score_ma_long", 50, ("C1", "C2", "C3")),
+    ("N7", "score_ma_long", 80, ("C1", "C2", "C3")),
 )
 # Checklist E2: a neighbour whose full-window Sharpe differs from the base run by more than this fails.
 E2_SHARPE_JUMP = 0.5

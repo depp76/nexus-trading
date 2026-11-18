@@ -11,7 +11,7 @@ import numpy as np
 from strategy.trend_following import run as run_mod
 from strategy.trend_following.backtest import Trade, run_backtest
 from strategy.trend_following.config import (
-    E2_NEIGHBORS, E2_SHARPE_JUMP, PERIODS, V06_C_VARIANTS, V07_VARIANTS, VARIANTS, StrategyParams, get_variant,
+    E2_NEIGHBORS, E2_SHARPE_JUMP, PERIODS, V06_C_VARIANTS, VARIANTS, StrategyParams, get_variant,
 )
 from strategy.trend_following.costs import CostModel, TradeCost
 from strategy.trend_following.metrics import cagr, max_drawdown, nav_returns, session_rf, sharpe, summarize_run
@@ -43,7 +43,7 @@ def _trade(pnl, reason="channel"):
 class TestE2Constant(unittest.TestCase):
     def test_constant_equals_the_approved_table(self):
         a = ("A0", "A1", "A2", "A3", "A4", "A5")
-        c = ("C1", "C2", "C3", "C1L", "C2L", "C3L")
+        c = ("C1", "C2", "C3")
         self.assertEqual(E2_NEIGHBORS, (
             ("N1", "breakout_window", 15, a),
             ("N2", "breakout_window", 25, a),
@@ -53,11 +53,10 @@ class TestE2Constant(unittest.TestCase):
             ("N6", "score_ma_long", 50, c),     # spec 10-2, extended to C1-C3 by 10-13 (v07)
             ("N7", "score_ma_long", 80, c),
         ))
-        self.assertEqual([len(r[3]) for r in E2_NEIGHBORS], [6, 6, 7, 6, 6, 6, 6])
+        self.assertEqual([len(r[3]) for r in E2_NEIGHBORS], [6, 6, 7, 6, 6, 3, 3])
         self.assertEqual(len(planned_e2_runs(tuple(VARIANTS))), 37)            # the matrix A0-C3: 31 -> 37 in v07
-        self.assertEqual(len(planned_e2_runs(tuple(V07_VARIANTS))), 6)
         self.assertEqual(planned_e2_runs(tuple(V06_C_VARIANTS)), [])           # C1S-C3S: reproduction only
-        self.assertEqual(len(planned_e2_runs()), 43)
+        self.assertEqual(len(planned_e2_runs()), 37)                           # 10-14: no C1L-C3L rows
         self.assertEqual(E2_SHARPE_JUMP, 0.5)
 
     def test_defaults_match_the_registered_base_values(self):
