@@ -46,7 +46,7 @@ from ui.universe_table import StockTable
 from ui.heat_legend import HeatLegend
 from ui.filter_popups import RangeFilterPopup
 from ui.universe_views import (
-    BUILTIN_VIEWS, MARKETS, count_matches, describe_ranges, describe_view, empty_state as empty_view,
+    BUILTIN_VIEWS, MARKETS, count_matches, market_display, describe_ranges, describe_view, empty_state as empty_view,
     market_list, migrate_views, normalize as normalize_view, same_state as same_view, view_display_name,
 )
 from i18n import tr
@@ -81,7 +81,7 @@ def _part_label(part: str) -> str:
         return tr("지수", part)
     if part == "Unknown":
         return tr("기타", part)
-    return part
+    return market_display(part)
 
 
 class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
@@ -216,7 +216,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             btn.setToolTip(tr(f"{label}: 켜면 새로고침이 이 시장(상위 {UNIVERSE_MARKET_SIZES[m]}종목)을 받아 와 "
                               "표에 보여 줍니다. 최소 한 시장은 켜져 있어야 합니다.",
                               f"{label}: when on, Refresh fetches this market (top {UNIVERSE_MARKET_SIZES[m]} names) "
-                              "and shows it in the table. At least one market must stay on."))
+                              "and shows it in the table. At least one market must stay on.")
+                           + self._MARKET_TOOLTIP_NOTE.get(m, ""))
             btn.clicked.connect(lambda checked, mk=m: self._on_market_toggled(mk, checked))
             bar.addWidget(btn)
             self._market_buttons[m] = btn
@@ -271,12 +272,17 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
     _FILTER_BTN_W = 80
     _GROUP_GAP = 12   # between toolbar groups (docs/ui.md 8.17: 12~16px)
-    # Shorter toggle text where the MARKETS label sets every toolbar button's
-    # width (user direction 2026-11-16: "NASDAQ 100" made the one-row toolbar
-    # 1558px wide). The tooltip and saved-view names keep the full label; the
-    # exchange-vs-index confusion of 2026-11-15 is gone since Add Ticker's
-    # market choice moved into its dialog (KOSPI / KOSDAQ / 미국).
-    _MARKET_BUTTON_TEXT = {"NASDAQ 100": "NASDAQ"}
+    # Toggle text that differs from the MARKETS display name: the NASDAQ toggle
+    # fetches the 150 largest NASDAQ-listed names, so it reads "NASDAQ 150"
+    # (user direction 2026-11-18, docs/ui.md 8.32; was "NASDAQ", 2026-11-16).
+    # Every toolbar button takes the widest registered label's width
+    # (_unify_button_widths), so the other buttons follow this label.
+    _MARKET_BUTTON_TEXT = {"NASDAQ 100": "NASDAQ 150"}
+    # Toggle tooltips that need more than the generic sentence.
+    _MARKET_TOOLTIP_NOTE = {
+        "NASDAQ 100": tr(" 나스닥100 지수 구성이 아니라 NASDAQ 상장 종목 중 시총 상위이며 해외 기업 ADR(SKHY, ASML 등)도 포함합니다.",
+                         " Not the Nasdaq-100 index: the largest NASDAQ-listed names, foreign ADRs (SKHY, ASML, ...) included."),
+    }
     # (highlight status to show, button label): "" = no status filter. The
     # status values are the ones custom_settings.json stores ("On" = Held,
     # "Tg" = Target; docs/ui.md 1.7).

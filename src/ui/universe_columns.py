@@ -10,7 +10,7 @@ re-exports the public names.
 from i18n import tr
 from ui.colors import heatmap_bg
 from ui.table_items import ColSpec
-from ui.universe_views import RANGE_FIELDS
+from ui.universe_views import RANGE_FIELDS, market_display
 
 # ---------------------------------------------------------------------------
 # StockTable column spec (docs/ui.md 2.2's merged-column redesign, sourced
@@ -108,8 +108,9 @@ _BP_HEAT_SCALE = 25.0   # 25 bp is "full" heat, in place of a pct column's scale
 
 def _market_label(market: str) -> str:
     """A row's market as shown in its identity meta: the index rows'
-    "Index" value in the UI language, market names as-is."""
-    return tr("지수", "Index") if market == "Index" else market
+    "Index" value in the UI language, "NASDAQ 100" as "NASDAQ" (docs/ui.md
+    8.32), other market names as-is."""
+    return tr("지수", "Index") if market == "Index" else market_display(market)
 
 
 def _fmt_change(v: float, mode: str) -> str:
