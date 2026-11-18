@@ -13,3 +13,15 @@ if _SRC_DIR not in sys.path:
 from ui.common import apply_matplotlib_font  # noqa: E402
 
 apply_matplotlib_font()
+
+
+# No test may write the real hold-out ledger (paths.HOLDOUT_LEDGER_FILE, trend_following.md
+# 10-7): a test that runs TrendFollowingResearchThread with an end date past DEV_END would
+# record a false "hold-out opened" line. Every test gets its own temporary file.
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolated_holdout_ledger(tmp_path, monkeypatch):
+    import paths
+    monkeypatch.setattr(paths, "HOLDOUT_LEDGER_FILE", str(tmp_path / "holdout_ledger.jsonl"))

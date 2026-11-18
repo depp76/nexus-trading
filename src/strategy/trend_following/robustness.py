@@ -520,10 +520,17 @@ def _e1_section(res: RobustnessResult) -> list[str]:
     return out
 
 
+def _registered_base(field_name: str, vids) -> object:
+    """The base value a neighbour row moves away from: the variants' own value of the field
+    (a v07 candidate's score_ma_long is 60, not the StrategyParams() default 50)."""
+    vals = {getattr(get_variant(v).apply(StrategyParams()), field_name) for v in vids}
+    return vals.pop() if len(vals) == 1 else "/".join(str(x) for x in sorted(vals))
+
+
 def _e2_section(res: RobustnessResult) -> list[str]:
     out = ["", f"### E2 파라미터 주변값 (사전 등록, NEX-51 승인; 판정: |ΔSharpe| > {E2_SHARPE_JUMP:g} 이면 실패)", ""]
     out.append(_table(["ID", "필드", "기본 → 주변값", "적용 변형"],
-                      [[nid, f, f"{getattr(StrategyParams(), f)} → {v}", ", ".join(vids)]
+                      [[nid, f, f"{_registered_base(f, vids)} → {v}", ", ".join(vids)]
                        for nid, f, v, vids in E2_NEIGHBORS]))
     out += ["", "웜업 확인 (첫 평가 세션에서 지표가 유효한지):", "",
             _table(["ID", "필드=값", "필요 세션", "보유 세션", "결과"],

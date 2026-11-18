@@ -20,7 +20,7 @@ from i18n import tr
 from strategy import signal_api
 from strategy.common.prices import ResearchCancelled
 from strategy.trend_following import SPEC_VERSION, ResearchRequest, load_dataset, run_research
-from paths import HOLDOUT_LEDGER_FILE
+import paths
 
 logger = logging.getLogger(__name__)
 
@@ -29,14 +29,16 @@ logger = logging.getLogger(__name__)
 CANCELLED_MESSAGE = tr("취소됨", "Cancelled")
 
 
-def record_holdout_run(req: ResearchRequest, ledger: str = HOLDOUT_LEDGER_FILE, now=None) -> dict | None:
+def record_holdout_run(req: ResearchRequest, ledger: str | None = None, now=None) -> dict | None:
     """Append one line to the hold-out ledger when `req` reaches past the
     development window (``allow_holdout``), before any data is loaded: from
     then on the hold-out counts as opened (trend_following.md 9-23, 10-7).
     Returns the record (None when the run stays inside the window). A write
-    failure is logged, never raised -- the run itself still goes ahead."""
+    failure is logged, never raised -- the run itself still goes ahead. `ledger` defaults to
+    ``paths.HOLDOUT_LEDGER_FILE``, read at call time (tests point it at a temporary file)."""
     if not req.allow_holdout:
         return None
+    ledger = ledger or paths.HOLDOUT_LEDGER_FILE
     rec = {
         "opened_at": (now or datetime.now()).isoformat(timespec="seconds"),
         "source": "strategy_tab",

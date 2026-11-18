@@ -118,8 +118,10 @@ class TestNeighboursAndInterest(unittest.TestCase):
             self.assertLessEqual(r.no_interest.cagr, r.with_interest.cagr + 1e-12)
         md = res.to_markdown()
         self.assertIn("### 현금 이자 0 (참고, 스펙 10-4)", md)
-        self.assertIn("N6", md)
-        self.assertIn("N7", md)
+        # the neighbour table shows the candidates' own base (60), not the global default (50)
+        self.assertIn("| N6 | score_ma_long | 60 → 50 | C1L, C2L, C3L |", md)
+        self.assertIn("| N7 | score_ma_long | 60 → 80 | C1L, C2L, C3L |", md)
+        self.assertIn("| N3 | trend_ma_long | 60 → 120 |", md)
         self.assertNotIn(GROUP_NO_INTEREST, _robust(self.ds, ("C1L",), run_e1=False, run_e2=False).counter.groups)
 
     def test_e2_rows_registered_for_the_candidates_only(self):

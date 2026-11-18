@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import QApplication
 
 app = QApplication.instance() or QApplication([])
 
+import paths  # noqa: E402
 from strategy.trend_following import DEV_END, SPEC_VERSION, ResearchRequest  # noqa: E402
 from threads import strategy_threads  # noqa: E402
 from threads.strategy_threads import TrendFollowingResearchThread, record_holdout_run  # noqa: E402
@@ -60,12 +61,17 @@ class TestHoldoutLedger(unittest.TestCase):
         t = TrendFollowingResearchThread(req)
         got = []
         t.finished.connect(lambda r, e: got.append((r, e)))
-        with patch.object(strategy_threads, "HOLDOUT_LEDGER_FILE", self.path), \
-                patch.object(strategy_threads.record_holdout_run, "__defaults__", (self.path, None)), \
+        with patch.object(paths, "HOLDOUT_LEDGER_FILE", self.path), \
                 patch.object(strategy_threads, "load_dataset", side_effect=RuntimeError("offline")):
             t.run()
         self.assertEqual(got, [(None, "offline")])
         self.assertEqual([x["end"] for x in self._lines()], ["2025-06-30"])
+
+    def test_tests_never_touch_the_real_ledger(self):
+        """conftest.py points the ledger at a per-test temporary file (2026-11-18: two Strategy-tab
+        tests once wrote false "opened" lines into the real file)."""
+        real = os.path.join(paths.BASE_DIR, "holdout_ledger.jsonl")
+        self.assertNotEqual(os.path.abspath(paths.HOLDOUT_LEDGER_FILE), os.path.abspath(real))
 
     def test_unwritable_ledger_does_not_stop_the_run(self):
         req = ResearchRequest(start=date(2021, 1, 4), end=date(2025, 6, 30), variant_ids=("C1",),
