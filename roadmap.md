@@ -254,3 +254,4 @@ src/
 | 2026-11-17 | MA 차트에 **시장지수** 토글(MA50 오른쪽, 기본 꺼짐): 종목 시장(KOSPI/KOSDAQ/NASDAQ 100/S&P500)의 지수를 가격축에 겹쳐 그림 — 보이는 구간 첫날 종가에 맞춰 다시 스케일(기간·팬·줌마다), 끝 라벨·호버는 지수 값 자체. 데이터는 `data.market.attach_market_index`(`StockMaThread`가 `MarketIndex` 열 조인, 실패 시 열 없음 → 버튼 없음). pytest 936, ruff 0건. |
 | 2026-11-18 | MA 차트 버튼 행을 **한 줄**로: 이동평균은 체크박스 드롭다운(MA10/20/50·동일가중·시장지수 여러 개 선택, 버튼에 켠 선 이름 "MA10 외 2"), 기간은 콤보박스(이동평균 버튼과 같은 폭), 보조지표(이격도·거래량·RSI)는 토글 버튼 유지 — `FlowLayout` → `QHBoxLayout`, `_period_buttons` → `_period_combo`. docs/ui.md 8.21, pytest 939, ruff 0건. |
 | 2026-11-18 | 추세 이평 60일 통일 1단계 **[1a] 완료** (MA 차트·주요 지수 이평 창, `docs/ma60_unification_2026-11-18.md`): 커밋 `7335695`. pytest 955, ruff 0건. |
+| 2026-11-18 | 추세 이평 60일 통일 1단계 **[1b] 완료** (돌파 채널·KOSPI/KOSDAQ 국면 음영, signal_api 1.7): 커밋 `0cec010`. pytest 976, ruff 0건. |
