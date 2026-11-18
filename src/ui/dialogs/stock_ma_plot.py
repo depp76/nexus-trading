@@ -24,11 +24,11 @@ from matplotlib.collections import PolyCollection
 
 from i18n import tr
 from ui.dialogs.stock_ma_consts import (
-    _DEFAULT_MARGINS, _DEFAULT_PERIOD, _DEFAULT_SERIES, _MARGIN_PAD_PX, _MIN_RIGHT_PX, _PRICE_SERIES, _MA_KEYS,
+    _DEFAULT_MARGINS, _DEFAULT_PERIOD, _DEFAULT_SERIES, _MARGIN_PAD_PX, _MIN_RIGHT_PX, _PRICE_SERIES, _MA_KEYS, _MA_COLUMNS,
     _SLOT_RATIOS, _TICK_PT, _INDEX_COLOR,
 )
 from ui.dialogs.stock_ma_helpers import _make_bars, _compact
-from ui.colors import PROFIT, LOSS, MA_RAMP, MA_DIV_NEUTRAL_PCT
+from ui.colors import PROFIT, LOSS, MA_RAMP, MA_DIV50_COLOR, MA_DIV_NEUTRAL_PCT
 from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_FAINT, LINE, INK_ON_LIGHT
 
 
@@ -111,7 +111,7 @@ class _PlotMixin:
         add("Close", self._col("Close"), color=TEXT, linewidth=1.7, zorder=5)
         if not self._is_simple_chart:
             for key in _MA_KEYS:
-                arr = self._col(key)
+                arr = self._col(_MA_COLUMNS[key])
                 if arr is not None:
                     add(key, arr, color=MA_RAMP[key], linewidth=1.3, zorder=4)
             ew = self._col("EqualWeight")
@@ -159,7 +159,7 @@ class _PlotMixin:
         ]
         ax.axhline(100, color=TEXT_FAINT, linewidth=1, linestyle=(0, (4, 3)))
         if "MA50_Div" in self._df.columns:
-            self._lines["Div(50)"], = ax.plot(self._x, self._col("MA50_Div"), color=MA_RAMP["MA20"], linewidth=1.4)
+            self._lines["Div(50)"], = ax.plot(self._x, self._col("MA50_Div"), color=MA_DIV50_COLOR, linewidth=1.4)
         if "MA20_Div" in self._df.columns:
             self._lines["Div(20)"], = ax.plot(self._x, self._col("MA20_Div"), color=MA_RAMP["MA5"], linewidth=1.4)
         ax.set_ylabel(tr("이격도 %", "Div %"), fontsize=_TICK_PT, color=TEXT_MUTED)

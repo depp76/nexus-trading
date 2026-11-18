@@ -21,8 +21,8 @@ docs/ui.md "MA Chart Redesign" mockup (12 issues, phases A-D):
 
 2026-10-15 (user direction): the exclusive view segment (Short / Long /
 Close only / Divergence / Equal Weight) became independent, multi-select
-series toggles -- MA10, MA20, MA50 [, Equal Weight], Divergence (Close is always drawn,
-no MA5: 2026-11-16).
+series toggles -- MA20, MA50, MA60, MA200 [, Equal Weight], Divergence (Close is
+always drawn, no MA5: 2026-11-16; MA10 -> MA60 / MA200: 2026-11-18).
 Divergence shows/hides the divergence panel (the separate panel button is
 gone); with no price line selected the price panel is hidden too. The
 crosshair carries its values on the chart: a dot + value badge on every
@@ -35,7 +35,7 @@ Layout
 
     +-- splitter ------------------------------------------------------+
     | name  ticker · market  price  chg%                          as-of |
-    | 이동평균 [MA10, MA20 ▾] 보조지표 [이격도][거래량][RSI] 기간 [1년 ▾] |
+    | 이동평균 [MA20 외 1 ▾] 보조지표 [이격도][거래량][RSI] 기간 [1년 ▾] |
     |   (2026-11-18: one line; MA check-box drop-down, period combo box) |
     |   FigureCanvas: price (+MA ramp)      | right panel (optional)   |
     |                 volume                |   investor / futures tbl |
@@ -81,7 +81,7 @@ from i18n import tr
 from ui.dialogs.stock_ma_consts import (  # noqa: F401 -- re-exported for callers of ui.dialogs.stock_ma
     _STOCK_MARKETS, _SIMPLE_CHART_TICKERS, _SCROLL_MAX, _TICK_PT, _SEG_H, _PERIODS, _PERIOD_LABELS,
     _DEFAULT_PERIOD, _DEFAULT_MARGINS, _MARGIN_PAD_PX, _MIN_RIGHT_PX, _SLOT_RATIOS, _SERIES,
-    _PRICE_SERIES, _DEFAULT_SERIES, _MA_KEYS, _INDEX_COLOR,
+    _PRICE_SERIES, _DEFAULT_SERIES, _MA_KEYS, _MA_COLUMNS, _INDEX_COLOR,
 )
 from ui.dialogs.stock_ma_hover import _HoverMixin
 from ui.dialogs.stock_ma_plot import _PlotMixin
@@ -129,7 +129,7 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         self._is_simple_chart = ticker in _SIMPLE_CHART_TICKERS or change_mode == 'bp'
         self._has_data = (
             df is not None and not df.is_empty() and "Close" in df.columns
-            and (self._is_simple_chart or all(c in df.columns for c in _MA_KEYS))
+            and (self._is_simple_chart or all(c in df.columns for c in _MA_COLUMNS.values()))
         )
         self._currency, self._unit_suffix, self._fmt_str = self._format_config()
         self._init_chart_state()
@@ -151,7 +151,7 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
 
     def _init_chart_state(self) -> None:
         """Artists / state the interaction handlers refer to."""
-        self._lines = {}          # "Close" | "MA10" | ... | "EW" | "IDX" -> Line2D
+        self._lines = {}          # "Close" | "MA20" | ... | "EW" | "IDX" -> Line2D
         self._price_raw = {}      # price-panel key -> source array (_rescale_price_lines)
         self._rebase = {}         # price-panel key -> price-axis multiplier
         self._end_labels = {}     # same keys -> Annotation
@@ -260,7 +260,7 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
 
     def _build_view_row(self) -> QWidget:
         """One line of controls (user direction 2026-11-18): [이동평균 ▾] a
-        drop-down of check boxes (MA10 · MA20 · MA50 (· 동일가중 · 시장지수),
+        drop-down of check boxes (MA20 · MA50 · MA60 · MA200 (· 동일가중 · 시장지수),
         several at once), [보조지표 이격도 · 거래량 · RSI] toggle buttons and
         [기간 ▾] a single-choice combo box, then the as-of date at the right
         end. Close is always drawn (no button). The three indicator buttons
@@ -359,6 +359,13 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
             cb.clicked.connect(lambda checked, k=key: self._set_series(k, checked))
             col.addWidget(cb)
             self._series_buttons[key] = cb
+            if self._has_data and key in _MA_COLUMNS and not self._has_values(_MA_COLUMNS[key]):
+                # Not one full window in the history (a new listing): kept
+                # in the menu, greyed out, never filled in (ma60 doc 1.6).
+                cb.setText(tr(f"{_SERIES[key]} · 데이터 부족", f"{_SERIES[key]} · not enough data"))
+                cb.setEnabled(False)
+                cb.setToolTip(tr(f"{key}을 계산할 만큼 거래일 이력이 없습니다.",
+                                 f"Not enough trading history for {key}."))
         if "IDX" in self._series_buttons:
             self._series_buttons["IDX"].setToolTip(
                 tr(f"{self._market} 지수를 가격축에 겹쳐 표시합니다 (보이는 구간의 첫날 종가에 맞춤).",
@@ -489,6 +496,10 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
             return False
         idx, close = self._col("MarketIndex"), self._col("Close")
         return bool((np.isfinite(np.asarray(idx, dtype=float)) & np.isfinite(np.asarray(close, dtype=float))).any())
+
+    def _has_values(self, name: str) -> bool:
+        arr = self._col(name)
+        return arr is not None and bool(np.isfinite(np.asarray(arr, dtype=float)).any())
 
     def _col(self, name: str):
         return self._df.get_column(name).to_numpy() if name in self._df.columns else None

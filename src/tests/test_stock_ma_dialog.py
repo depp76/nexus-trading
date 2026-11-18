@@ -14,7 +14,7 @@ from PyQt6.QtGui import QPixmap
 
 app = QApplication.instance() or QApplication([])
 
-from data.indicators import _compute_indicators  # noqa: E402
+from data.indicators import _compute_indicators, add_chart_mas  # noqa: E402
 from ui.dialogs.stock_ma import StockMaDialog  # noqa: E402
 from ui.colors import PROFIT, LOSS, MA_RAMP  # noqa: E402
 from ui.dialogs.stock_ma_consts import _MA_KEYS  # noqa: E402
@@ -28,7 +28,7 @@ def _df(n=400, ew=False, volume=True, index=False):
         "Date": dates, "Open": close * (1 + rng.normal(0, 0.005, n)), "High": close * 1.01, "Low": close * 0.99,
         "Close": close, "Volume": (rng.random(n) * 5e6) if volume else np.zeros(n),
     }).with_columns(pl.col("Date").cast(pl.Datetime))
-    df = _compute_indicators(df, windows=(5, 10, 20, 60))
+    df = add_chart_mas(_compute_indicators(df, windows=(20,)))
     if ew:
         df = df.with_columns((pl.col("Close") * 0.5 + 1000).alias("EqualWeight"))
     if index:
@@ -71,14 +71,14 @@ class TestStockChart(unittest.TestCase):
         fresh = StockMaDialog("005930", "Samsung", "KOSPI", _df())
         self.assertEqual({k for k, b in fresh._series_buttons.items() if b.isChecked()}, {"Div"})
         self.assertEqual({k: fresh._lines[k].get_visible() for k in _MA_KEYS},
-                         {"MA10": False, "MA20": False, "MA50": False})
+                         {"MA20": False, "MA50": False, "MA60": False, "MA200": False})
         self.assertNotIn("MA5", fresh._lines)                          # dropped 2026-11-16
         self.assertNotIn("Close", fresh._series_buttons)               # Close is always drawn
         self.assertTrue(fresh._lines["Close"].get_visible())
         self.assertEqual(set(fresh._end_labels), {"Close"})
-        _show(d, {"MA10", "MA20"})
+        _show(d, {"MA60", "MA20"})
         self.assertEqual({k: d._lines[k].get_visible() for k in _MA_KEYS},
-                         {"MA10": True, "MA20": True, "MA50": False})
+                         {"MA20": True, "MA50": False, "MA60": True, "MA200": False})
         self.assertIsNone(d._panel_axes["price"].get_legend())      # issue #3: no legend
         for line in d._lines.values():
             self.assertEqual(line.get_marker(), "None")             # issue #8: no markers
@@ -93,8 +93,8 @@ class TestStockChart(unittest.TestCase):
 
     def test_end_labels_follow_the_visible_lines(self):
         d = self.dlg
-        _show(d, {"MA10", "MA20"})
-        self.assertEqual(set(d._end_labels), {"Close", "MA10", "MA20"})
+        _show(d, {"MA60", "MA200"})
+        self.assertEqual(set(d._end_labels), {"Close", "MA60", "MA200"})
         _show(d, {"Close", "MA20", "MA50"})
         self.assertEqual(set(d._end_labels), {"Close", "MA20", "MA50"})
         _show(d, {"Close"})
@@ -106,10 +106,10 @@ class TestStockChart(unittest.TestCase):
 
     def test_series_toggles_are_independent(self):
         d = StockMaDialog("005930", "Samsung", "KOSPI", _df())
-        self.assertEqual(list(d._series_buttons), ["MA10", "MA20", "MA50", "Div"])
-        d._series_buttons["MA10"].click()
+        self.assertEqual(list(d._series_buttons), ["MA20", "MA50", "MA60", "MA200", "Div"])
+        d._series_buttons["MA60"].click()
         d._series_buttons["MA50"].click()
-        self.assertEqual({k for k in _MA_KEYS if d._lines[k].get_visible()}, {"MA10", "MA50"})
+        self.assertEqual({k for k in _MA_KEYS if d._lines[k].get_visible()}, {"MA60", "MA50"})
         self.assertTrue(d._lines["Close"].get_visible())
         d._series_buttons["Div"].click()                # Divergence off -> panel hidden
         self.assertFalse(d._panel_on["div"])
@@ -124,7 +124,7 @@ class TestStockChart(unittest.TestCase):
         the stock's market index, rebased to the close at the view's first
         bar; its end label and hover show the index level itself."""
         d = StockMaDialog("005930", "Samsung", "KOSPI", _df(index=True))
-        self.assertEqual(list(d._series_buttons), ["MA10", "MA20", "MA50", "IDX", "Div"])
+        self.assertEqual(list(d._series_buttons), ["MA20", "MA50", "MA60", "MA200", "IDX", "Div"])
         self.assertEqual(d._series_buttons["IDX"].text(), "시장지수")
         self.assertFalse(d._lines["IDX"].get_visible())              # off by default
         d._series_buttons["IDX"].click()
@@ -185,14 +185,14 @@ class TestStockChart(unittest.TestCase):
         # MA drop-down: a check box per line, several on at once, the button names them
         self.assertIs(d._ma_btn.menu(), d._ma_menu)
         self.assertEqual([k for k, w in d._series_buttons.items() if isinstance(w, QCheckBox)],
-                         ["MA10", "MA20", "MA50", "EW"])
+                         ["MA20", "MA50", "MA60", "MA200", "EW"])
         width = d._ma_btn.width()
-        d._series_buttons["MA10"].click()
+        d._series_buttons["MA60"].click()
         d._series_buttons["MA50"].click()
-        self.assertEqual(d._ma_btn.text(), "MA10 외 1")
-        self.assertEqual({k for k in _MA_KEYS if d._lines[k].get_visible()}, {"MA10", "MA50"})
+        self.assertEqual(d._ma_btn.text(), "MA50 외 1")
+        self.assertEqual({k for k in _MA_KEYS if d._lines[k].get_visible()}, {"MA60", "MA50"})
         d._set_series("EW", True)
-        self.assertEqual(d._ma_btn.text(), "MA10 외 2")
+        self.assertEqual(d._ma_btn.text(), "MA50 외 2")
         self.assertEqual(d._ma_btn.width(), width)                    # fixed: ticking never moves the row
         self.assertEqual(d._period_combo.width(), width)              # 이동평균 and 기간 share one width
         self.assertGreaterEqual(width, d._period_combo.sizeHint().width())
@@ -212,7 +212,7 @@ class TestStockChart(unittest.TestCase):
         d.resize(700, 600)
         d.show()
         QApplication.processEvents()
-        for k in ("MA10", "MA20", "EW"):
+        for k in ("MA60", "MA200", "EW"):
             d._set_series(k, True)
         d._apply_period("All")
         d._canvas.draw()
@@ -246,7 +246,7 @@ class TestStockChart(unittest.TestCase):
                 self.assertEqual(tuple(ax.get_position().bounds), slots[k], tag)
             self.assertEqual(d._margins, margins, tag)
 
-        for key in ("MA10", "MA20", "EW", "MA50", "Div"):
+        for key in ("MA60", "MA200", "MA20", "EW", "MA50", "Div"):
             d._series_buttons[key].click()
             check(key)
         for key in ("vol", "rsi"):

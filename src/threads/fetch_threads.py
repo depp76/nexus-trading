@@ -58,7 +58,9 @@ class IndexMaThread(QThread):
 # Stock MA fetch thread
 # ---------------------------------------------------------------------------
 class StockMaThread(QThread):
-    """Background thread: fetch MA20 + MA50 for a single stock in one call."""
+    """Background thread: one stock's daily frame for the MA chart -- RSI,
+    the divergence ratios and the chart's strict SMA20/50/60/200 (with their
+    warm-up history, data.market.fetch_stock_ma_multi) in one call."""
     # ticker, name, df|None, error, investor_data, market, change_mode -- the last
     # two echo the constructor args so slots can be plain bound methods instead of
     # closures capturing per-request context (CLAUDE.md threads rule).
@@ -72,7 +74,8 @@ class StockMaThread(QThread):
         self.change_mode = change_mode
 
     def run(self):
-        df, err = fetch_stock_ma_multi(self.ticker, self.market, windows=(5, 10, 20, 60))
+        # MA20 feeds the MA20 divergence ratio; the chart's lines are the SMA columns.
+        df, err = fetch_stock_ma_multi(self.ticker, self.market, windows=(20,))
 
         # --- Add Equal Weight Index for KOSPI ---
         if self.ticker in ("KS11", "^KS11") and df is not None and not df.is_empty():

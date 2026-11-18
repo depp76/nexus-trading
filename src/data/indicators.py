@@ -53,6 +53,29 @@ def _compute_indicators(df: pl.DataFrame, windows=(10, 20, 60)) -> pl.DataFrame:
     return df
 
 
+# Moving averages the MA charts draw (docs/ma60_unification_2026-11-18.md
+# 1.2): strict simple averages, `min_samples=window`, so a bar without a full
+# window of closes behind it has no value and the line is not drawn there.
+# They live in their own "SMA<w>" columns: the MA<w> columns above keep
+# min_samples=1 because the divergence ratios (and the Universe table) are
+# computed from them and stay unchanged.
+CHART_MA_WINDOWS = (20, 50, 60, 200)
+
+
+def chart_ma_column(window: int) -> str:
+    return f"SMA{window}"
+
+
+def add_chart_mas(df: pl.DataFrame, windows=CHART_MA_WINDOWS) -> pl.DataFrame:
+    """`df` with an "SMA<w>" column per window: the mean of the last `w`
+    closes, null until `w` valid closes are in the window (a missing close
+    inside it makes the value missing too; nothing is filled or dropped)."""
+    close = pl.col("Close").cast(pl.Float64)
+    return df.with_columns([
+        close.rolling_mean(window_size=w, min_samples=w).alias(chart_ma_column(w)) for w in windows
+    ])
+
+
 def _current_session_index(last_date, last_close, current_price, n, now) -> int:
     """Index, in a length-`n` array of closes, of the session `current_price`
     belongs to -- so that "N sessions ago" is `closes[index - N]` in
