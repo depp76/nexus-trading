@@ -187,7 +187,7 @@ class TestMarketLists(unittest.TestCase):
         self.assertEqual(normalize({"market": ["S&P500", "KOSPI", "bogus"]})["market"], ["KOSPI", "S&P500"])
         self.assertEqual(normalize({"market": []})["market"], "ALL")
         self.assertEqual(normalize({"market": "ALL"})["market"], "ALL")
-        self.assertEqual(describe_view({"market": ["KOSPI", "NASDAQ 100"]}), "KOSPI+NASDAQ 100")
+        self.assertEqual(describe_view({"market": ["KOSPI", "NASDAQ 100"]}), "KOSPI+NASDAQ")     # display name (8.32)
 
 
 class _FakeFetch:

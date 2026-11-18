@@ -75,11 +75,19 @@ def migrate_views(views: list) -> bool:
             changed = True
     return changed
 
-# The toolbar's markets in display order: the row "market" value -> button label.
-# key (stored in rows, settings and saved views) -> toggle label. The US
-# toggles are index constituent groups, so they show the index names
-# (2026-11-15: "NASDAQ" read like the exchange the Add Ticker row offered).
-MARKETS = {"KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ", "NASDAQ 100": "NASDAQ 100", "S&P500": "S&P 500"}
+# The toolbar's markets in display order: key (stored in rows, settings and
+# saved views; never changed) -> display name (row meta, status lines, view
+# summaries, tooltips). "NASDAQ 100" shows as "NASDAQ" since 2026-11-18 (user
+# direction, docs/ui.md 8.32): the list is not the Nasdaq-100 index but the 150
+# largest NASDAQ-listed names (ADRs included) -- data.collectors.yahoo's
+# Wikipedia constituents table is gone, so it falls back to the FDR exchange
+# listing. The toggle button reads "NASDAQ 150" (UniverseTab._MARKET_BUTTON_TEXT).
+MARKETS = {"KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ", "NASDAQ 100": "NASDAQ", "S&P500": "S&P 500"}
+
+
+def market_display(market: str) -> str:
+    """A stored market key as shown on screen ("NASDAQ 100" -> "NASDAQ"); other values as-is."""
+    return MARKETS.get(market, market) if market == "NASDAQ 100" else market
 
 
 def market_list(market) -> list | str:

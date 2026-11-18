@@ -137,9 +137,14 @@ class TestAddTickerRow(unittest.TestCase):
     def test_market_toggles_show_index_names_and_fit(self):
         tab = self.tab
         labels = {m: b.text().replace("&&", "&") for m, b in tab._market_buttons.items()}
-        # "NASDAQ 100" is shortened on the button (2026-11-16); the tooltip keeps the full name
-        self.assertEqual(labels, {"KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ", "NASDAQ 100": "NASDAQ", "S&P500": "S&P 500"})
-        self.assertIn("NASDAQ 100", tab._market_buttons["NASDAQ 100"].toolTip())
+        # 2026-11-18 (docs/ui.md 8.32): the NASDAQ toggle is the 150 largest NASDAQ-listed
+        # names, not the Nasdaq-100 index; the stored key stays "NASDAQ 100".
+        self.assertEqual(labels, {"KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ", "NASDAQ 100": "NASDAQ 150", "S&P500": "S&P 500"})
+        tip = tab._market_buttons["NASDAQ 100"].toolTip()
+        self.assertTrue(tip.startswith("NASDAQ:"))
+        self.assertIn("상위 150종목", tip)
+        self.assertIn("ADR", tip)
+        self.assertNotIn("NASDAQ 100", tip)
         for b in tab._market_buttons.values():
             self.assertGreaterEqual(b.width(), b.sizeHint().width())
 
@@ -545,3 +550,18 @@ class TestStrategySignalMenu(unittest.TestCase):
         with patch("ui.universe_tab.QMessageBox.warning"):
             _FakeScoreThread.instances[-1].finished.emit(None, "boom")
         self.assertEqual(self._ticked(tab), ["none"])
+
+
+class TestNasdaqDisplayName(unittest.TestCase):
+    """2026-11-18 (user direction, docs/ui.md 8.32): the stored key "NASDAQ 100"
+    shows as "NASDAQ" in row meta and status lines; the key itself is unchanged."""
+
+    def test_row_meta_and_status_show_nasdaq(self):
+        from ui.universe_columns import _market_label
+        from ui.universe_tab import _part_label
+        from ui.universe_views import MARKETS, market_display
+        self.assertEqual(_market_label("NASDAQ 100"), "NASDAQ")
+        self.assertEqual(_part_label("NASDAQ 100"), "NASDAQ")
+        self.assertEqual((_market_label("KOSPI"), _market_label("S&P500")), ("KOSPI", "S&P500"))
+        self.assertEqual(market_display("NYSE"), "NYSE")
+        self.assertIn("NASDAQ 100", MARKETS)                      # the stored key

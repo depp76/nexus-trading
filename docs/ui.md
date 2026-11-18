@@ -1126,3 +1126,14 @@ Phase 0~6 계획표는 `docs/history/ui_archive_2026-09_10.md`로 옮겼다. Pha
   새로 고침 직후의 기본 순서(지수 → KOSPI → KOSDAQ → NASDAQ 100 → S&P500, 시장마다 시총 내림차순)는 그대로.
 - **범위 필터**(단위 억원)는 모든 행이 원화 시총(억) 그대로(`_filter_value`): 입력 한 칸이 시장마다 다른 단위가 되지 않게.
 - 데이터: 미국 종목 행에 `usd_market_cap`(달러, Yahoo → Naver → yfinance 순) 추가. 그 전에 저장된 캐시 행은 원화 시총을 그 행의 가격 비율(`usd_price / price`)로 되돌려 표시.
+
+### 8.32 Universe 'NASDAQ 100' → 표시 NASDAQ, 토글 NASDAQ 150 (2026-11-18)
+
+- **이유**: 미국 NASDAQ 토글의 목록은 나스닥100 지수 구성이 아니다. `data.collectors.yahoo.fetch_us_market_data`는 위키백과 'Nasdaq-100' 문서의
+  구성 종목 표를 먼저 찾는데, 그 표가 문서에서 빠져(표 18개 중 Ticker/Symbol 열 없음, 2026-11-18 확인) 조용히 대체 경로 — FDR NASDAQ 거래소 전체 상장 목록
+  (대략 시총 순)의 앞 150개 — 로 넘어간다. 그래서 SK hynix ADR(SKHY, 12번째), ASML·ARM 같은 해외 기업 ADR도 들어온다. 사용자 결정: ADR을 빼지 않으므로 목록은 그대로 두고 이름만 맞춘다.
+- **표시**(사용자 지시): 행의 종목 정보·상태 줄·저장된 보기 요약에서 "NASDAQ 100" → **"NASDAQ"**(`universe_views.market_display`, `MARKETS`의 표시 이름).
+  토글 버튼은 **"NASDAQ 150"**(`UniverseTab._MARKET_BUTTON_TEXT`, 2026-11-16의 "NASDAQ"에서 변경), 툴팁에 "나스닥100 지수 구성이 아니라 NASDAQ 상장 종목 중 시총 상위, ADR 포함".
+- **저장 값은 그대로**: 행·설정·저장된 보기·캐시의 시장 키는 `"NASDAQ 100"` 유지(이전 저장분과 호환). 주요 지수 행의 실제 나스닥100 지수(^NDX)와 MA 차트 시장지수도 그대로.
+- **버튼 폭**: 세 탭(Universe · Trading History · Total Assets) 툴바 버튼은 한 폭(등록된 가장 긴 라벨, 8.17)이라 "NASDAQ 150"(101px)에 맞춰 모두 94 → **101px**.
+  Universe 툴바 최소 폭 약 1,411px.
