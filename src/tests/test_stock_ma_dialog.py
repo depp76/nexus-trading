@@ -444,7 +444,7 @@ class TestStrategyCheckSection(unittest.TestCase):
         top = picks.detail.top[0]
         d = StockMaDialog(top.ticker, "X", "KOSPI", _df(), signal_ctx=_ctx(picks))
         sec = d.strategy_section
-        self.assertEqual(sec.cards["MA50Div"].value.text(), f"{top.pct_ma50:.2f}")
+        self.assertEqual(sec.cards["MA60Div"].value.text(), f"{top.pct_ma50:.2f}")      # v07 trend line
         self.assertEqual(sec.cards["Range52"].value.text(), f"{top.pct_range52:.2f}")
         self.assertEqual(sec.score_lbl.text(), f"{top.week_avg:+.2f}")
         self.assertIn(f"{top.latest_total:+.2f}", sec.score_hint_lbl.text())
@@ -466,7 +466,7 @@ class TestStrategyCheckSection(unittest.TestCase):
         sec = d.strategy_section
         self.assertEqual(sec.score_lbl.text(), "-")
         self.assertEqual({c.value.text() for c in sec.cards.values()}, {"-"})
-        self.assertEqual(set(sec.cards), {"MA50Div", "Range52", "R3"})
+        self.assertEqual(set(sec.cards), {"MA60Div", "Range52", "R3"})
         self.assertEqual({(b.objectName(), b.text()) for b in sec.badges.values()}, {("badgeNa", "-")})
         self.assertEqual(len(sec.badges), 4)
         d.close()

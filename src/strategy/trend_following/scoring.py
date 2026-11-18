@@ -10,12 +10,13 @@ Layers, all pure except the loader at the bottom:
   run_universe_scoring(items)       -> the three above chained (C1 alone; the screens use signal_provider)
 
 Spec mapping (9-4 in the md lists the decisions this file makes beyond the
-text): MA50Div / Range52 / MA20Div / R3 are computed from closes as in
+text): MA{score_ma_long}Div (MA60Div since v07; the field is still ``ma50_div``, spec 10-8) /
+Range52 / MA20Div / R3 are computed from closes as in
 2-5 (1); R3 and MA20Div are divided by ATR20 / close when
 ``score_vol_normalize`` is on; every indicator is turned into a percentile
 rank (0, 1] among the liquid names of that day; the gate is liquidity +
-MA50Div > 0 + Range52 >= gate_range_min + not in the top (1 - gate_overheat_pct)
-of normalised MA20Div; total = pct(MA50Div) + pct(Range52) - pct(R3)
+MA{n}Div > 0 + Range52 >= gate_range_min + not in the top (1 - gate_overheat_pct)
+of normalised MA20Div; total = pct(MA{n}Div) + pct(Range52) - pct(R3), n = score_ma_long
 (v06: R10 is no longer scored, see REFERENCE_R10_WINDOW); the total's percentile is taken within the gated names only.
 
 The Universe recommendation averages the daily total over the last
@@ -76,8 +77,8 @@ class ScoreBook:
     atr_pct: np.ndarray
     liquid: np.ndarray          # bool: 20-day average trading value >= floor
     overheated: np.ndarray      # bool: liquid and normalised MA20Div in the top (1 - gate_overheat_pct)
-    gate: np.ndarray            # bool: liquid & MA50Div > 0 & Range52 >= min & not overheated
-    trend_score: np.ndarray     # pct(MA50Div) + pct(Range52), 0..2
+    gate: np.ndarray            # bool: liquid & MA{n}Div > 0 & Range52 >= min & not overheated (n = score_ma_long)
+    trend_score: np.ndarray     # pct(MA{n}Div) + pct(Range52), 0..2
     timing_score: np.ndarray    # -pct(R3), -1..0
     total: np.ndarray           # trend + timing (NaN unless liquid with full history)
     total_rank: np.ndarray      # percentile of total within the gated names, NaN elsewhere
@@ -201,7 +202,7 @@ def _gate_reasons(sb: ScoreBook, t: int, j: int, p: StrategyParams) -> tuple[str
         return ("Illiquid",)
     out = []
     if not (sb.ma50_div[t, j] > 0):
-        out.append("MA50Div<0" if np.isfinite(sb.ma50_div[t, j]) else "No MA50")
+        out.append(f"MA{p.score_ma_long}Div<0" if np.isfinite(sb.ma50_div[t, j]) else f"No MA{p.score_ma_long}")
     if not (sb.range52[t, j] >= p.gate_range_min):
         out.append(f"Range52<{p.gate_range_min:.2f}" if np.isfinite(sb.range52[t, j]) else "No 52w range")
     if sb.overheated[t, j]:

@@ -11,7 +11,7 @@ import numpy as np
 from strategy.trend_following import run as run_mod
 from strategy.trend_following.backtest import Trade, run_backtest
 from strategy.trend_following.config import (
-    E2_NEIGHBORS, E2_SHARPE_JUMP, PERIODS, V07_VARIANTS, VARIANTS, StrategyParams, get_variant,
+    E2_NEIGHBORS, E2_SHARPE_JUMP, PERIODS, V06_C_VARIANTS, V07_VARIANTS, VARIANTS, StrategyParams, get_variant,
 )
 from strategy.trend_following.costs import CostModel, TradeCost
 from strategy.trend_following.metrics import cagr, max_drawdown, nav_returns, session_rf, sharpe, summarize_run
@@ -43,29 +43,34 @@ def _trade(pnl, reason="channel"):
 class TestE2Constant(unittest.TestCase):
     def test_constant_equals_the_approved_table(self):
         a = ("A0", "A1", "A2", "A3", "A4", "A5")
+        c = ("C1", "C2", "C3", "C1L", "C2L", "C3L")
         self.assertEqual(E2_NEIGHBORS, (
             ("N1", "breakout_window", 15, a),
             ("N2", "breakout_window", 25, a),
             ("N3", "trend_ma_long", 120, a + ("B",)),
             ("N4", "regime_ma", 20, a[1:] + ("B",)),
             ("N5", "regime_ma", 120, a[1:] + ("B",)),
-            ("N6", "score_ma_long", 50, ("C1L", "C2L", "C3L")),     # spec 10-2 (v07 candidates)
-            ("N7", "score_ma_long", 80, ("C1L", "C2L", "C3L")),
+            ("N6", "score_ma_long", 50, c),     # spec 10-2, extended to C1-C3 by 10-13 (v07)
+            ("N7", "score_ma_long", 80, c),
         ))
-        self.assertEqual([len(r[3]) for r in E2_NEIGHBORS], [6, 6, 7, 6, 6, 3, 3])
-        self.assertEqual(len(planned_e2_runs(tuple(VARIANTS))), 31)            # the v06 matrix: unchanged
+        self.assertEqual([len(r[3]) for r in E2_NEIGHBORS], [6, 6, 7, 6, 6, 6, 6])
+        self.assertEqual(len(planned_e2_runs(tuple(VARIANTS))), 37)            # the matrix A0-C3: 31 -> 37 in v07
         self.assertEqual(len(planned_e2_runs(tuple(V07_VARIANTS))), 6)
-        self.assertEqual(len(planned_e2_runs()), 37)
+        self.assertEqual(planned_e2_runs(tuple(V06_C_VARIANTS)), [])           # C1S-C3S: reproduction only
+        self.assertEqual(len(planned_e2_runs()), 43)
         self.assertEqual(E2_SHARPE_JUMP, 0.5)
 
     def test_defaults_match_the_registered_base_values(self):
         d = StrategyParams()
-        self.assertEqual((d.breakout_window, d.trend_ma_long, d.regime_ma, d.check_weekday), (20, 60, 60, 0))
+        self.assertEqual((d.breakout_window, d.trend_ma_long, d.regime_ma, d.check_weekday, d.score_ma_long),
+                         (20, 60, 60, 0, 60))
 
-    def test_no_run_for_c_series(self):
-        ids = {vid for *_, vid in planned_e2_runs()}
-        self.assertTrue(ids.isdisjoint({"C1", "C2", "C3"}))
-        self.assertEqual(planned_e2_runs(("C1", "C2", "C3")), [])
+    def test_c_series_runs_only_the_trend_line_neighbours(self):
+        """v06 left C1-C3 without neighbours (9-17 (f)); since v07 (10-13) they get N6 / N7 only."""
+        runs = planned_e2_runs(("C1", "C2", "C3"))
+        self.assertEqual([(n, v) for n, _f, _v, v in runs],
+                         [("N6", "C1"), ("N6", "C2"), ("N6", "C3"), ("N7", "C1"), ("N7", "C2"), ("N7", "C3")])
+        self.assertEqual({f for _n, f, _v, _vid in runs}, {"score_ma_long"})
 
     def test_every_run_differs_from_the_base_in_one_field(self):
         """Against each variant's effective base (its own overrides applied): a v07 candidate's
@@ -183,9 +188,9 @@ class TestRunner(unittest.TestCase):
     def test_e2_runs_are_exactly_the_registered_set_for_the_subset(self):
         r = self.res
         planned = planned_e2_runs(SUBSET)
-        self.assertEqual(len(planned), 16)
+        self.assertEqual(len(planned), 18)                              # 16 + C1's N6 / N7 since v07
         self.assertEqual([(x.nid, x.variant) for x in r.neighbor_runs], [(n, v) for n, _, _, v in planned])
-        self.assertFalse({x.variant for x in r.neighbor_runs} & {"C1", "C2", "C3"})
+        self.assertEqual({x.nid for x in r.neighbor_runs if x.variant == "C1"}, {"N6", "N7"})
 
     def test_delta_sharpe_uses_the_base_row_and_a_one_field_change(self):
         r = self.res
@@ -210,16 +215,16 @@ class TestRunner(unittest.TestCase):
         c = self.res.counter
         self.assertEqual(c.groups[GROUP_BASE], len(SUBSET))              # one cost multiplier
         self.assertEqual(c.groups[GROUP_E1], 4 * len(SUBSET))            # weekday 0 is the base run
-        self.assertEqual(c.groups[GROUP_E2], 16)
+        self.assertEqual(c.groups[GROUP_E2], 18)
         self.assertNotIn(GROUP_A2, c.groups)
-        self.assertEqual(c.this_report, len(SUBSET) + 4 * len(SUBSET) + 16)
+        self.assertEqual(c.this_report, len(SUBSET) + 4 * len(SUBSET) + 18)
         self.assertEqual(c.total, c.this_report)
 
-    def test_full_matrix_adds_31_e2_runs_to_the_counter(self):
+    def test_full_matrix_adds_37_e2_runs_to_the_counter(self):
         c = RunCounter(prior=7)
-        c.add(GROUP_E2, len(planned_e2_runs(tuple(VARIANTS))))      # the 6-2 matrix (A0-C3)
-        self.assertEqual(c.groups[GROUP_E2], 31)
-        self.assertEqual(c.total, 38)
+        c.add(GROUP_E2, len(planned_e2_runs(tuple(VARIANTS))))      # the 6-2 matrix (A0-C3); 31 up to v06
+        self.assertEqual(c.groups[GROUP_E2], 37)
+        self.assertEqual(c.total, 44)
 
     def test_flow_variants_skipped_without_flows(self):
         ds = synthetic_dataset(with_flows=False)
@@ -365,7 +370,7 @@ class TestReport(unittest.TestCase):
 
     def test_without_a_provenance_header_the_report_names_spec_and_window(self):
         md = self.res.to_markdown()
-        self.assertIn("- 스펙 버전: v06", md)
+        self.assertIn("- 스펙 버전: v07", md)
         self.assertIn("- 데이터 기간: 2021-01-04", md)
 
     def test_conclusion_never_declares_a_pass(self):

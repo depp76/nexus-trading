@@ -155,7 +155,7 @@ class TestStockCheck(unittest.TestCase):
         self.assertTrue(all(r.ok is not None for r in c.entry))
         s = picks.detail.scored[top]
         self.assertEqual(c.score, f"{s.week_avg:+.2f}")
-        self.assertEqual([m.label for m in c.metrics], ["MA50Div", "Range52", "R3"])
+        self.assertEqual([m.label for m in c.metrics], ["MA60Div", "Range52", "R3"])   # MA{score_ma_long}Div
         self.assertEqual(c.metrics[0].value, f"{s.pct_ma50:.2f}")
         none = check_stock("C1", top, book, None)                   # no run: same rows, "-" values
         self.assertEqual((len(none.entry), none.score), (4, "-"))

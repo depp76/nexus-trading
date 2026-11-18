@@ -104,7 +104,7 @@ class CheckRow:
 
 @dataclass
 class Metric:
-    label: str                  # "MA50Div"
+    label: str                  # "MA60Div"
     value: str                  # "0.83" / "-"
     help: str = ""              # one-line caption under the value
 

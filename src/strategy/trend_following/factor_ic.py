@@ -38,8 +38,9 @@ from strategy.trend_following.scoring import compute_scores
 # correlation matrix and the IC tables but is not in JUDGED_FACTORS / HYPOTHESES (it left the score, 9-15).
 FACTORS: tuple[str, ...] = ("r3", "r10", "range52", "ma20_div", "ma50_div")
 JUDGED_FACTORS: tuple[str, ...] = tuple(f for f in FACTORS if f != "r10")
-FACTOR_LABELS = {"r3": "R3", "r10": "R10", "range52": "Range52", "ma20_div": "MA20Div", "ma50_div": "MA50Div",
-                 "total": "Total"}
+# "ma50_div" is the score_ma_long trend line (MA60Div since v07); the label follows the default.
+FACTOR_LABELS = {"r3": "R3", "r10": "R10", "range52": "Range52", "ma20_div": "MA20Div",
+                 "ma50_div": f"MA{StrategyParams().score_ma_long}Div", "total": "Total"}
 IC_HORIZONS: tuple[int, ...] = (5, 10, 20)
 CORR_FLAG = 0.8
 MIN_NAMES = 10             # a date needs this many names for a rank correlation

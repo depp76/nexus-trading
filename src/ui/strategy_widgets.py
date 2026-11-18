@@ -604,7 +604,7 @@ EXIT_REASONS = {
     "rank_out": tr("순위 탈락", "Ranked out"),
     "weight_trim": tr("비중 축소", "Weight trim"),
     "year_end_trim": tr("연말 정산", "Year-end trim"),
-    "ma50_exit": tr("MA50 이탈", "Below MA50"),
+    "ma50_exit": tr("추세선 이탈", "Below trend line"),     # key kept from v06; the line is score_ma_long (60)
     "score_rank_out": tr("점수 순위 탈락", "Score ranked out"),
     "delisted": tr("시세 없음(상장폐지)", "No price (delisted)"),
     "below_ma": tr("MA 이탈", "Below MA"),

@@ -64,7 +64,8 @@ class TestComputeScores(unittest.TestCase):
     def test_indicators_match_their_definitions(self):
         sb, t, j = self.sb, self.t, self.j["UP"]
         close = self.book.close[:, j]
-        self.assertAlmostEqual(sb.ma50_div[t, j], close[t] / close[t - 49:t + 1].mean() - 1.0)
+        n = self.p.score_ma_long                                      # 60 since v07 (spec 10-13), 50 before
+        self.assertAlmostEqual(sb.ma50_div[t, j], close[t] / close[t - n + 1:t + 1].mean() - 1.0)
         self.assertAlmostEqual(sb.ma20_div[t, j], close[t] / close[t - 19:t + 1].mean() - 1.0)
         self.assertAlmostEqual(sb.r10[t, j], close[t] / close[t - 10] - 1.0)
         self.assertAlmostEqual(sb.r3[t, j], close[t] / close[t - 3] - 1.0)
@@ -112,8 +113,11 @@ class TestComputeScores(unittest.TestCase):
         self.assertTrue(np.isnan(sb.total_rank[t, ~gated]).all())
         ranks = sb.total_rank[t, gated]
         totals = sb.total[t, gated]
-        self.assertEqual(list(np.argsort(ranks)), list(np.argsort(totals)))
-        self.assertAlmostEqual(ranks.max(), 1.0)
+        self.assertEqual(list(np.argsort(ranks, kind="stable")), list(np.argsort(totals, kind="stable")))
+        # Ties share their average rank (rank / n): k names tied at the top get (n - (k - 1) / 2) / n --
+        # 1.0 without a tie. With the 60-day line (v07) UP and PULL tie at the top of this book.
+        n, k = len(totals), int(np.sum(totals == totals.max()))
+        self.assertAlmostEqual(ranks.max(), (n - (k - 1) / 2) / n)
 
     def test_r10_does_not_enter_the_score(self):
         # Spec v06 (9-15): two books that differ only in the close 10 sessions back (R10 changes, R3, MA50Div,
@@ -196,7 +200,7 @@ class TestWeeklyRecommendation(unittest.TestCase):
         self.assertTrue(all(s.gate for s in rec.top))
         reasons = {s.ticker: s.reasons for s in rec.bottom}
         self.assertEqual(reasons["SPIKE"], ("Overheated",))
-        self.assertIn("MA50Div<0", reasons["DOWN"])
+        self.assertIn(f"MA{StrategyParams().score_ma_long}Div<0", reasons["DOWN"])        # "MA60Div<0" since v07
         self.assertIn("Range52<0.70", reasons["BOUNCE"])
 
     def test_display_fields_read_the_score_book(self):
