@@ -11,7 +11,7 @@ import numpy as np
 from strategy.trend_following import run as run_mod
 from strategy.trend_following.backtest import Trade, run_backtest
 from strategy.trend_following.config import (
-    E2_NEIGHBORS, E2_SHARPE_JUMP, PERIODS, VARIANTS, StrategyParams,
+    E2_NEIGHBORS, E2_SHARPE_JUMP, PERIODS, V07_VARIANTS, VARIANTS, StrategyParams, get_variant,
 )
 from strategy.trend_following.costs import CostModel, TradeCost
 from strategy.trend_following.metrics import cagr, max_drawdown, nav_returns, session_rf, sharpe, summarize_run
@@ -19,7 +19,7 @@ from strategy.trend_following.research import ResearchRequest
 from strategy.trend_following.robustness import (
     GROUP_A2, GROUP_BASE, GROUP_E1, GROUP_E2, NeighborRun, PerfStats, RobustnessRequest, RunCounter,
     UnregisteredNeighborError, neighbor_params, period_stats, planned_e2_runs, run_robustness, top_trade_stats,
-    warmup_check,
+    variant_for_neighbor, warmup_check,
 )
 from strategy.trend_following.signals import compute_features
 from strategy.trend_following.snapshot import save_snapshot
@@ -49,9 +49,13 @@ class TestE2Constant(unittest.TestCase):
             ("N3", "trend_ma_long", 120, a + ("B",)),
             ("N4", "regime_ma", 20, a[1:] + ("B",)),
             ("N5", "regime_ma", 120, a[1:] + ("B",)),
+            ("N6", "score_ma_long", 50, ("C1L", "C2L", "C3L")),     # spec 10-2 (v07 candidates)
+            ("N7", "score_ma_long", 80, ("C1L", "C2L", "C3L")),
         ))
-        self.assertEqual([len(r[3]) for r in E2_NEIGHBORS], [6, 6, 7, 6, 6])
-        self.assertEqual(len(planned_e2_runs()), 31)
+        self.assertEqual([len(r[3]) for r in E2_NEIGHBORS], [6, 6, 7, 6, 6, 3, 3])
+        self.assertEqual(len(planned_e2_runs(tuple(VARIANTS))), 31)            # the v06 matrix: unchanged
+        self.assertEqual(len(planned_e2_runs(tuple(V07_VARIANTS))), 6)
+        self.assertEqual(len(planned_e2_runs()), 37)
         self.assertEqual(E2_SHARPE_JUMP, 0.5)
 
     def test_defaults_match_the_registered_base_values(self):
@@ -64,11 +68,15 @@ class TestE2Constant(unittest.TestCase):
         self.assertEqual(planned_e2_runs(("C1", "C2", "C3")), [])
 
     def test_every_run_differs_from_the_base_in_one_field(self):
+        """Against each variant's effective base (its own overrides applied): a v07 candidate's
+        base is score_ma_long 60, and its N6 / N7 run must really use 50 / 80 (spec 10-9 item 2)."""
         base = StrategyParams()
-        for nid, f, v, _vid in planned_e2_runs():
-            diff = {k for k, val in asdict(neighbor_params(base, f, v)).items() if val != asdict(base)[k]}
-            self.assertEqual(diff, {f}, nid)
-            self.assertEqual(getattr(neighbor_params(base, f, v), f), v)
+        for nid, f, v, vid in planned_e2_runs():
+            eff_base = get_variant(vid).apply(base)
+            eff = variant_for_neighbor(vid, f).apply(neighbor_params(base, f, v))
+            diff = {k for k, val in asdict(eff).items() if val != asdict(eff_base)[k]}
+            self.assertEqual(diff, {f}, (nid, vid))
+            self.assertEqual(getattr(eff, f), v, (nid, vid))
 
     def test_unregistered_pairs_are_rejected(self):
         base = StrategyParams()
@@ -209,7 +217,7 @@ class TestRunner(unittest.TestCase):
 
     def test_full_matrix_adds_31_e2_runs_to_the_counter(self):
         c = RunCounter(prior=7)
-        c.add(GROUP_E2, len(planned_e2_runs()))
+        c.add(GROUP_E2, len(planned_e2_runs(tuple(VARIANTS))))      # the 6-2 matrix (A0-C3)
         self.assertEqual(c.groups[GROUP_E2], 31)
         self.assertEqual(c.total, 38)
 

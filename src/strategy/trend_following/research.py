@@ -14,7 +14,8 @@ import numpy as np
 from strategy.trend_following.backtest import BacktestResult, run_backtest
 from strategy.trend_following.benchmarks import run_benchmarks
 from strategy.trend_following.config import (
-    SPEC_VERSION, COST_MULTIPLIERS, PERIODS, VARIANTS, StrategyParams, normalize_markets,
+    SPEC_VERSION, COST_MULTIPLIERS, PERIODS, RESEARCH_VARIANTS, VARIANTS, StrategyParams, get_variant,
+    normalize_markets,
 )
 from strategy.trend_following.costs import CostModel
 from strategy.trend_following.dataset import ResearchCancelled, check_dev_window
@@ -130,7 +131,7 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
     runs: list[RunSummary] = []
     skipped: dict[str, str] = {}
     if req.run_backtests and not feats.has_flows:
-        skipped.update({vid: "no investor-flow data" for vid in req.variant_ids if VARIANTS[vid].needs_flows})
+        skipped.update({vid: "no investor-flow data" for vid in req.variant_ids if get_variant(vid).needs_flows})
     score_books: dict[str, object] = {}     # C-series ScoreBook per variant: independent of the cost multiplier
     if req.run_backtests:
         for mult in req.cost_multipliers:
@@ -140,7 +141,7 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
             bms = run_benchmarks(ds, feats, p, cm)
             bm1, bm3 = bms.get("BM1"), bms.get("BM3")
             for vid in req.variant_ids:
-                v = VARIANTS[vid]
+                v = get_variant(vid)
                 if v.needs_flows and not feats.has_flows:
                     continue
                 _check_stop(should_stop)
@@ -372,8 +373,8 @@ def _md_cost_breakdown(result: ResearchResult) -> list[str]:
 
 def _md_c_series(result: ResearchResult) -> list[str]:
     """6-2 / 9-16: turnover and holding period of the score-mode (C-series) rows."""
-    c_rows = [r for r in result.runs_at(1.0, "strategy") if VARIANTS.get(r.id) is not None
-              and VARIANTS[r.id].mode == "score"]
+    c_rows = [r for r in result.runs_at(1.0, "strategy") if RESEARCH_VARIANTS.get(r.id) is not None
+              and RESEARCH_VARIANTS[r.id].mode == "score"]
     if not c_rows:
         return []
     return ["", "## 6-2 C-series turnover and holding period (1x)", "",
@@ -429,7 +430,7 @@ def _md_event_study(result: ResearchResult) -> list[str]:
 def _md_variants(result: ResearchResult) -> list[str]:
     """The 6-2 labels of the requested variants, then the closing blank line."""
     return (["", "## Variants", ""]
-            + [f"- {VARIANTS[v].label}" for v in result.request.variant_ids if v in VARIANTS]
+            + [f"- {RESEARCH_VARIANTS[v].label}" for v in result.request.variant_ids if v in RESEARCH_VARIANTS]
             + [""])
 
 

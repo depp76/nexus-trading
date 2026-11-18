@@ -4,10 +4,12 @@ report (trend_following.md 6-4 "강건성", 6-5, 9-17; docs/nexus/validation_che
 What it adds on top of ``run_research`` (all on the development window, 1x costs):
   E1  the five weekly check weekdays, worst-weekday CAGR / MDD per variant;
   E2  the pre-registered neighbour set ``config.E2_NEIGHBORS`` (one field at a time, 31 extra
-      runs for the full matrix) judged by |delta Sharpe| > ``config.E2_SHARPE_JUMP``;
+      runs for the full matrix; N6 / N7 add 6 for the v07 candidates C1L-C3L, spec 10-2) judged
+      by |delta Sharpe| > ``config.E2_SHARPE_JUMP``;
   E4  contribution of the top 5% of trades (by net P&L) and the result without them;
   E5  a counter of every strategy backtest executed for the report;
-  A2  an optional validation-only "investor flow one session early" contamination comparison.
+  A2  an optional validation-only "investor flow one session early" contamination comparison;
+  ref an optional "cash earns no interest" rerun of each variant at 1x (spec 10-4, reference only).
 
 This is NOT a parameter-picking tool. Neighbour, weekday and E4 results only answer "did the
 result jump?"; defaults and the E2 set change only through an [R] -> [S] spec revision. The
@@ -26,7 +28,7 @@ import numpy as np
 
 from strategy.trend_following.backtest import TRIM_REASON, WEIGHT_TRIM_REASON, run_backtest
 from strategy.trend_following.config import (
-    DEV_END, E2_NEIGHBORS, E2_SHARPE_JUMP, E4_TOP_SHARE, PERIODS, VARIANTS, StrategyParams,
+    DEV_END, E2_NEIGHBORS, E2_SHARPE_JUMP, E4_TOP_SHARE, PERIODS, StrategyParams, get_variant,
 )
 from strategy.trend_following.dataset import check_dev_window
 from strategy.trend_following.metrics import (
@@ -43,6 +45,7 @@ GROUP_BASE = "6-2 base matrix (variant x cost)"
 GROUP_E1 = "E1 weekday runs (extra weekdays)"
 GROUP_E2 = "E2 neighbour runs"
 GROUP_A2 = "A2 contamination runs"
+GROUP_NO_INTEREST = "cash interest 0 runs (reference)"
 
 
 class UnregisteredNeighborError(ValueError):
@@ -79,6 +82,7 @@ _WARMUP_NEEDED = {
     "breakout_window": lambda p: p.breakout_window + 1,                       # prior-N high, shifted by one
     "trend_ma_long": lambda p: p.trend_ma_long + p.trend_slope_lookback,      # MA and its value N sessions ago
     "regime_ma": lambda p: p.regime_ma + p.regime_slope_lookback,
+    "score_ma_long": lambda p: p.score_ma_long,                               # 2-5: the MA alone, no slope
 }
 
 
@@ -196,6 +200,15 @@ class ContaminationRow:
     contaminated: PerfStats
 
 
+@dataclass
+class NoInterestRow:
+    """Spec 10-4: one variant at 1x with and without interest on cash (same everything else)."""
+    variant: str
+    with_interest: PerfStats
+    no_interest: PerfStats
+    avg_cash_weight: float
+
+
 def top_trade_stats(variant: str, trades: list, seed: float, years: float,
                     top_share: float = E4_TOP_SHARE) -> TopTradeRow:
     """E4: real trades only (year-end and weight trims are partial sells, not decisions), ranked by net P&L."""
@@ -220,6 +233,7 @@ class RobustnessRequest:
     run_e2: bool = True
     flow_contamination: int = 0     # validation-only (checklist A2): 0 = off (default), 1 = flow one session early
     prior_trials: int = 0           # strategy backtests counted in earlier reports (E5 running total)
+    cash_interest_reference: bool = False   # spec 10-4: also rerun each variant at 1x with no cash interest
 
     def __post_init__(self):
         r = self.research
@@ -249,6 +263,7 @@ class RobustnessResult:
     contamination: list[ContaminationRow]
     counter: RunCounter
     data_last_date: date | None
+    no_interest: list[NoInterestRow] = field(default_factory=list)
 
     # -- E1 --------------------------------------------------------------
     def weekday_summary(self) -> list[dict]:
@@ -283,14 +298,27 @@ def _stop(should_stop) -> None:
         raise ResearchCancelled("cancelled")
 
 
-def _run_variant(ds, feats, params, vid: str, cm, score_cache: dict):
-    v = VARIANTS[vid]
+def variant_for_neighbor(vid: str, field_name: str | None):
+    """`vid`'s Variant, without its own override of `field_name` when it has one: a v07
+    candidate overrides score_ma_long (60), and Variant.apply() runs after the neighbour is put
+    into the params, so the override would silently undo N6 / N7 (spec 10-9 item 2)."""
+    v = get_variant(vid)
+    if field_name is None or field_name not in dict(v.score_overrides):
+        return v
+    return replace(v, score_overrides=tuple(kv for kv in v.score_overrides if kv[0] != field_name))
+
+
+def _run_variant(ds, feats, params, vid: str, cm, score_cache: dict, free_field: str | None = None,
+                 cash_interest: bool = True):
+    """One backtest of `vid`. `free_field`: the E2 field the neighbour params set, kept out of the
+    variant's own overrides (variant_for_neighbor)."""
+    v = variant_for_neighbor(vid, free_field)
     scores = None
     if v.mode == "score":
         if vid not in score_cache:
             score_cache[vid] = compute_scores(ds.stocks, v.apply(params))
         scores = score_cache[vid]
-    return run_backtest(ds, feats, params, v, cm, scores=scores)
+    return run_backtest(ds, feats, params, v, cm, scores=scores, cash_interest=cash_interest)
 
 
 def _e1_weekday_runs(ds, p, runnable, base1, cm1, counter, progress, should_stop) -> list[WeekdayRun]:
@@ -340,7 +368,7 @@ def _e2_neighbor_runs(ds, p, variant_ids, base1, cm1, counter, progress, should_
         for vid in wanted:
             _stop(should_stop)
             _say(progress, tr(f"E2: {vid} {f}={v} ({nid})...", f"E2: {vid} with {f}={v} ({nid})..."))
-            res = _run_variant(ds, featsn, pn, vid, cm1, {})
+            res = _run_variant(ds, featsn, pn, vid, cm1, {}, free_field=f)
             counter.add(GROUP_E2)
             neighbor_runs.append(NeighborRun(
                 nid, f, v, vid, stats_from_metrics(summarize_run(res)),
@@ -366,7 +394,7 @@ def _a2_contamination_runs(ds, p, flow_lead, runnable, base1, cm1, counter, prog
     featsc = compute_features(ds, p, flow_lead=flow_lead)
     if featsc.has_flows:
         for vid in runnable:
-            if not VARIANTS[vid].needs_flows:
+            if not get_variant(vid).needs_flows:
                 continue
             _stop(should_stop)
             _say(progress, tr(f"A2: {vid} 수급 {flow_lead}세션 앞당김 (검증 전용)...", f"A2: {vid} with flows {flow_lead} session early (validation only)..."))
@@ -375,6 +403,23 @@ def _a2_contamination_runs(ds, p, flow_lead, runnable, base1, cm1, counter, prog
             contam.append(ContaminationRow(vid, stats_from_metrics(base1[vid].metrics),
                                            stats_from_metrics(summarize_run(res))))
     return contam
+
+
+def _no_interest_runs(ds, p, runnable, base1, cm1, counter, progress, should_stop) -> list[NoInterestRow]:
+    """Spec 10-4 (reference only, never a verdict): each variant at 1x with the cash earning
+    nothing, next to its 1x base run. The metrics still deduct the risk-free rate."""
+    rows: list[NoInterestRow] = []
+    feats = compute_features(ds, p)
+    cache: dict = {}
+    for vid in runnable:
+        _stop(should_stop)
+        _say(progress, tr(f"현금 이자 0 (참고): {vid}...", f"Cash interest 0 (reference): {vid}..."))
+        res = _run_variant(ds, feats, p, vid, cm1, cache, cash_interest=False)
+        counter.add(GROUP_NO_INTEREST)
+        m = summarize_run(res)
+        rows.append(NoInterestRow(vid, stats_from_metrics(base1[vid].metrics), stats_from_metrics(m),
+                                  float(base1[vid].metrics.get("avg_cash_weight", float("nan")))))
+    return rows
 
 
 def run_robustness(ds, req: RobustnessRequest, progress=None, should_stop=None) -> RobustnessResult:
@@ -405,8 +450,11 @@ def run_robustness(ds, req: RobustnessRequest, progress=None, should_stop=None) 
     if req.flow_contamination:
         contam = _a2_contamination_runs(ds, p, req.flow_contamination, runnable, base1, cm1, counter,
                                         progress, should_stop)
+    no_interest: list[NoInterestRow] = []
+    if req.cash_interest_reference:
+        no_interest = _no_interest_runs(ds, p, runnable, base1, cm1, counter, progress, should_stop)
     return RobustnessResult(req, research, weekday_runs, neighbor_runs, checks, skipped, top_rows, contam,
-                            counter, ds.dates[-1] if ds.dates else None)
+                            counter, ds.dates[-1] if ds.dates else None, no_interest)
 
 
 # ---------------------------------------------------------------------------
@@ -472,10 +520,17 @@ def _e1_section(res: RobustnessResult) -> list[str]:
     return out
 
 
+def _registered_base(field_name: str, vids) -> object:
+    """The base value a neighbour row moves away from: the variants' own value of the field
+    (a v07 candidate's score_ma_long is 60, not the StrategyParams() default 50)."""
+    vals = {getattr(get_variant(v).apply(StrategyParams()), field_name) for v in vids}
+    return vals.pop() if len(vals) == 1 else "/".join(str(x) for x in sorted(vals))
+
+
 def _e2_section(res: RobustnessResult) -> list[str]:
     out = ["", f"### E2 파라미터 주변값 (사전 등록, NEX-51 승인; 판정: |ΔSharpe| > {E2_SHARPE_JUMP:g} 이면 실패)", ""]
     out.append(_table(["ID", "필드", "기본 → 주변값", "적용 변형"],
-                      [[nid, f, f"{getattr(StrategyParams(), f)} → {v}", ", ".join(vids)]
+                      [[nid, f, f"{_registered_base(f, vids)} → {v}", ", ".join(vids)]
                        for nid, f, v, vids in E2_NEIGHBORS]))
     out += ["", "웜업 확인 (첫 평가 세션에서 지표가 유효한지):", "",
             _table(["ID", "필드=값", "필요 세션", "보유 세션", "결과"],
@@ -622,6 +677,20 @@ def _period_alpha_table(res: RobustnessResult) -> list[str]:
     return ["", "### 개발 구간별 BM1 대비 알파·베타 (체크리스트 D3; 연율화 일별 초과수익 회귀)", "", _table(heads, rows)]
 
 
+def _no_interest_section(res: RobustnessResult) -> list[str]:
+    """Spec 10-4: the cash-interest-0 reference table (no verdict)."""
+    if not res.no_interest:
+        return []
+    rows = [[r.variant, _pct(r.avg_cash_weight, 0), _pct(r.with_interest.cagr), _pct(r.no_interest.cagr),
+             f"{(r.no_interest.cagr - r.with_interest.cagr) * 100:+.1f}%p", _num(r.with_interest.sharpe),
+             _num(r.no_interest.sharpe), _pct(r.with_interest.mdd), _pct(r.no_interest.mdd)]
+            for r in res.no_interest]
+    return ["", "### 현금 이자 0 (참고, 스펙 10-4)", "",
+            "같은 데이터·비용 1×에서 현금 이자 적립만 0으로 바꾼 재실행이다. 지표의 무위험수익률 차감(Sharpe)은 그대로이며 판정에 쓰지 않는다.", "",
+            _table(["변형", "평균 현금", "CAGR (이자 3%)", "CAGR (이자 0)", "차이", "Sharpe (이자)", "Sharpe (0)",
+                    "MDD (이자)", "MDD (0)"], rows)]
+
+
 def render_robustness_markdown(res: RobustnessResult, header: list[str] | None = None) -> str:
     from strategy.trend_following.config import SPEC_VERSION
     req = res.request
@@ -665,6 +734,7 @@ def render_robustness_markdown(res: RobustnessResult, header: list[str] | None =
     out += _e4_section(res)
     out += _e5_section(res)
     out += _a2_section(res)
+    out += _no_interest_section(res)
 
     out += ["", "## 성과표"]
     for mult in req.research.cost_multipliers:

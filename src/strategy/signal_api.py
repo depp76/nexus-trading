@@ -23,6 +23,17 @@ A provider supplies, per variant id (ids are unique across strategies):
   * ``templates(vid)``    the largest ``StockCheck`` shapes of the variant (all
                           rows, widest values), so a screen can keep one height.
 
+Optional chart overlays (docs/ma60_unification_2026-11-18.md 1.7; a provider
+without them gives none, so other providers need no change):
+  * ``chart_overlays(vid, ticker, market, ohlc, provisional_last)`` ->
+                          ``list[ChartLine]``: price-panel lines of one stock
+                          (trend following: the breakout channel);
+  * ``regime_spans(vid, market, dates, index_close, provisional_last)`` ->
+                          ``list[RegimeSpan]``: one market index's regime state;
+  * ``uses_regime(vid)`` / ``regime_legend(vid)``: whether the variant has a
+                          market filter, and its legend label + tooltip.
+Inputs are what the screen's thread already loaded (no network here).
+
 Universe runs are shared between the screens through ``SignalCache`` (kept for
 the day they were computed on).
 """
@@ -117,6 +128,29 @@ class StockCheck:
     metrics: list[Metric] = field(default_factory=list)
 
 
+@dataclass
+class ChartLine:
+    """One price-panel line of a stock chart, on the chart's own dates."""
+    key: str                    # "breakout_high" | "exit_low"
+    label: str                  # display name (tr() applied): "직전 20일 최고가"
+    dates: list[date]
+    values: list[float | None]  # None: no value (the line is broken there)
+    style: str = "step"         # "step" | "line"
+    provisional_from: date | None = None    # values from this date on use an intraday bar
+    tooltip: str = ""           # how the line is defined (window, "today excluded")
+    short_label: str = ""       # compact name for an end-of-line label ("20일 최고"); "" -> label
+
+
+@dataclass
+class RegimeSpan:
+    """A run of sessions with one market-regime state, as judged at each
+    session's close (it applies to orders from the next session)."""
+    start: date
+    end: date                   # inclusive
+    on: bool                    # risk-on
+    provisional: bool = False   # judged on an intraday bar or an unfinished week
+
+
 class SignalProvider(Protocol):
     name: str
     default_variant: str        # optional: the variant the screens start on
@@ -191,6 +225,36 @@ def templates(vid: str) -> list[StockCheck]:
     """The variant's largest check shapes (empty when the provider has none)."""
     fn = getattr(provider(vid), "templates", None)
     return list(fn(vid)) if fn is not None else []
+
+
+def uses_regime(vid: str) -> bool:
+    """True when `vid` gates new entries on a market regime (False when the
+    provider does not say)."""
+    fn = getattr(provider(vid), "uses_regime", None)
+    return bool(fn(vid)) if fn is not None else False
+
+
+def regime_legend(vid: str) -> tuple[str, str]:
+    """(legend label, tooltip) of `vid`'s regime shading; ("", "") if none."""
+    fn = getattr(provider(vid), "regime_legend", None)
+    return tuple(fn(vid)) if fn is not None else ("", "")
+
+
+def chart_overlays(vid: str, ticker: str, market: str, ohlc, provisional_last: bool = False) -> list[ChartLine]:
+    """Price-panel lines `vid`'s provider draws on `ticker`'s chart; `ohlc`
+    maps "Date" / "High" / "Low" / "Close" to equal-length columns (a polars
+    frame works). [] when the provider has none or the market is not its own."""
+    fn = getattr(provider(vid), "chart_overlays", None)
+    return list(fn(vid, ticker, market, ohlc, provisional_last)) if fn is not None else []
+
+
+def regime_spans(vid: str, market: str, dates: list[date], index_close,
+                 provisional_last: bool = False) -> list[RegimeSpan]:
+    """`market`'s regime state under `vid` as spans over `dates`, from that
+    market's own index closes. [] when the provider has none, the variant
+    uses no regime or the market is not one it covers."""
+    fn = getattr(provider(vid), "regime_spans", None)
+    return list(fn(vid, market, dates, index_close, provisional_last)) if fn is not None else []
 
 
 def universe_rows(items: list[dict], vid: str) -> list[dict]:

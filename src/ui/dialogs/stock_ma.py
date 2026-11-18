@@ -21,8 +21,8 @@ docs/ui.md "MA Chart Redesign" mockup (12 issues, phases A-D):
 
 2026-10-15 (user direction): the exclusive view segment (Short / Long /
 Close only / Divergence / Equal Weight) became independent, multi-select
-series toggles -- MA10, MA20, MA50 [, Equal Weight], Divergence (Close is always drawn,
-no MA5: 2026-11-16).
+series toggles -- MA20, MA50, MA60, MA200 [, Equal Weight], Divergence (Close is
+always drawn, no MA5: 2026-11-16; MA10 -> MA60 / MA200: 2026-11-18).
 Divergence shows/hides the divergence panel (the separate panel button is
 gone); with no price line selected the price panel is hidden too. The
 crosshair carries its values on the chart: a dot + value badge on every
@@ -35,8 +35,8 @@ Layout
 
     +-- splitter ------------------------------------------------------+
     | name  ticker · market  price  chg%                          as-of |
-    | Series [Close MA5 .. EW]  [1M 3M 6M 1Y 3Y All]  [Volume] [RSI]     |
-    |   (2026-11-15: one wrapping row; a group moves down when narrow)    |
+    | 이동평균 [MA20 외 1 ▾] 보조지표 [이격도][거래량][RSI] 기간 [1년 ▾] |
+    |   (2026-11-18: one line; MA check-box drop-down, period combo box) |
     |   FigureCanvas: price (+MA ramp)      | right panel (optional)   |
     |                 volume                |   investor / futures tbl |
     |                 divergence            |   "Company Info ↗"        |
@@ -63,6 +63,7 @@ rows, number formatting and the right-panel alignment:
                                   bond Y zoom
   stock_ma_consts.py the module constants (re-exported here)
 """
+import itertools
 import logging
 
 import numpy as np
@@ -71,7 +72,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QButtonGroup,
-    QSplitter, QWidget, QSizePolicy,
+    QSplitter, QWidget, QComboBox, QMenu, QCheckBox, QWidgetAction,
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont
@@ -80,13 +81,13 @@ from i18n import tr
 from ui.dialogs.stock_ma_consts import (  # noqa: F401 -- re-exported for callers of ui.dialogs.stock_ma
     _STOCK_MARKETS, _SIMPLE_CHART_TICKERS, _SCROLL_MAX, _TICK_PT, _SEG_H, _PERIODS, _PERIOD_LABELS,
     _DEFAULT_PERIOD, _DEFAULT_MARGINS, _MARGIN_PAD_PX, _MIN_RIGHT_PX, _SLOT_RATIOS, _SERIES,
-    _PRICE_SERIES, _DEFAULT_SERIES, _MA_KEYS, _INDEX_COLOR,
+    _PRICE_SERIES, _DEFAULT_SERIES, _MA_KEYS, _MA_COLUMNS, _INDEX_COLOR, _CHANNEL_KEYS, _PRICE_TOGGLES,
 )
 from ui.dialogs.stock_ma_hover import _HoverMixin
 from ui.dialogs.stock_ma_plot import _PlotMixin
 from ui.dialogs.stock_ma_side import StockMaSidePanel
 from ui.dialogs.stock_ma_view import _ViewMixin
-from ui.common import FlowLayout, create_font, FONT_HEADING, FONT_BODY, FONT_CAPTION, fit_to_screen
+from ui.common import create_font, FONT_HEADING, FONT_BODY, FONT_CAPTION, fit_to_screen
 from ui.colors import PROFIT, LOSS
 from ui.theme import TEXT_MUTED, TEXT_FAINT
 
@@ -112,8 +113,11 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
     pan/zoom live in the mixins (see the module docstring)."""
 
     def __init__(self, ticker, name, market, df, investor_data=None, parent=None, change_mode='pct',
-                 signal_ctx=None):
+                 signal_ctx=None, overlays=None):
         super().__init__(parent)
+        # The strategy's chart lines (strategy.signal_api.ChartLine; the breakout
+        # channel), computed by StockMaThread; only the keys this dialog draws.
+        self._overlays = [o for o in (overlays or []) if o.key in _CHANNEL_KEYS]
         # "전략 점검" context (ui.strategy_check_section.SignalContext) from the
         # Universe tab: its KR rows and its shared universe runs.
         self._signal_ctx = signal_ctx
@@ -128,7 +132,7 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         self._is_simple_chart = ticker in _SIMPLE_CHART_TICKERS or change_mode == 'bp'
         self._has_data = (
             df is not None and not df.is_empty() and "Close" in df.columns
-            and (self._is_simple_chart or all(c in df.columns for c in _MA_KEYS))
+            and (self._is_simple_chart or all(c in df.columns for c in _MA_COLUMNS.values()))
         )
         self._currency, self._unit_suffix, self._fmt_str = self._format_config()
         self._init_chart_state()
@@ -150,7 +154,7 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
 
     def _init_chart_state(self) -> None:
         """Artists / state the interaction handlers refer to."""
-        self._lines = {}          # "Close" | "MA10" | ... | "EW" | "IDX" -> Line2D
+        self._lines = {}          # "Close" | "MA20" | ... | "EW" | "IDX" -> Line2D
         self._price_raw = {}      # price-panel key -> source array (_rescale_price_lines)
         self._rebase = {}         # price-panel key -> price-axis multiplier
         self._end_labels = {}     # same keys -> Annotation
@@ -159,7 +163,11 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         self._date_badges = {}    # panel key -> Annotation with the cursor date
         self._panel_axes = {}     # "price" | "vol" | "div" | "rsi" -> Axes
         self._panel_on = {"vol": False, "div": False, "rsi": False}
-        self._series_on = {k: (k in _DEFAULT_SERIES) for k in _PRICE_SERIES}
+        self._series_on = {k: (k in _DEFAULT_SERIES) for k in _PRICE_TOGGLES}
+        self._overlay_label = {}  # "CH_HI" | "CH_LO" -> its ChartLine label (hover)
+        self._overlay_short = {}  # same keys -> its short label (end label)
+        self._overlay_prov = {}   # same keys -> first bar index of provisional values
+        self._overlay_prov_artists = []   # faded markers on the provisional bars
         self._x = None
         self._pan_start = None
         self._cursor_idx = None
@@ -258,84 +266,77 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         return w, lay
 
     def _build_view_row(self) -> QWidget:
-        """The toggles by kind, each with a caption (user direction 2026-11-16):
-        [이동평균 MA10 · MA20 · MA50 (· 동일가중)] and [보조지표 이격도 · 거래량 ·
-        RSI   기간 1개월 ~ 전체]. Close is always drawn (no button) and MA5 is
-        gone (same day). 보조지표 and 기간 are one unsplittable group so they
-        always share a line; the groups sit in a FlowLayout (2026-11-15), one
-        line when the chart is wide enough, else the second group moves down
-        whole. Every button of the row has one width, the widest label's."""
+        """One line of controls (user direction 2026-11-18): [이동평균 ▾] a
+        drop-down of check boxes (MA20 · MA50 · MA60 · MA200 (· 동일가중 · 시장지수),
+        several at once), [보조지표 이격도 · 거래량 · RSI] toggle buttons and
+        [기간 ▾] a single-choice combo box, then the as-of date at the right
+        end. Close is always drawn (no button). The three indicator buttons
+        share one width, the widest label's."""
         row_w = QWidget()
-        row = FlowLayout(row_w, h_spacing=18, v_spacing=6)
+        row = QHBoxLayout(row_w)
         # Clear of the splitter: the as-of date ends the row and the right
-        # panel's TREND SCORE title starts level with it.
+        # panel's title starts level with it.
         row.setContentsMargins(0, 0, 24, 0)
+        row.setSpacing(6)
         self._group_captions = []
-        self._series_buttons = {}
+        self._series_buttons = {}     # series key -> QCheckBox (MA menu) / QPushButton (Div)
         self._panel_buttons = {}
+        self._ma_btn = None
+        self._ma_menu = None
+        self._ma_menu_keys = []
         has_ew = self._has_data and "EqualWeight" in self._df.columns and not self._is_simple_chart
         has_idx = self._has_market_index()
 
-        def series_button(lay, key):
-            btn = _segment_button(_SERIES[key], checked=(key in _DEFAULT_SERIES))
-            btn.clicked.connect(lambda checked, k=key: self._set_series(k, checked))
-            lay.addWidget(btn)
-            self._series_buttons[key] = btn
-
-        def caption(lay, text):
+        def caption(text):
             cap = QLabel(text)
             cap.setFont(create_font(FONT_CAPTION, QFont.Weight.Bold))
             cap.setStyleSheet(f"color:{TEXT_FAINT};")
-            lay.addWidget(cap)
+            row.addWidget(cap)
             self._group_captions.append(cap)
 
         if not self._is_simple_chart:
-            ma_w, ma = self._button_group_widget()
-            caption(ma, tr("이동평균", "MA"))
-            for key in _MA_KEYS:
-                series_button(ma, key)
-            if has_ew:      # the equal-weight index line sits with the other price-panel lines
-                series_button(ma, "EW")
-            if has_idx:     # the stock's market index, right of MA50 (user direction 2026-11-17)
-                series_button(ma, "IDX")
-                self._series_buttons["IDX"].setToolTip(
-                    tr(f"{self._market} 지수를 가격축에 겹쳐 표시합니다 (보이는 구간의 첫날 종가에 맞춤).",
-                       f"Overlay the {self._market} index on the price axis (rebased to the first bar in view)."))
-            row.addWidget(ma_w)
+            caption(tr("이동평균", "MA"))
+            has_ch = self._has_data and bool(self._overlays)
+            keys = [*_MA_KEYS, *(["EW"] if has_ew else []), *(["IDX"] if has_idx else []),
+                    *(["CH"] if has_ch else [])]
+            row.addWidget(self._build_ma_dropdown(keys))
+            row.addSpacing(12)
 
-        # 보조지표 (the divergence series drives its panel; volume / RSI panel
-        # toggles), then 기간 in the same group.
-        ind_w, ind = self._button_group_widget()
-        caption(ind, tr("보조지표", "Indicators"))
+        # 보조지표: the divergence series drives its panel; volume / RSI are panel toggles.
+        caption(tr("보조지표", "Indicators"))
         if not self._is_simple_chart:
-            series_button(ind, "Div")
+            btn = _segment_button(_SERIES["Div"], checked=("Div" in _DEFAULT_SERIES))
+            btn.clicked.connect(lambda checked: self._set_series("Div", checked))
+            row.addWidget(btn)
+            self._series_buttons["Div"] = btn
         for key, label in (("vol", tr("거래량", "Volume")), ("rsi", "RSI")):
             btn = _segment_button(label)
             btn.clicked.connect(lambda checked, k=key: self._set_panel(k, checked))
-            ind.addWidget(btn)
+            row.addWidget(btn)
             self._panel_buttons[key] = btn
-        ind.addSpacing(18)
-        caption(ind, tr("기간", "Period"))
-        self._period_group = QButtonGroup(self)
-        self._period_group.setExclusive(True)
-        self._period_buttons = {}
-        for label, months in _PERIODS:
-            btn = _segment_button(_PERIOD_LABELS[label], self._period_group, checked=(label == _DEFAULT_PERIOD))
-            btn.clicked.connect(lambda _c, m=months, lbl=label: self._on_period_clicked(lbl, m))
-            ind.addWidget(btn)
-            self._period_buttons[label] = btn
-        row.addWidget(ind_w)
-
-        # One width for every button of the row, from the widest label (a
-        # fixed 52 px once cut the first digit of "3개월").
-        buttons = [*self._series_buttons.values(), *self._panel_buttons.values(), *self._period_buttons.values()]
+        buttons = [b for b in (self._series_buttons.get("Div"), *self._panel_buttons.values()) if b is not None]
         seg_w = max(b.sizeHint().width() for b in buttons)
         for b in buttons:
             b.setFixedWidth(seg_w)
+        row.addSpacing(12)
 
-        # As-of date at the right end of the (last) button line: an Ignored
-        # policy makes FlowLayout stretch it to the line's end, and it never
-        # gets narrower than its text.
+        caption(tr("기간", "Period"))
+        self._period_combo = QComboBox()
+        self._period_combo.setFont(create_font(FONT_BODY, style_name="Semilight"))
+        self._period_combo.setFixedHeight(_SEG_H)
+        for label, _months in _PERIODS:
+            self._period_combo.addItem(_PERIOD_LABELS[label], label)
+        self._period_combo.setCurrentIndex(self._period_combo.findData(_DEFAULT_PERIOD))
+        self._period_combo.currentIndexChanged.connect(self._on_period_index)
+        row.addWidget(self._period_combo)
+        # The 이동평균 and 기간 drop-downs share one width (user direction
+        # 2026-11-18): the wider of the two needs.
+        if self._ma_btn is not None:
+            drop_w = max(self._ma_btn.width(), self._period_combo.sizeHint().width())
+            self._ma_btn.setFixedWidth(drop_w)
+            self._period_combo.setFixedWidth(drop_w)
+        row.addStretch(1)
+
         as_of = ""
         if self._has_data:
             last_day = pd.to_datetime(self._df.get_column('Date')[-1]).strftime('%Y-%m-%d')
@@ -344,11 +345,80 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         self._as_of_lbl.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
         self._as_of_lbl.setStyleSheet(f"color:{TEXT_FAINT};")
         self._as_of_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self._as_of_lbl.setMinimumWidth(self._as_of_lbl.sizeHint().width())
-        self._as_of_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         if as_of:
             row.addWidget(self._as_of_lbl)
         return row_w
+
+    def _build_ma_dropdown(self, keys: list) -> QPushButton:
+        """The 이동평균 drop-down: a button whose menu holds one check box per
+        price-panel line; ticking one does not close the menu, so several
+        can be switched in one go. The button names what is ticked."""
+        self._ma_menu_keys = list(keys)
+        btn = QPushButton()
+        btn.setFixedHeight(_SEG_H)
+        btn.setFont(create_font(FONT_BODY, style_name="Semilight"))
+        menu = QMenu(btn)
+        panel = QWidget()
+        col = QVBoxLayout(panel)
+        col.setContentsMargins(12, 8, 16, 8)
+        col.setSpacing(6)
+        for key in keys:
+            cb = QCheckBox(_SERIES[key])
+            cb.setChecked(key in _DEFAULT_SERIES)
+            cb.clicked.connect(lambda checked, k=key: self._set_series(k, checked))
+            col.addWidget(cb)
+            self._series_buttons[key] = cb
+            if self._has_data and key in _MA_COLUMNS and not self._has_values(_MA_COLUMNS[key]):
+                # Not one full window in the history (a new listing): kept
+                # in the menu, greyed out, never filled in (ma60 doc 1.6).
+                cb.setText(tr(f"{_SERIES[key]} · 데이터 부족", f"{_SERIES[key]} · not enough data"))
+                cb.setEnabled(False)
+                cb.setToolTip(tr(f"{key}을 계산할 만큼 거래일 이력이 없습니다.",
+                                 f"Not enough trading history for {key}."))
+        if "CH" in self._series_buttons:
+            self._series_buttons["CH"].setToolTip("\n".join(f"{o.label}: {o.tooltip}" for o in self._overlays))
+        if "IDX" in self._series_buttons:
+            self._series_buttons["IDX"].setToolTip(
+                tr(f"{self._market} 지수를 가격축에 겹쳐 표시합니다 (보이는 구간의 첫날 종가에 맞춤).",
+                   f"Overlay the {self._market} index on the price axis (rebased to the first bar in view)."))
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(panel)
+        menu.addAction(action)
+        btn.setMenu(menu)
+        self._ma_btn, self._ma_menu = btn, menu
+        # One width for every possible summary, so ticking never moves the row
+        # (_build_view_row then widens it to the 기간 combo if that is wider).
+        widest = 0
+        for n in range(len(keys) + 1):
+            for combo in itertools.combinations(keys, n):
+                btn.setText(self._ma_summary(combo))
+                widest = max(widest, btn.sizeHint().width())
+        btn.setFixedWidth(widest)
+        self._sync_ma_button()
+        return btn
+
+    @staticmethod
+    def _ma_summary(keys) -> str:
+        names = [_SERIES[k] for k in keys]
+        if not names:
+            return tr("없음", "None")
+        if len(names) == 1:
+            return names[0]
+        # Short, so the button stays as narrow as the 기간 combo (2026-11-18).
+        return tr(f"{names[0]} 외 {len(names) - 1}", f"{names[0]} +{len(names) - 1}")
+
+    def _sync_ma_button(self) -> None:
+        """Name the ticked lines on the 이동평균 drop-down button."""
+        if self._ma_btn is None:
+            return
+        on = [k for k in self._ma_menu_keys if self._series_buttons[k].isChecked()]
+        self._ma_btn.setText(self._ma_summary(on))
+
+    def _on_period_index(self, index: int) -> None:
+        label = self._period_combo.itemData(index)
+        if label is None or self._x is None:
+            return
+        self._on_period_clicked(label, dict(_PERIODS).get(label))
 
     def _build_right_panel(self, is_stock: bool) -> QWidget:
         """The right panel (ui/dialogs/stock_ma_side.py); its pieces stay
@@ -368,8 +438,7 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         table's top level with the chart's top edge (StockMaSidePanel.align)."""
         if self._side is None or not self._side.widget.isVisible():
             return
-        buttons = list(self._series_buttons.values()) or list(self._period_buttons.values())
-        self._side.align(buttons, self._canvas)
+        self._side.align([self._period_combo], self._canvas)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -438,6 +507,10 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
             return False
         idx, close = self._col("MarketIndex"), self._col("Close")
         return bool((np.isfinite(np.asarray(idx, dtype=float)) & np.isfinite(np.asarray(close, dtype=float))).any())
+
+    def _has_values(self, name: str) -> bool:
+        arr = self._col(name)
+        return arr is not None and bool(np.isfinite(np.asarray(arr, dtype=float)).any())
 
     def _col(self, name: str):
         return self._df.get_column(name).to_numpy() if name in self._df.columns else None

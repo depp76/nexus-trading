@@ -18,7 +18,10 @@ from data.cache import (
 )
 from data.frames import _to_polars
 from data.indicators import (
+    CHART_MA_WINDOWS,
     _compute_indicators,
+    add_chart_mas,
+    chart_ma_column,
     fetch_historical_changes,
 )
 from data.listing import (  # noqa: F401 - re-exported for callers of data.market
@@ -448,26 +451,27 @@ def get_index_close_for_date(ticker: str, date_str: str) -> float:
     return 0.0
 
 
+# Index MA window lines (docs/ma60_unification_2026-11-18.md 1.2-4): the
+# strategy's 60-day line and the long 200-day reference.
+INDEX_MA_WINDOWS = (60, 200)
+
+
 def fetch_index_mas(fdr_ticker, days=365):
-    """Fetches closing prices for any FDR index ticker and computes 20 & 50-day MA."""
+    """Close + strict SMA60 / SMA200 (min_samples=window) of an index for the
+    last `days` calendar days. The averages are computed over a longer frame
+    (_load_with_warmup: 199 valid sessions before the first shown day) and the
+    result is cut to the shown range afterwards, so the first shown day has a
+    200-day value whenever the history exists; where it does not, it stays
+    null (the dialog says "데이터 부족")."""
     try:
-        start = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-        if fdr_ticker in ("^KS11", "KS11", "KOSPI"):
-            df = _fast_kr_history("KOSPI", start)
-        elif fdr_ticker in ("^KQ11", "KQ11", "KOSDAQ"):
-            df = _fast_kr_history("KOSDAQ", start)
-        else:
-            df_pd = fdr.DataReader(fdr_ticker, start)
-            df = _to_polars(df_pd)
+        display_start = (datetime.now() - timedelta(days=days)).date()
+        full = _load_with_warmup(fdr_ticker, display_start)
+        if full.is_empty() or "Close" not in full.columns:
+            return None, f"No data for ticker '{fdr_ticker}'."
+        df = add_chart_mas(full.select([pl.col("Date"), pl.col("Close").cast(pl.Float64)]), INDEX_MA_WINDOWS)
+        df = df.filter(pl.col("Date") >= _date_lit(df, display_start))
         if df.is_empty():
             return None, f"No data for ticker '{fdr_ticker}'."
-        df = df.select([
-            pl.col("Date"),
-            pl.col("Close").cast(pl.Float64),
-            pl.col("Close").cast(pl.Float64).rolling_mean(window_size=10, min_samples=1).alias("MA10"),
-            pl.col("Close").cast(pl.Float64).rolling_mean(window_size=20, min_samples=1).alias("MA20"),
-            pl.col("Close").cast(pl.Float64).rolling_mean(window_size=50, min_samples=1).alias("MA50"),
-        ])
         return df, None
     except Exception as e:
         # boundary: contract is (None, message) on any failure; FinanceDataReader raises arbitrary types.
@@ -476,7 +480,7 @@ def fetch_index_mas(fdr_ticker, days=365):
 
 
 def fetch_all_indices_mas(days=365):
-    """Fetch 20 & 50-day MA data for major indices concurrently."""
+    """fetch_index_mas for the major indices, concurrently."""
     def _fetch(label_ticker):
         label, (fdr_ticker, _color) = label_ticker
         df, err = fetch_index_mas(fdr_ticker, days)
@@ -539,26 +543,82 @@ def _load_ohlcv_window(ticker: str, start: str, end: str = None) -> pl.DataFrame
     return _to_polars(df_pd)
 
 
+# Valid sessions loaded ahead of the first shown day so a 200-day average
+# has a value there (docs/ma60_unification_2026-11-18.md 1.6).
+_WARMUP_BARS = 199
+
+
+def _date_lit(df: pl.DataFrame, d: date) -> pl.Expr:
+    """`d` as a literal of `df`'s Date dtype (Date or Datetime)."""
+    return pl.lit(d).cast(df.schema["Date"])
+
+
+def _as_date(v) -> date:
+    return v.date() if isinstance(v, datetime) else v
+
+
+def _load_with_warmup(ticker: str, display_start: date, end: date = None,
+                      bars: int = _WARMUP_BARS) -> pl.DataFrame:
+    """_load_ohlcv_window from early enough that `bars` valid closes precede
+    `display_start`. A calendar guess (~1.5 calendar days a session) is
+    doubled while the count falls short (a trading halt before the shown
+    range), until a longer request brings no older bar: then the history
+    simply begins there (a new listing) and the frame is returned as it is --
+    its first averages stay missing, they are never back-filled."""
+    end_s = end.strftime("%Y-%m-%d") if end else None
+    days = int(bars * 365 / 240) + 14
+    df, first = pl.DataFrame(), None
+    for _ in range(4):
+        start = display_start - timedelta(days=days)
+        longer = _load_ohlcv_window(ticker, start.strftime("%Y-%m-%d"), end_s)
+        if longer.is_empty() or "Close" not in longer.columns:
+            return df if not df.is_empty() else longer
+        new_first = _as_date(longer.get_column("Date")[0])
+        if first is not None and new_first >= first:
+            return df                       # nothing older exists
+        df, first = longer, new_first
+        before = df.filter((pl.col("Date") < _date_lit(df, display_start)) & pl.col("Close").is_not_null()).height
+        if before >= bars:
+            return df
+        days *= 3
+    return df
+
+
 def fetch_stock_ma_multi(ticker, market, windows=(10, 20, 60), days=1825, target_year=None):
     """Fetches OHLCV for a single stock and computes MA/RSI using Polars.
 
-    target_year=None: trailing `days` calendar days (at least 3x the widest
-    window). target_year=YYYY: Sep 1 of the prior year through Dec 31 of that
-    year, so the indicators have warm-up history before January.
+    target_year=None: the trailing `days` calendar days (at least 3x the
+    widest window) are shown. target_year=YYYY: Sep 1 of the prior year
+    through Dec 31 of that year.
+
+    RSI, the MA<w> columns and the divergence ratios come from
+    _compute_indicators over the shown range exactly as before. The chart's
+    strict SMA20/50/60/200 columns are computed over a longer frame
+    (_load_with_warmup) and joined on Date, so they have values from the
+    first shown day whenever the history exists (2026-11-18).
     """
     try:
         if target_year is not None:
-            start = f"{target_year - 1}-09-01"
-            end = f"{target_year}-12-31"
+            display_start = date(target_year - 1, 9, 1)
+            end = date(target_year, 12, 31)
         else:
             max_window = max(windows)
-            start = (datetime.now() - timedelta(days=max(days, max_window * 3))).strftime("%Y-%m-%d")
+            display_start = (datetime.now() - timedelta(days=max(days, max_window * 3))).date()
             end = None
 
-        df = _load_ohlcv_window(ticker, start, end)
-        if df.is_empty():
+        full = _load_with_warmup(ticker, display_start, end)
+        if full.is_empty():
             return None, f"No data for '{ticker}'."
-        return _compute_indicators(df, windows), None
+        shown = full.filter(pl.col("Date") >= _date_lit(full, display_start))
+        if shown.is_empty():
+            return None, f"No data for '{ticker}'."
+        df = _compute_indicators(shown, windows)
+        sma_cols = [chart_ma_column(w) for w in CHART_MA_WINDOWS]
+        chart = (add_chart_mas(full.select(["Date", "Close"]), CHART_MA_WINDOWS)
+                 .select(["Date", *sma_cols])
+                 .unique(subset="Date", keep="last", maintain_order=True)
+                 .with_columns(pl.col("Date").cast(df.schema["Date"])))
+        return df.join(chart, on="Date", how="left"), None
     except Exception as e:
         # boundary: contract is (None, message) on any failure; FinanceDataReader raises arbitrary types.
         logger.warning("fetch_stock_ma_multi failed for ticker=%s", ticker, exc_info=True)

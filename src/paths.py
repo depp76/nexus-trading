@@ -47,3 +47,7 @@ KRX_CALENDAR_CACHE_FILE = root_path("cache", "krx_calendar.json")
 
 # Backtest reports written by the Strategy tab ("Save Report").
 REPORTS_DIR = root_path("reports")
+# One JSON line per Strategy-tab research run whose dates reach past the
+# development window (trend_following.md 6-5 / 9-23 / 10-7): the record of
+# when the hold-out was opened. Not a cache -- never delete it to "clean up".
+HOLDOUT_LEDGER_FILE = root_path("holdout_ledger.jsonl")

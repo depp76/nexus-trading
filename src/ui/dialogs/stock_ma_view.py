@@ -8,7 +8,7 @@ Y zoom (_zoom_y).
 
 Dialog state it uses
 --------------------
-reads   _x, _dates, _panel_axes, _period_buttons, _canvas; _col() (dialog),
+reads   _x, _dates, _panel_axes, _period_combo, _canvas; _col() (dialog),
         _price_series_visible / _place_end_labels / _fit_margins (_PlotMixin)
 writes  _x_lo, _x_hi, scrollbar, _pan_start
 
@@ -129,8 +129,12 @@ class _ViewMixin:
         self._apply_period(label, months)
 
     def _apply_period(self, label: str, months=None) -> None:
-        if label in self._period_buttons and not self._period_buttons[label].isChecked():
-            self._period_buttons[label].setChecked(True)
+        combo = self._period_combo
+        i = combo.findData(label)
+        if i >= 0 and combo.currentIndex() != i:
+            combo.blockSignals(True)
+            combo.setCurrentIndex(i)
+            combo.blockSignals(False)
         if months is None:
             months = dict(_PERIODS).get(label)
         if months is None:

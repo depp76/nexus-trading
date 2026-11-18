@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from i18n import tr
-from strategy.trend_following.config import VARIANTS, StrategyParams, Variant
+from strategy.trend_following.config import StrategyParams, Variant, get_variant
 
 
 @dataclass(frozen=True)
@@ -126,7 +126,7 @@ Section = tuple[str, tuple[str, ...]]
 def describe_variant(vid: str, params: StrategyParams | None = None) -> VariantDescription:
     """The description of matrix row `vid` with the numbers of `params`
     (the StrategyParams defaults when None)."""
-    v = VARIANTS[vid]
+    v = get_variant(vid)
     p = params or StrategyParams()
     if v.mode == "score":
         p = v.apply(p)
@@ -205,8 +205,8 @@ def _score_gate_section(p: StrategyParams) -> Section:
                  else tr(f"Range52 = {p.score_range_window}일 최저~최고 범위 안에서 종가의 위치",
                          f"Range52 = position of the close in its {p.score_range_window}-day low-high range"))
     return (tr("게이트 (모두 통과해야 함)", "Gate (all must pass)"), (
-        tr(f"종가가 {p.score_ma_long}일선 위(MA50Div > 0).",
-           f"Close above MA{p.score_ma_long} (MA50Div > 0)."),
+        tr(f"종가가 {p.score_ma_long}일선 위(MA{p.score_ma_long}Div > 0).",
+           f"Close above MA{p.score_ma_long} (MA{p.score_ma_long}Div > 0)."),
         tr(f"추세 위치 ≥ {p.gate_range_min:g}, 기준: {range_ind}.",
            f"Trend position ≥ {p.gate_range_min:g}, using {range_ind}."),
         tr(f"과열 아님: MA20Div가 유동성 충족 종목 중 상위 {(1 - p.gate_overheat_pct) * 100:g}% 밖.",
@@ -221,9 +221,9 @@ def _score_formula_section(p: StrategyParams) -> Section:
             else tr("R3와 MA20Div를 원래 수익률 그대로 사용(변동성 정규화 없음).",
                     "R3 and MA20Div are used as raw returns (no volatility normalisation)."))
     return (tr("점수", "Score"), (
-        tr(f"추세점수 = pct(MA50Div) + pct(추세 위치), 타이밍점수 = −pct(R{p.score_r_short}): "
+        tr(f"추세점수 = pct(MA{p.score_ma_long}Div) + pct(추세 위치), 타이밍점수 = −pct(R{p.score_r_short}): "
            f"최근에 눌린 종목일수록 점수가 높음. 가중치 1 : 1 : 1.",
-           f"Trend score = pct(MA50Div) + pct(trend position); timing score = −pct(R{p.score_r_short}), "
+           f"Trend score = pct(MA{p.score_ma_long}Div) + pct(trend position); timing score = −pct(R{p.score_r_short}), "
            f"so a recent dip scores higher. Weights 1 : 1 : 1."),
         norm,
     ))

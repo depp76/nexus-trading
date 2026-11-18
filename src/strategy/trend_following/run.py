@@ -21,7 +21,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from paths import BASE_DIR, CACHE_DIR
-from strategy.trend_following.config import DEV_END, DEV_START, SPEC_VERSION, VARIANTS
+from strategy.trend_following.config import DEV_END, DEV_START, SPEC_VERSION, VARIANTS, get_variant
 from strategy.trend_following.dataset import load_dataset
 from strategy.trend_following.factor_ic import run_factor_ic
 from strategy.trend_following.research import ResearchRequest, run_research
@@ -123,16 +123,18 @@ def run_from_snapshot(snapshot, out_dir=None, variants: tuple[str, ...] | None =
 
 def run_robustness_from_snapshot(snapshot, out_dir=None, variants: tuple[str, ...] | None = None,
                                  flow_contamination: int = 0, prior_trials: int = 0, progress=None,
-                                 commit: str | None = None) -> Path:
+                                 commit: str | None = None, cash_interest_reference: bool = False) -> Path:
     """E1/E2/E4/E5 checklist-form report (robustness.py) on a snapshot; returns the saved report path.
-    `flow_contamination=1` adds the validation-only A2 comparison (default off)."""
+    `flow_contamination=1` adds the validation-only A2 comparison (default off);
+    `cash_interest_reference` the spec 10-4 cash-interest-0 reruns at 1x (default off)."""
     folder = resolve_snapshot(str(snapshot))
     manifest = read_manifest(folder)
     ds = load_snapshot(folder)                       # verifies the content hash
     req = RobustnessRequest(
         research=ResearchRequest(start=ds.eval_dates[0], variant_ids=tuple(variants or VARIANTS),
                                  include_flows=ds.flow_fi is not None, run_event_study=False),
-        flow_contamination=flow_contamination, prior_trials=prior_trials)
+        flow_contamination=flow_contamination, prior_trials=prior_trials,
+        cash_interest_reference=cash_interest_reference)
     result = run_robustness(ds, req, progress=progress)
     md = result.to_markdown(report_header(manifest, commit if commit is not None else git_commit()))
     out = Path(out_dir) if out_dir else DEFAULT_REPORT_DIR
@@ -176,7 +178,8 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--snapshot", help="snapshot folder, or a name under cache/snapshots/")
     g.add_argument("--build-snapshot", metavar="NAME", help=f"load the development window and save it as {SNAPSHOT_ROOT}/NAME")
     ap.add_argument("--out", help=f"report folder (default {DEFAULT_REPORT_DIR})")
-    ap.add_argument("--variants", help="comma separated variant ids (default: all)")
+    ap.add_argument("--variants", help="comma separated variant ids (default: the 6-2 matrix A0-C3; "
+                                       "the v07 candidates C1L,C2L,C3L only when named, spec 10)")
     ap.add_argument("--no-event-study", action="store_true")
     ap.add_argument("--factor-ic", action="store_true",
                     help="--snapshot: write the 6-1-2 factor IC / quintile report instead of the backtest matrix")
@@ -184,6 +187,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="--snapshot: write the checklist-form E1/E2/E4/E5 robustness report instead of the matrix")
     ap.add_argument("--a2-contaminate", action="store_true",
                     help="--robustness: add the validation-only A2 comparison with investor flows one session early")
+    ap.add_argument("--cash-interest-ref", action="store_true",
+                    help="--robustness: also rerun each variant at 1x with no interest on cash (spec 10-4, reference)")
     ap.add_argument("--prior-trials", type=int, default=0,
                     help="--robustness: strategy backtests counted in earlier reports (E5 running total)")
     ap.add_argument("--universe-size", type=int, default=200)
@@ -204,9 +209,12 @@ def main(argv: list[str] | None = None) -> int:
         say(f"report saved: {run_factor_ic_from_snapshot(args.snapshot, args.out)}")
         return 0
     variants = tuple(v.strip() for v in args.variants.split(",")) if args.variants else None
+    for vid in variants or ():
+        get_variant(vid)                     # unknown ids fail here, before the snapshot is loaded
     if args.robustness:
         path = run_robustness_from_snapshot(args.snapshot, args.out, variants, int(args.a2_contaminate),
-                                            args.prior_trials, progress=say)
+                                            args.prior_trials, progress=say,
+                                            cash_interest_reference=args.cash_interest_ref)
         say(f"report saved: {path}")
         return 0
     path =run_from_snapshot(args.snapshot, args.out, variants, not args.no_event_study, progress=say)

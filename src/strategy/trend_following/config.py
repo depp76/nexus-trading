@@ -115,6 +115,9 @@ SCORE_LABELS = {
     "C1": "L1 + trend/pullback score (ATR-normalised, Range52)",
     "C2": "C1 without volatility normalisation",
     "C3": "C1 with Range52 -> 52w-high proximity",
+    "C1L": "C1 with the trend line at 60 days (v07 candidate, spec 10)",
+    "C2L": "C2 with the trend line at 60 days (v07 candidate, spec 10)",
+    "C3L": "C3 with the trend line at 60 days (v07 candidate, spec 10)",
 }
 
 VARIANTS: dict[str, Variant] = {
@@ -133,6 +136,32 @@ VARIANTS: dict[str, Variant] = {
                   score_overrides=(("score_range_mode", "high52_prox"),)),
 }
 
+# Spec 10 (v07 research plan, registered 2026-11-18, not a rule): C1'-C3' = C1-C3 with
+# score_ma_long 60 instead of 50 and nothing else changed. Headless runner only (run.py
+# --variants / --robustness): kept out of VARIANTS so the Strategy tab picker, the Universe
+# "전략 신호" menu and the MA chart "전략 점검" never offer them -- every run of them is a
+# counted trial of the 10-2 plan.
+_V07_MA = (("score_ma_long", 60),)
+V07_VARIANTS: dict[str, Variant] = {
+    "C1L": Variant("C1L", regime=True, volume=False, flow=False, flow_exit=False, mode="score",
+                   score_overrides=_V07_MA),
+    "C2L": Variant("C2L", regime=True, volume=False, flow=False, flow_exit=False, mode="score",
+                   score_overrides=(("score_vol_normalize", False),) + _V07_MA),
+    "C3L": Variant("C3L", regime=True, volume=False, flow=False, flow_exit=False, mode="score",
+                   score_overrides=(("score_range_mode", "high52_prox"),) + _V07_MA),
+}
+# Every variant the research / robustness runners accept: the matrix rows plus the v07 candidates.
+RESEARCH_VARIANTS: dict[str, Variant] = {**VARIANTS, **V07_VARIANTS}
+
+
+def get_variant(vid: str) -> Variant:
+    """A matrix row (VARIANTS) or a v07 candidate (V07_VARIANTS) by id."""
+    try:
+        return RESEARCH_VARIANTS[vid]
+    except KeyError:
+        raise KeyError(f"unknown variant {vid!r}; known: {', '.join(RESEARCH_VARIANTS)}") from None
+
+
 # 4-1 mandatory sensitivity scenarios: no cost / base / conservative.
 COST_MULTIPLIERS: tuple[float, ...] = (0.0, 1.0, 2.0)
 
@@ -150,12 +179,16 @@ IC_VERDICT_HORIZON = 20
 # One field at a time, everything else at StrategyParams() defaults; the runner reads only this constant
 # and refuses any (field, value) pair that is not in it. Rows: (id, field, value, variants it applies to).
 # C1-C3 have no neighbour runs (2-5 (6) defaults and regime_ma = 60 stay fixed); no grid combinations.
+# N6 / N7 (spec 10-2, registered 2026-11-18): the v07 candidates' trend line, 60 -> 50 / 80; the
+# runner applies the neighbour value after the variant's own score_overrides (10-9 item 2).
 E2_NEIGHBORS: tuple[tuple[str, str, object, tuple[str, ...]], ...] = (
     ("N1", "breakout_window", 15, ("A0", "A1", "A2", "A3", "A4", "A5")),
     ("N2", "breakout_window", 25, ("A0", "A1", "A2", "A3", "A4", "A5")),
     ("N3", "trend_ma_long", 120, ("A0", "A1", "A2", "A3", "A4", "A5", "B")),
     ("N4", "regime_ma", 20, ("A1", "A2", "A3", "A4", "A5", "B")),
     ("N5", "regime_ma", 120, ("A1", "A2", "A3", "A4", "A5", "B")),
+    ("N6", "score_ma_long", 50, ("C1L", "C2L", "C3L")),
+    ("N7", "score_ma_long", 80, ("C1L", "C2L", "C3L")),
 )
 # Checklist E2: a neighbour whose full-window Sharpe differs from the base run by more than this fails.
 E2_SHARPE_JUMP = 0.5
