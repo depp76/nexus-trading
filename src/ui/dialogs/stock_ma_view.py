@@ -104,7 +104,7 @@ class _ViewMixin:
                     self._panel_axes["vol"].set_ylim(0, float(v.max()) * 1.1)
 
         if "div" in self._panel_axes:
-            rng = span([self._col("MA20_Div"), self._col("MA50_Div")], 0.0)
+            rng = span([self._col("MA20_Div"), self._col("MA60_Div")], 0.0)
             if rng:
                 # Symmetric about 100 so the baseline sits mid-panel (issue #6).
                 r = max(abs(rng[1] - 100), abs(100 - rng[0])) + MA_DIV_NEUTRAL_PCT

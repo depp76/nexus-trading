@@ -127,7 +127,8 @@ class TestFetchHistoricalChanges(unittest.TestCase):
         self.assertAlmostEqual(ch["52w_high"], max(self.closes))
         self.assertAlmostEqual(ch["52w_high_diff"], (cp - max(self.closes)) / max(self.closes) * 100)
         self.assertAlmostEqual(ch["ma20_div"], cp / (sum(self.closes[-20:]) / 20) * 100)
-        self.assertAlmostEqual(ch["ma50_div"], cp / (sum(self.closes[-50:]) / 50) * 100)
+        self.assertAlmostEqual(ch["ma60_div"], cp / (sum(self.closes[-60:]) / 60) * 100)   # MA50 until 2026-11-18
+        self.assertNotIn("ma50_div", ch)
         self.assertNotEqual(ch["ma20_roc_1w"], 0.0)
 
     def test_bp_mode_is_absolute_times_100(self):
@@ -139,7 +140,7 @@ class TestFetchHistoricalChanges(unittest.TestCase):
         self.assertAlmostEqual(ch["52w_low_diff"], (cp - min(self.closes)) * 100)
         # MA divergence is a pct-mode-only concept
         self.assertEqual(ch["ma20_div"], 0.0)
-        self.assertEqual(ch["ma50_div"], 0.0)
+        self.assertEqual(ch["ma60_div"], 0.0)
         self.assertEqual(ch["ma20_roc_1w"], 0.0)
 
     def test_abs_mode_reports_level_deltas(self):

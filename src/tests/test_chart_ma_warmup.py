@@ -103,7 +103,7 @@ class TestStockFetchWarmup(unittest.TestCase):
         start = df.get_column("Date")[0]
         before = _compute_indicators(hist.filter(pl.col("Date") >= start), (20,))
         self.assertEqual(df.height, before.height)
-        for col in ("MA20_Div", "MA50_Div", "RSI14", "MA20", "MA50"):
+        for col in ("MA20_Div", "MA60_Div", "RSI14", "MA20", "MA60"):
             self.assertTrue(_frame_equal(df.get_column(col), before.get_column(col)), col)
 
     def test_a_longer_lookback_does_not_change_a_days_value(self):
@@ -214,7 +214,7 @@ class TestStockChartMenu(unittest.TestCase):
     def test_divergence_lines_keep_their_colours(self):
         d = StockMaDialog("005930", "Samsung", "KOSPI", self.df)
         self.assertEqual(d._lines["Div(20)"].get_color(), "#d1c5ff")
-        self.assertEqual(d._lines["Div(50)"].get_color(), "#a993ff")
+        self.assertEqual(d._lines["Div(60)"].get_color(), "#a993ff")      # the long divergence line: MA60
         d.close()
 
     def test_period_change_keeps_the_values(self):

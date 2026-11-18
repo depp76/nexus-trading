@@ -119,8 +119,8 @@ class TestStockChart(unittest.TestCase):
         d._series_buttons["Div"].click()
         self.assertTrue(d._panel_axes["div"].get_visible())
 
-    def test_market_index_toggle_sits_right_of_ma50(self):
-        """2026-11-17 (user direction): a 시장지수 button right of MA50 overlays
+    def test_market_index_toggle_sits_after_the_mas(self):
+        """2026-11-17 (user direction): a 시장지수 button after the MAs overlays
         the stock's market index, rebased to the close at the view's first
         bar; its end label and hover show the index level itself."""
         d = StockMaDialog("005930", "Samsung", "KOSPI", _df(index=True))

@@ -14,7 +14,7 @@ below; new code imports from those modules directly.
 from ui.table_items import ColSpec, NumericItem
 from ui.universe_columns import (
     COLUMNS, COL_IDENTITY, COL_CAP, COL_TPER, COL_FPER, COL_PRICE, COL_CHG, COL_RANGE52W,
-    COL_MA20DIV, COL_MA50DIV, COL_D3, COL_D10, COL_D20, COL_D60, COL_D120, COL_TREND,
+    COL_MA20DIV, COL_MA60DIV, COL_D3, COL_D10, COL_D20, COL_D60, COL_D120, COL_TREND,
     GROUP_START_COLS, GROUP_LINE_W,
 )
 from ui.heat_legend import HeatLegend
@@ -25,7 +25,7 @@ from ui.universe_table import StockTable
 __all__ = [
     "ColSpec", "NumericItem",
     "COLUMNS", "COL_IDENTITY", "COL_CAP", "COL_TPER", "COL_FPER", "COL_PRICE", "COL_CHG", "COL_RANGE52W",
-    "COL_MA20DIV", "COL_MA50DIV", "COL_D3", "COL_D10", "COL_D20", "COL_D60", "COL_D120", "COL_TREND",
+    "COL_MA20DIV", "COL_MA60DIV", "COL_D3", "COL_D10", "COL_D20", "COL_D60", "COL_D120", "COL_TREND",
     "GROUP_START_COLS", "GROUP_LINE_W",
     "HeatLegend", "FilterPopup", "RangeFilterPopup", "FilterableHeader", "GroupedHeaderView", "StockTable",
 ]

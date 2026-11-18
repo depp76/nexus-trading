@@ -1040,3 +1040,17 @@ Phase 0~6 계획표는 `docs/history/ui_archive_2026-09_10.md`로 옮겼다. Pha
   `weekly_check_days` 확인 결과: 점검 요일이 월요일(기본)이면 미완성 주의 첫 거래일이 그대로 진짜 점검일이라 잠정이 아니다.
   점검 요일이 그 주에 아직 오지 않았는데 마지막 거래일이 대신 점검일로 뽑힌 경우만 그 날부터 잠정으로 표시한다(그 주 월요일 등은 지난주 점검으로 확정).
 - **참고**: `IndexMaDialog`를 여는 코드는 현재 앱에 없다(`IndexMaThread`도 호출처 없음, 2026-11-18 확인). 창·스레드는 이 절대로 갖춰 두었다.
+
+### 8.25 MA50 → MA60 전체 전환 (2026-11-18)
+
+사용자 지시("ma50은 60으로 모두 변환"). 스펙 v07(10-13)로 전략의 추세선이 60일이 되어, 화면과 데이터에 남아 있던 50일 기준을 모두 60일로 바꿨다.
+
+- **Universe 표**: `MA50 Div` 열 → **`MA60 Div`**(열 키 `ma60div`, 셀 값 = 가격 / 60일 이평 × 100, 60개 종가 미만이면 "-"). 범위 필터도 `MA60 Div`.
+  데이터 키는 `changes["ma60_div"]`(`data.indicators.fetch_historical_changes`). 이전 캐시(`universe_cache.json`)의 50일 값은 의미가 달라 옮기지 않고,
+  시작할 때의 새로고침에서 다시 계산될 때까지 "-"로 보인다.
+- **저장된 보기**: `ma50div` 범위 필터는 읽을 때 `ma60div`로 옮긴다(`ui.universe_views.LEGACY_RANGE_KEYS` / `migrate_views`, 입력한 범위 값은 그대로).
+  `custom_settings.json`에 옮긴 결과를 저장하고 상태 표시줄에 한 번 안내한다. 2026-11-18 현재 이 PC의 저장된 보기는 0개라 옮길 것이 없었다.
+- **MA 차트 이격도 패널**: 이격도(50) → **이격도(60)** 선(`MA60_Div`, 색은 이전 그대로 `MA_DIV_LONG_COLOR`). 데이터 쪽 `_compute_indicators`는 MA50 대신
+  MA60을 늘 계산한다(`windows`에 60이 있어도 한 번만).
+- **그 밖**: AI 종목 리포트 입력 `ma60_divergence`, 이평 차트 로딩 문구. 전략 패키지의 필드 이름(`ma50_div`, `pct_ma50`)과 청산 사유 키 `ma50_exit`는
+  화면에 보이지 않는 식별자라 호환을 위해 유지한다(스펙 10-8 별도 작업). 테스트 `tests/test_ma60_conversion.py`.

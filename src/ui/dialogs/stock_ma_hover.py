@@ -64,7 +64,7 @@ class _HoverMixin:
         self._canvas.draw_idle()
 
     def _hover_text(self, key: str, v: float) -> str:
-        if key in ("Div(20)", "Div(50)"):
+        if key in ("Div(20)", "Div(60)"):
             return tr(f"{key.replace('Div', '이격도')} {v:.1f}", f"{key} {v:.1f}")
         if key == "RSI":
             return f"RSI {v:.0f}"

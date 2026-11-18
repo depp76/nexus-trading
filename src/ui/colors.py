@@ -69,12 +69,12 @@ MA_DIV_NEUTRAL_PCT = 2.0
 # 2026-11-18 (docs/ma60_unification_2026-11-18.md): the chart draws MA20 /
 # MA50 / MA60 / MA200 (MA10 gone). The ramp has no room below MA50's old
 # 3.1:1 step, so the four lines take the four steps, shorter = lighter. MA5
-# keeps its colour (the MA20 divergence line uses it) and the MA50
-# divergence line keeps its old colour through MA_DIV50_COLOR.
+# keeps its colour (the MA20 divergence line uses it) and the long
+# divergence line (MA50, MA60 since the same day) keeps its old colour through MA_DIV_LONG_COLOR.
 # Later the same day MA50 left the chart menu (spec v07): three lines on the ramp's first,
 # second and last steps (6.2 / 4.9 / 3.1:1), so neighbours stay well apart.
 MA_RAMP = {"MA5": "#d1c5ff", "MA20": "#d1c5ff", "MA60": "#bcabff", "MA200": "#977cff"}
-MA_DIV50_COLOR = "#a993ff"     # was MA_RAMP["MA20"] before 2026-11-18
+MA_DIV_LONG_COLOR = "#a993ff"  # the MA60 divergence line (was MA_RAMP["MA20"] before 2026-11-18)
 
 # Pre-allocated QColor instances -- avoids re-parsing the hex string on every
 # cell of every row (_populate_row/fill_table_rows run per cell per refresh).

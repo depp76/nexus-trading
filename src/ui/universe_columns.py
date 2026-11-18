@@ -24,7 +24,7 @@ from ui.universe_views import RANGE_FIELDS
 # into one identity cell (with an inline status badge, replacing the Pf
 # button column), a single 52W range bar (replacing 4 columns), Div(20) and
 # Div(50) merged into one "MA20 Div" (Div(50) dropped -- the mockup doesn't
-# carry it; MA50 Div re-added as its own column on 2026-09-22 by user
+# carry it; MA50 Div re-added as its own column on 2026-09-22 by user (MA60 Div since 2026-11-18, spec v07)
 # direction, so the table is 15 columns again), momentum as 3D/10D/20D/60D/120D
 # (5D dropped; 10D re-added on 2026-09-19 by user direction), a new
 # "Chg" day-over-day column (data/cache.py's _TD_PERIODS now has a "1d"
@@ -47,7 +47,7 @@ from ui.universe_views import RANGE_FIELDS
 # won price or market cap is not wall-to-wall); Chg, MA20 Div and every
 # momentum column share the 3D column's width; 10D is back next to 3D.
 # User direction 2026-10-02: column order is Cap, tPER, fPER, 52W Range,
-# MA20 Div, MA50 Div, Price, Chg, 3D ... (Price/Chg moved next to the
+# MA20 Div, MA60 Div, Price, Chg, 3D ... (Price/Chg moved next to the
 # momentum block; the PER pair sits right of Cap). User direction
 # 2026-10-20: Price and Chg moved again, to the left of 52W Range. _populate_row still builds cells in its own order and
 # addresses them by the COL_* constants, so only this list and the
@@ -63,7 +63,7 @@ COLUMNS = [
     ColSpec("chg",       tr("등락", "Chg"),    _NARROW_W, _NARROW_WEIGHT, "price",    5),
     ColSpec("range52w",  tr("52주 범위", "52W Range"), 112, 1.5,  "price",    None),
     ColSpec("ma20div",   "MA20 Div",       _NARROW_W, _NARROW_WEIGHT, "momentum", 20),
-    ColSpec("ma50div",   "MA50 Div",       _NARROW_W, _NARROW_WEIGHT, "momentum", 20),
+    ColSpec("ma60div",   "MA60 Div",       _NARROW_W, _NARROW_WEIGHT, "momentum", 20),   # MA50 Div until 2026-11-18
     ColSpec("d3",        "3D",             _NARROW_W, _NARROW_WEIGHT, "momentum", 10),
     ColSpec("d10",       "10D",            _NARROW_W, _NARROW_WEIGHT, "momentum", 10),
     ColSpec("d20",       "20D",            _NARROW_W, _NARROW_WEIGHT, "momentum", 10),
@@ -77,15 +77,15 @@ COLUMNS = [
 # is meant makes future reordering a silent bug. Kept in sync with COLUMNS
 # by the assertion below (fails loudly at import time if they drift).
 COL_IDENTITY, COL_CAP, COL_TPER, COL_FPER, COL_PRICE, COL_CHG, COL_RANGE52W, \
-    COL_MA20DIV, COL_MA50DIV, COL_D3, COL_D10, COL_D20, COL_D60, COL_D120, COL_TREND = range(len(COLUMNS))
+    COL_MA20DIV, COL_MA60DIV, COL_D3, COL_D10, COL_D20, COL_D60, COL_D120, COL_TREND = range(len(COLUMNS))
 assert [c.key for c in COLUMNS] == [
-    "identity", "cap", "tper", "fper", "price", "chg", "range52w", "ma20div", "ma50div",
+    "identity", "cap", "tper", "fper", "price", "chg", "range52w", "ma20div", "ma60div",
     "d3", "d10", "d20", "d60", "d120", "trend",
 ]
 
 # Column groups (user direction 2026-10-02; the [Price, Chg] pair moved left
 # of 52W Range on 2026-10-20): [Cap, tPER, fPER], [Price, Chg], [52W Range,
-# MA20 Div, MA50 Div], [3D..120D], [Trend]. A thin gray
+# MA20 Div, MA60 Div], [3D..120D], [Trend]. A thin gray
 # (GROUP_LINE_W px, LINE_GROUP = the table's outer-frame gray) vertical
 # divider sits on the boundary on the left of each group's first column
 # (the previous column's last pixel, where the grid line is): that also

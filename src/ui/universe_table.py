@@ -24,7 +24,7 @@ from ui.filter_popups import FilterPopup
 from ui.table_headers import FilterableHeader
 from ui.universe_columns import (
     COLUMNS, COL_IDENTITY, COL_CAP, COL_TPER, COL_FPER, COL_PRICE, COL_CHG, COL_RANGE52W,
-    COL_MA20DIV, COL_MA50DIV, COL_TREND, GROUP_START_COLS, GROUP_LINE_W,
+    COL_MA20DIV, COL_MA60DIV, COL_TREND, GROUP_START_COLS, GROUP_LINE_W,
     _RANGE_FILTER_COLS, _MOMENTUM_COLS, _market_label, _fmt_change, _change_bg,
 )
 
@@ -622,9 +622,10 @@ class StockTable(QTableWidget):
         self._set_range_cell(row, price_raw, changes)
         self._set_per_cells(row, item)
         self._set_ma_div_cell(row, COL_MA20DIV, changes.get("ma20_div"))
-        # COL_MA50DIV: MA50 Div (re-added 2026-09-22 by user direction; same
-        # price/MA50*100 divergence ratio, mirrors the MA20 Div cell)
-        self._set_ma_div_cell(row, COL_MA50DIV, changes.get("ma50_div"))
+        # COL_MA60DIV: MA60 Div (MA50 Div re-added 2026-09-22, moved to MA60 on 2026-11-18 with the
+        # strategy's trend line; price/MA60*100, mirrors the MA20 Div cell). A cached row from before
+        # has no "ma60_div" and shows "-" until the refresh recomputes it.
+        self._set_ma_div_cell(row, COL_MA60DIV, changes.get("ma60_div"))
         trend_points = self._set_momentum_cells(row, changes, mode)
         self._set_trend_cell(row, trend_points)
 
@@ -729,7 +730,7 @@ class StockTable(QTableWidget):
             self.setItem(row, col, cell)
 
     def _set_ma_div_cell(self, row, col, raw):
-        """COL_MA20DIV / COL_MA50DIV: the price/MA*100 divergence ratio,
+        """COL_MA20DIV / COL_MA60DIV: the price/MA*100 divergence ratio,
         heatmapped around 100; a muted "-" when the ratio is missing (0)."""
         div = float(raw or 0.0)
         if div != 0.0:

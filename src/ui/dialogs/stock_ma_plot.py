@@ -30,7 +30,7 @@ from ui.dialogs.stock_ma_consts import (
     _SLOT_RATIOS, _TICK_PT, _INDEX_COLOR,
 )
 from ui.dialogs.stock_ma_helpers import _make_bars, _compact
-from ui.colors import PROFIT, LOSS, MA_RAMP, MA_DIV50_COLOR, MA_DIV_NEUTRAL_PCT
+from ui.colors import PROFIT, LOSS, MA_RAMP, MA_DIV_LONG_COLOR, MA_DIV_NEUTRAL_PCT
 from ui.theme import ACCENT, TEXT, TEXT_MUTED, TEXT_FAINT, LINE, INK_ON_LIGHT
 
 
@@ -45,7 +45,7 @@ class _PlotMixin:
         self._dates = dates
 
         has_vol = "Volume" in df.columns and float(df.get_column("Volume").max() or 0) > 0
-        has_div = not self._is_simple_chart and ("MA20_Div" in df.columns or "MA50_Div" in df.columns)
+        has_div = not self._is_simple_chart and ("MA20_Div" in df.columns or "MA60_Div" in df.columns)
         has_rsi = "RSI14" in df.columns
 
         gs = self._fig.add_gridspec(4, 1)
@@ -183,7 +183,7 @@ class _PlotMixin:
         ax.tick_params(labelbottom=False)
 
     def _plot_divergence_panel(self) -> None:
-        """Div(20)/Div(50) = price / MA x 100 over three bands centred on 100
+        """Div(20)/Div(60) = price / MA x 100 over three bands centred on 100
         (issue #6): above 100+MA_DIV_NEUTRAL_PCT overheated (PROFIT tint),
         below 100-MA_DIV_NEUTRAL_PCT depressed (LOSS tint), neutral between."""
         ax = self._panel_axes["div"]
@@ -194,8 +194,8 @@ class _PlotMixin:
             ax.axhspan(-10_000, 100 - n, facecolor=LOSS, alpha=0.08, linewidth=0),
         ]
         ax.axhline(100, color=TEXT_FAINT, linewidth=1, linestyle=(0, (4, 3)))
-        if "MA50_Div" in self._df.columns:
-            self._lines["Div(50)"], = ax.plot(self._x, self._col("MA50_Div"), color=MA_DIV50_COLOR, linewidth=1.4)
+        if "MA60_Div" in self._df.columns:      # MA50 until 2026-11-18 (spec v07)
+            self._lines["Div(60)"], = ax.plot(self._x, self._col("MA60_Div"), color=MA_DIV_LONG_COLOR, linewidth=1.4)
         if "MA20_Div" in self._df.columns:
             self._lines["Div(20)"], = ax.plot(self._x, self._col("MA20_Div"), color=MA_RAMP["MA5"], linewidth=1.4)
         ax.set_ylabel(tr("이격도 %", "Div %"), fontsize=_TICK_PT, color=TEXT_MUTED)

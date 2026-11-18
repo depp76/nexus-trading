@@ -96,7 +96,7 @@ def stock_report_summary(item: dict) -> str:
             "per_trailing": item.get("trailing_per"),
             "per_forward": item.get("forward_per"),
             "ma20_divergence": changes.get("ma20_div"),
-            "ma50_divergence": changes.get("ma50_div"),
+            "ma60_divergence": changes.get("ma60_div"),
             "high_52w": changes.get("52w_high"),
             "high_52w_diff_pct": changes.get("52w_high_diff"),
             "low_52w": changes.get("52w_low"),

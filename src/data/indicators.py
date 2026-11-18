@@ -39,14 +39,15 @@ def _compute_indicators(df: pl.DataFrame, windows=(10, 20, 60)) -> pl.DataFrame:
     avg_loss  = loss.ewm_mean(com=13, adjust=False)
     rsi14     = 100 - (100 / (1 + (avg_gain / avg_loss).fill_nan(1e9)))
 
+    # MA60 is always computed: the long divergence ratio uses it (MA50 until 2026-11-18;
+    # changed with the strategy's trend line, spec v07 10-13). A 60 in `windows` is not repeated.
+    all_windows = tuple(dict.fromkeys((*windows, 60)))
     df = df.with_columns([
-        *[pl.col("Close").rolling_mean(window_size=w, min_samples=1).alias(f"MA{w}") for w in windows],
-        # MA50 is always computed (needed for divergence chart regardless of windows)
-        pl.col("Close").rolling_mean(window_size=50, min_samples=1).alias("MA50"),
+        *[pl.col("Close").rolling_mean(window_size=w, min_samples=1).alias(f"MA{w}") for w in all_windows],
         rsi14.alias("RSI14"),
     ])
     # MA divergence ratios (base = 100%): current_price / MA_N * 100
-    div_exprs = [(pl.col("Close") / pl.col("MA50") * 100).alias("MA50_Div")]
+    div_exprs = [(pl.col("Close") / pl.col("MA60") * 100).alias("MA60_Div")]
     if "MA20" in df.columns:
         div_exprs.append((pl.col("Close") / pl.col("MA20") * 100).alias("MA20_Div"))
     df = df.with_columns(div_exprs)
@@ -137,18 +138,18 @@ def _fill_period_changes(changes, closes, current_i, current_price, mode):
 
 
 def _fill_ma_ratios(changes, closes, current_price):
-    """MA20/MA50 divergence ratios (base = 100%) and the MA20 1-week rate of change
-    (pct mode only)."""
+    """MA20/MA60 divergence ratios (base = 100%) and the MA20 1-week rate of change
+    (pct mode only). MA60 replaced MA50 on 2026-11-18 (spec v07: the strategy's trend line)."""
     n = len(closes)
     if n >= 20:
         ma20 = float(np.mean(closes[-20:]))
         if ma20 > 0:
             changes["ma20_div"] = current_price / ma20 * 100
 
-    if n >= 50:
-        ma50 = float(np.mean(closes[-50:]))
-        if ma50 > 0:
-            changes["ma50_div"] = current_price / ma50 * 100
+    if n >= 60:
+        ma60 = float(np.mean(closes[-60:]))
+        if ma60 > 0:
+            changes["ma60_div"] = current_price / ma60 * 100
 
     # Slope of the MA20 line itself, not price. n >= 25 implies n >= 20, so the
     # divergence block above has already computed ma20 -- reuse it instead of
@@ -168,7 +169,7 @@ def fetch_historical_changes(ticker, current_price, df_pd=None, mode='pct'):
     changes.update({
         "52w_high": 0.0, "52w_low": 0.0,
         "52w_high_diff": 0.0, "52w_low_diff": 0.0,
-        "ma20_div": 0.0, "ma50_div": 0.0, "ma20_roc_1w": 0.0
+        "ma20_div": 0.0, "ma60_div": 0.0, "ma20_roc_1w": 0.0
     })
 
     if current_price <= 0:
