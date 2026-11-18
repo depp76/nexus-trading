@@ -62,12 +62,10 @@ def _usd_market_cap(item) -> float:
 
 
 def _fmt_usd_cap(usd: float) -> str:
-    """$3.41T / $512.3B / $850M."""
-    if usd >= 1e12:
-        return f"${usd / 1e12:,.2f}T"
-    if usd >= 1e9:
-        return f"${usd / 1e9:,.1f}B"
-    return f"${usd / 1e6:,.0f}M"
+    """Always billions with one decimal ($3,410.0B / $512.3B / $0.9B; user
+    direction 2026-11-18, docs/ui.md 8.31), so the digits line up and compare
+    like the Korean rows' whole 억 (was $3.41T / $512.3B / $850M)."""
+    return f"${usd / 1e9:,.1f}B"
 
 
 class _MarketCapItem(NumericItem):
@@ -727,7 +725,7 @@ class StockTable(QTableWidget):
     def _set_cap_cell(self, row, item):
         """COL_CAP: Cap (market_cap is in KRW; 100,000,000 = 100M KRW). Index,
         yield and commodity rows have no market cap. US rows show their cap in
-        dollars ($3.41T, user direction 2026-11-18, docs/ui.md 8.31) with the
+        dollars ($3,410.0B, user direction 2026-11-18, docs/ui.md 8.31) with the
         KRW figure on the tooltip and sort by it, as a block after the Korean
         rows (_MarketCapItem); the 시총 range filter stays in KRW 억 for all."""
         cap_eok = None

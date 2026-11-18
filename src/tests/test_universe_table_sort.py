@@ -186,10 +186,10 @@ class TestIndexRowsFormatByChangeMode(unittest.TestCase):
               "currency": "$", "market_cap": 3.0e12 * 1400, "usd_market_cap": 3.0e12, "changes": {}}
         old = {**us, "ticker": "MSFT", "name": "Microsoft", "market_cap": 512.3e9 * 1400}
         del old["usd_market_cap"]                          # a row cached before the field existed
-        small = {**us, "ticker": "TINY", "name": "Tiny", "market_cap": 850e6 * 1400, "usd_market_cap": 850e6}
+        small = {**us, "ticker": "TINY", "name": "Tiny", "market_cap": 920e6 * 1400, "usd_market_cap": 920e6}
         table.load_data([us, old, small, _mk("005930", "Samsung", 70000)])
         item = lambda t: table.item(self._row(table, t), COL_CAP)   # noqa: E731
-        self.assertEqual((item("AAPL").text(), item("MSFT").text(), item("TINY").text()), ("$3.00T", "$512.3B", "$850M"))
+        self.assertEqual((item("AAPL").text(), item("MSFT").text(), item("TINY").text()), ("$3,000.0B", "$512.3B", "$0.9B"))
         self.assertEqual(item("005930").text(), "1,000")
         self.assertEqual(item("AAPL")._sort_key, 3.0e12)                                   # sorts in USD
         self.assertEqual(item("AAPL")._filter_value, int(3.0e12 * 1400) // 100_000_000)    # filters in KRW 억
