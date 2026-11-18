@@ -13,7 +13,9 @@ only Trend Following). Nothing places orders.
 
 **Strategy layer: reset on 2026-09-28 and rebuilt from
 `src/strategy/trend_following/trend_following.md`; the spec is now at v07 (2026-11-18: the C-series trend line
-`score_ma_long` is 60, a user decision in spec 10-13 -- the C rows are still not adoption candidates, 10-12).** The old
+`score_ma_long` is 60, a user decision in spec 10-13). v07 is the first validation target and the basis for all
+further development; v06 was an intermediate step. The v07 development-window baseline (all ten rows, one run) is
+spec 10-14; no row is an adoption candidate (H not met).** The old
 packages (rebalance, ma_cross, the first trend_following, shared base/metrics/costs, dialogs, five
 `QThread`s, `tools/kr_trend_backtest.py`) were deleted (git `070f639` and earlier) and nothing of
 them was reused. The `strategy.trend_following` package implements spec sections 2-4 and 6: cost
@@ -84,8 +86,8 @@ Dev tooling is in `requirements-dev.txt`
   daily-price / flow loader) and one sub-package per strategy.
 - **`src/strategy/trend_following/`** (spec `trend_following.md` v07 in the same folder,
   facade `strategy.trend_following`): `config.py` (`SPEC_VERSION`, `StrategyParams`, `VARIANTS`
-  A0-A5/B and C1-C3, `V07_VARIANTS` C1L-C3L (= C1-C3 since v07) and `V06_C_VARIANTS` C1S-C3S (the v06 50-day line), spec 10, headless
-  runner only, never in the UI lists; `get_variant` looks them up with the matrix rows), `COST_MULTIPLIERS`, `PERIODS`, `E2_NEIGHBORS`, benchmark ETF codes), `costs.py` (`CostModel`/`TradeCost`,
+  A0-A5/B and C1-C3, `V06_C_VARIANTS` C1S-C3S (the v06 intermediate 50-day line, spec 10-13; headless runner only, never in
+  the UI lists; `get_variant` looks them up with the matrix rows; the 10-11 ids C1L-C3L were removed in 10-14), `COST_MULTIPLIERS`, `PERIODS`, `E2_NEIGHBORS`, benchmark ETF codes), `costs.py` (`CostModel`/`TradeCost`,
   year-keyed tax table, 2023-01-25 tick-ladder reform, `scaled()`/`for_etf()`), `signals.py`
   (date x ticker arrays for L1-L4 and the exits; `regime_state` is the weekly-held L1 state),
   `dataset.py` (`PriceBook`/`Dataset`; `build_dataset` is pure and what tests feed,
