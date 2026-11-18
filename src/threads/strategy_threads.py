@@ -9,7 +9,9 @@ CPU-bound matrix run happens here, never in a UI slot (CLAUDE.md threads rule).
 """
 from __future__ import annotations
 
+import json
 import logging
+from datetime import datetime
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -17,13 +19,41 @@ from i18n import tr
 
 from strategy import signal_api
 from strategy.common.prices import ResearchCancelled
-from strategy.trend_following import ResearchRequest, load_dataset, run_research
+from strategy.trend_following import SPEC_VERSION, ResearchRequest, load_dataset, run_research
+from paths import HOLDOUT_LEDGER_FILE
 
 logger = logging.getLogger(__name__)
 
 # Displayed as-is and compared only against this same constant (the language
 # is fixed per process), so translating it is safe.
 CANCELLED_MESSAGE = tr("취소됨", "Cancelled")
+
+
+def record_holdout_run(req: ResearchRequest, ledger: str = HOLDOUT_LEDGER_FILE, now=None) -> dict | None:
+    """Append one line to the hold-out ledger when `req` reaches past the
+    development window (``allow_holdout``), before any data is loaded: from
+    then on the hold-out counts as opened (trend_following.md 9-23, 10-7).
+    Returns the record (None when the run stays inside the window). A write
+    failure is logged, never raised -- the run itself still goes ahead."""
+    if not req.allow_holdout:
+        return None
+    rec = {
+        "opened_at": (now or datetime.now()).isoformat(timespec="seconds"),
+        "source": "strategy_tab",
+        "spec_version": SPEC_VERSION,
+        "start": req.start.isoformat(),
+        "end": req.end.isoformat() if req.end else None,
+        "variants": list(req.variant_ids),
+        "markets": list(req.markets),
+        "cost_multipliers": list(req.cost_multipliers),
+    }
+    logger.warning("Hold-out opened by a research run: %s", rec)
+    try:
+        with open(ledger, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except OSError:
+        logger.error("Could not write the hold-out ledger %s", ledger, exc_info=True)
+    return rec
 
 
 class TrendFollowingResearchThread(QThread):
@@ -48,6 +78,7 @@ class TrendFollowingResearchThread(QThread):
 
     def run(self):
         req = self.request
+        record_holdout_run(req)
         try:
             ds = load_dataset(
                 req.start, req.end, universe_size=req.params.universe_size,

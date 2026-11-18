@@ -248,6 +248,8 @@ Dev tooling is in `requirements-dev.txt`
 
 `portfolio.db` (source of truth for trades and asset snapshots), `custom_settings.json`,
 `universe_cache.json`, `vkospi_cache.json`, `kis_token_cache.json`, `app.log`, `archive/`,
+`holdout_ledger.jsonl` (one line per Strategy-tab run past `DEV_END`: the hold-out opening record,
+trend_following.md 10-7 -- not a cache, never delete it),
 plus the legacy `trading_record.json` (read once by
 `_migrate_asset_records_json`; left on disk afterwards — the import records completion in
 `portfolio.db`'s `migrations` table so deleted rows are never re-imported), and

@@ -21,6 +21,7 @@ portfolio.db
 portfolio.db-wal
 portfolio.db-shm
 custom_settings.json
+holdout_ledger.jsonl
 universe_cache.json
 vkospi_cache.json
 trading_record.json
