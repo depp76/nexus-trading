@@ -31,6 +31,11 @@ asset_records  (Total Assets tab's weekly snapshots; was trading_record.json,
   manual       INTEGER  DEFAULT 1   – 1 = typed by the user, 0 = auto-filled from the live total
   created_at / updated_at TEXT
 
+kis_imports  (KIS executed orders already in trades, ui/kis_sync.py; 2026-11-18)
+  order_key    TEXT     PRIMARY KEY – "YYYY-MM-DD:<KIS order no>"
+  qty / amount REAL               – the order's cumulative fill already imported
+  imported_at  TEXT
+
 migrations  (one row per completed one-time JSON import)
   name         TEXT     PRIMARY KEY – "asset_records_json"
   done_at      TEXT
@@ -108,6 +113,17 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS migrations (
                 name    TEXT PRIMARY KEY,
                 done_at TEXT DEFAULT (datetime('now','localtime'))
+            )
+        """)
+        # KIS executed orders already imported (the history tab's KIS 조회,
+        # docs/ui.md 8.28): how much of each order is in `trades`, so a re-run
+        # only adds what filled since.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS kis_imports (
+                order_key   TEXT PRIMARY KEY,
+                qty         REAL NOT NULL,
+                amount      REAL NOT NULL,
+                imported_at TEXT DEFAULT (datetime('now','localtime'))
             )
         """)
         conn.commit()
@@ -334,9 +350,11 @@ def upsert_trade(record: dict) -> str:
         conn.close()
 
 
-def upsert_trades(records: list[dict]) -> list[str]:
+def upsert_trades(records: list[dict], kis_imports: list | None = None) -> list[str]:
     """Insert or update many trades in a single connection/transaction.
     Returns the list of orig_keys that were saved, in input order.
+    `kis_imports` ((order_key, qty, amount) rows) are recorded in the same
+    transaction (apply_kis_import).
 
     Rows with an explicit orig_key are batched through one executemany upsert (no
     collision possible — the caller already identified the row). Rows needing a
@@ -344,7 +362,7 @@ def upsert_trades(records: list[dict]) -> list[str]:
     collision retries against the DB itself instead of an in-memory snapshot that
     could go stale against a concurrent writer (see upsert_trade's TOCTOU note).
     """
-    if not records:
+    if not records and not kis_imports:
         return []
 
     now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -372,9 +390,41 @@ def upsert_trades(records: list[dict]) -> list[str]:
                 conn.executemany(_UPSERT_SQL, keyed_rows)
             for i, _record, co, buy_date, qty, values_tail in unkeyed_indices:
                 keys[i] = _insert_with_generated_key(conn, f"{co}_{buy_date}_{qty}", values_tail)
+            if kis_imports:
+                conn.executemany(
+                    "INSERT INTO kis_imports (order_key, qty, amount, imported_at) VALUES (?,?,?,?) "
+                    "ON CONFLICT(order_key) DO UPDATE SET qty = excluded.qty, amount = excluded.amount, "
+                    "imported_at = excluded.imported_at",
+                    [(k, float(q), float(a), now) for k, q, a in kis_imports])
         for i, record, *_ in unkeyed_indices:
             record["orig_key"] = keys[i]
         return keys
+    finally:
+        conn.close()
+
+
+def apply_kis_import(records: list[dict], kis_imports: list) -> list[str]:
+    """Save an import plan (ui/kis_sync.py): the trades and the imported-order
+    marks together, so a failure leaves neither."""
+    return upsert_trades(records, kis_imports)
+
+
+def load_kis_imports() -> dict:
+    """order_key -> (qty, amount) of every KIS order already imported."""
+    conn = _connect()
+    try:
+        return {r["order_key"]: (r["qty"], r["amount"])
+                for r in conn.execute("SELECT order_key, qty, amount FROM kis_imports")}
+    finally:
+        conn.close()
+
+
+def last_kis_import_date() -> str | None:
+    """The latest order date (YYYY-MM-DD) among the imported KIS orders, or None."""
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT MAX(substr(order_key, 1, 10)) AS d FROM kis_imports").fetchone()
+        return row["d"] if row and row["d"] else None
     finally:
         conn.close()
 

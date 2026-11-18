@@ -5,7 +5,7 @@ Contains:
   IndexMaThread, StockMaThread,
   SingleStockFetchThread, AllDataFetchThread,
   UniverseLightweightFetchThread, PositionPriceFetchThread,
-  AutoBackupThread, AccountDepositThread, GeminiStockReportThread
+  AutoBackupThread, KisAccountThread, GeminiStockReportThread
 """
 import os
 import re
@@ -855,22 +855,64 @@ class PositionPriceFetchThread(QThread):
 # ---------------------------------------------------------------------------
 # Account deposit fetch thread (Trading History tab "Fetch" button)
 # ---------------------------------------------------------------------------
-class AccountDepositThread(QThread):
-    """Background thread: KIS inquire-balance via data_fetcher.fetch_account_deposit().
+class KisAccountThread(QThread):
+    """Background thread for Trading History's KIS 조회 (docs/ui.md 8.28): the
+    account balance (deposit + holdings) and the executed orders since `start`
+    (a date), plus the market of every traded ticker from the KRX listing.
 
-    The REST call used to run synchronously on the UI thread from the Fetch
-    button handler, freezing the window whenever KIS was slow (roadmap 6-1c).
-    """
-    finished = pyqtSignal(float, str)  # deposit (KRW), error message ("" on success)
+    finished(result, error): error is "" when the balance came back; result is
+    {"deposit", "holdings", "executions", "markets", "exec_error"} -- a failed
+    execution query leaves the deposit usable and says why in exec_error.
+    (Replaces AccountDepositThread, which fetched the deposit alone; that REST call
+    used to run on the UI thread, roadmap 6-1c.)"""
+    finished = pyqtSignal(object, str)
+
+    def __init__(self, start, parent=None):
+        super().__init__(parent)
+        self._start = start
 
     def run(self):
-        from data_fetcher import fetch_account_deposit
+        from data_fetcher import fetch_account_balance, fetch_kis_executions
         try:
-            self.finished.emit(float(fetch_account_deposit()), "")
+            bal = fetch_account_balance()
         except Exception as e:
             # boundary: the thread must always emit finished; the error text is shown to the user.
-            logger.warning("Account deposit fetch failed", exc_info=True)
-            self.finished.emit(0.0, str(e))
+            logger.warning("KIS account balance fetch failed", exc_info=True)
+            self.finished.emit({}, str(e))
+            return
+        result = {"deposit": float(bal["deposit"]), "holdings": bal["holdings"], "executions": [],
+                  "markets": {}, "exec_error": ""}
+        try:
+            result["executions"] = fetch_kis_executions(self._start)
+        except Exception as e:
+            # boundary: the deposit is still worth showing when the execution query fails.
+            logger.warning("KIS executions fetch failed", exc_info=True)
+            result["exec_error"] = str(e)
+        tickers = {e["ticker"] for e in result["executions"]}
+        if tickers:
+            result["markets"] = self._markets_of(tickers)
+        self.finished.emit(result, "")
+
+    @staticmethod
+    def _markets_of(tickers: set) -> dict:
+        """ticker -> KOSPI / KOSDAQ / ETF from the cached listings ({} for unknown ones)."""
+        from data_fetcher import _get_listing_with_norm
+        out: dict = {}
+        try:
+            for listing, default in (("KRX-DESC", "KRX"), ("ETF/KR", "ETF")):
+                df = _get_listing_with_norm(listing)
+                code_col = "Symbol" if "Symbol" in df.columns else "Code"
+                codes = df[code_col].astype(str).str.zfill(6)
+                for t in tickers - set(out):
+                    row = df[codes == t]
+                    if row.empty:
+                        continue
+                    market = str(row.iloc[0].get("Market", default)) if "Market" in row.columns else default
+                    out[t] = "KOSDAQ" if "KOSDAQ" in market else market
+        except Exception:
+            # kept broad: a listing failure only leaves the market blank (the price fetch resolves it later).
+            logger.warning("KIS executions: market lookup failed", exc_info=True)
+        return out
 
 
 # ---------------------------------------------------------------------------

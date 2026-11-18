@@ -12,6 +12,7 @@ from ui.dialogs.trend_conditions import TrendConditions, TrendConditionsDialog
 from ui.dialogs.strategy_trades import StrategyTradesDialog
 from ui.dialogs.add_ticker import AddTickerDialog
 from ui.dialogs.add_record import AddRecordDialog
+from ui.dialogs.kis_sync import KisSyncDialog
 
 __all__ = [
     "IndexMaDialog", "StockMaDialog",
@@ -19,5 +20,5 @@ __all__ = [
     "StockTradeHistoryDialog", "TotalAssetsGraphDialog", "AssetsReportDialog",
     "VariantPickerDialog", "TrendConditions", "TrendConditionsDialog", "StrategyTradesDialog",
     "AddTickerDialog",
-    "AddRecordDialog",
+    "AddRecordDialog", "KisSyncDialog",
 ]
