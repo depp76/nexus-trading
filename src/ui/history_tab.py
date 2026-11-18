@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 from ui.common import (
-    _fmt_num_edit, ThreadOwnerMixin,
+    _fmt_num_edit, ThreadOwnerMixin, SearchLineEdit,
     BTN_H, make_button, setup_table, make_footer_label, TAB_MARGINS, TAB_SPACING,
     KpiStrip, install_table_keys, clear_selection_on_outside_click,
     fix_toolbar_widths, register_toolbar_labels,
@@ -280,13 +280,13 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         Fetch Deposit, Reload, and Add Trade (the primary) last. Every button
         has one width, so a cycle never resizes it."""
         row = _toolbar_hbox()
-        self._search_edit = QLineEdit()
+        self._search_edit = SearchLineEdit()     # counts the IME syllable being composed
         self._search_edit.setPlaceholderText(tr("종목명 또는 코드 검색", "Search name or ticker"))
         self._search_edit.setFixedHeight(_BTN_H)
         self._search_edit.setMinimumWidth(180)
         self._search_edit.setMaximumWidth(260)
         self._search_edit.setClearButtonEnabled(True)
-        self._search_edit.textChanged.connect(self._apply_filter)
+        self._search_edit.searchTextChanged.connect(self._apply_filter)
         row.addWidget(self._search_edit)
         row.addSpacing(_GROUP_GAP)
 
@@ -939,7 +939,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
 
         # Live search (2026-11-16, like Trading Universe): company name or
         # ticker contains the text, case-insensitive; both open and closed rows.
-        query = self._search_edit.text().strip().lower() if hasattr(self, "_search_edit") else ""
+        query = self._search_edit.search_text().strip().lower() if hasattr(self, "_search_edit") else ""
         if query:
             def hit(r):
                 return query in str(r.get("company", "")).lower() or query in str(r.get("ticker", "")).lower()

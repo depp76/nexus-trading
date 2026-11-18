@@ -14,13 +14,13 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QBrush, QColor, QGuiApplication
 from PyQt6.QtWidgets import (
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox, QTableWidget,
+    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QTableWidget,
     QTableWidgetItem, QHeaderView,
 )
 
 from i18n import tr
 from ui.colors import fg_for
-from ui.common import make_button, setup_table, install_table_keys, make_footer_label
+from ui.common import make_button, setup_table, install_table_keys, make_footer_label, SearchLineEdit
 from ui.strategy_widgets import reason_label, fmt_price, trade_summary
 from ui.table_items import NumericItem
 
@@ -28,17 +28,21 @@ _LEFT = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
 _RIGHT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 _CENTER = Qt.AlignmentFlag.AlignCenter
 
-# (header, minimum width) -- the column order of the table. `fit_columns` widens
-# a column to its contents; the name and reason columns are capped (tooltips
-# carry the full text).
+# (header, minimum width) -- the column order of the table, laid out like the
+# Trading History grid (2026-11-18, docs/ui.md 8.13): the stock (name, market,
+# ticker), then the buy side (date, price, qty, amount), then the sell side
+# (date, days held, price, amount, P&L, return), then cost and exit reason.
+# `fit_columns` widens a column to its contents; the name and reason columns
+# are capped (tooltips carry the full text).
 COLUMNS = [
-    (tr("진입일", "Entry"), 84), (tr("청산일", "Exit"), 84), (tr("종목명", "Name"), 120),
-    (tr("티커", "Ticker"), 60), (tr("시장", "Market"), 56), (tr("수량", "Qty"), 50),
-    (tr("매입가", "Buy Px"), 70), (tr("매도가", "Sell Px"), 70), (tr("매입금액", "Buy Amt"), 84),
+    (tr("종목명", "Name"), 120), (tr("시장", "Market"), 56), (tr("티커", "Ticker"), 60),
+    (tr("진입일", "Entry"), 84), (tr("매입가", "Buy Px"), 70), (tr("수량", "Qty"), 50),
+    (tr("매입금액", "Buy Amt"), 84),
+    (tr("청산일", "Exit"), 84), (tr("보유일", "Days"), 50), (tr("매도가", "Sell Px"), 70),
     (tr("매도금액", "Sell Amt"), 84), (tr("손익(원)", "P&L (KRW)"), 80), (tr("수익률", "Return"), 60),
-    (tr("보유일", "Days"), 50), (tr("비용(원)", "Cost (KRW)"), 64), (tr("청산 사유", "Exit Reason"), 90),
+    (tr("비용(원)", "Cost (KRW)"), 64), (tr("청산 사유", "Exit Reason"), 90),
 ]
-COL_NAME, COL_TICKER, COL_REASON = 2, 3, 14
+COL_NAME, COL_TICKER, COL_ENTRY, COL_EXIT, COL_PNL, COL_REASON = 0, 2, 3, 7, 11, 14
 _MAX_WIDTH = {COL_NAME: 200, COL_REASON: 140}
 _PAD = 14                                   # cell padding beyond the text width
 ALL_REASONS = tr("전체 사유", "All reasons")
@@ -85,11 +89,11 @@ class StrategyTradesView(QWidget):
         bar.setContentsMargins(0, 0, 0, 0)
         # Built either way so the filter code has one path; without filters
         # they are never shown and keep their "everything" value.
-        self.search = QLineEdit()
+        self.search = SearchLineEdit()           # counts the IME syllable being composed
         self.search.setPlaceholderText(tr("종목명 또는 티커 검색", "Search name or ticker"))
         self.search.setClearButtonEnabled(True)
         self.search.setMaximumWidth(260)
-        self.search.textChanged.connect(self._apply_filter)
+        self.search.searchTextChanged.connect(self._apply_filter)
         self.reason_combo = QComboBox()
         self.reason_combo.addItem(ALL_REASONS, "")
         self.reason_combo.currentIndexChanged.connect(self._apply_filter)
@@ -118,7 +122,7 @@ class StrategyTradesView(QWidget):
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setStretchLastSection(True)
-        header.setSortIndicator(1, Qt.SortOrder.DescendingOrder)     # newest exit first
+        header.setSortIndicator(COL_EXIT, Qt.SortOrder.DescendingOrder)     # newest exit first
         if on_activate is not None:
             self.table.cellDoubleClicked.connect(on_activate)
         install_table_keys(self.table, on_activate=on_activate)   # Ctrl+C copies the selected rows as TSV
@@ -163,25 +167,25 @@ class StrategyTradesView(QWidget):
                 buy_amt = t.entry_price * t.qty
                 sell_amt = t.exit_price * t.qty
                 name = self._names.get(t.ticker, "")
-                cells = [
-                    _num(f"{t.entry_date:%Y-%m-%d}", t.entry_date.toordinal()),
-                    _num(f"{t.exit_date:%Y-%m-%d}", t.exit_date.toordinal()),
+                cells = [                                   # in COLUMNS order
                     _text(name, tooltip=name),
-                    _text(t.ticker),
                     _text(self._markets.get(t.ticker, ""), _CENTER),
-                    _num(f"{t.qty:,}", t.qty),
+                    _text(t.ticker),
+                    _num(f"{t.entry_date:%Y-%m-%d}", t.entry_date.toordinal()),
                     _num(fmt_price(t.entry_price), t.entry_price),
-                    _num(fmt_price(t.exit_price), t.exit_price),
+                    _num(f"{t.qty:,}", t.qty),
                     _num(f"{buy_amt:,.0f}", buy_amt),
+                    _num(f"{t.exit_date:%Y-%m-%d}", t.exit_date.toordinal()),
+                    _num(str(t.holding_days), t.holding_days),
+                    _num(fmt_price(t.exit_price), t.exit_price),
                     _num(f"{sell_amt:,.0f}", sell_amt),
                     _num(f"{t.pnl:+,.0f}", t.pnl, fg_for(t.pnl)),
                     _num(f"{t.ret_pct:+.1f}%", t.ret_pct, fg_for(t.ret_pct)),
-                    _num(str(t.holding_days), t.holding_days),
                     _num(f"{cost:,.0f}", cost),
                     _text(reason_label(t.reason), tooltip=t.reason),
                 ]
-                cells[0].setTextAlignment(_CENTER)
-                cells[1].setTextAlignment(_CENTER)
+                cells[COL_ENTRY].setTextAlignment(_CENTER)
+                cells[COL_EXIT].setTextAlignment(_CENTER)
                 cells[COL_REASON].setData(Qt.ItemDataRole.UserRole, t.reason)
                 for c, item in enumerate(cells):
                     self.table.setItem(i, c, item)
@@ -209,13 +213,13 @@ class StrategyTradesView(QWidget):
     # ---------------------------------------------------------------- filter
     def _row_trade(self, row: int):
         """The Trade a (possibly re-sorted) table row shows."""
-        key = (self.table.item(row, COL_TICKER).text(), self.table.item(row, 0).text(),
-               self.table.item(row, 1).text())
+        key = (self.table.item(row, COL_TICKER).text(), self.table.item(row, COL_ENTRY).text(),
+               self.table.item(row, COL_EXIT).text())
         return next((t for t in self._trades
                      if (t.ticker, f"{t.entry_date:%Y-%m-%d}", f"{t.exit_date:%Y-%m-%d}") == key), None)
 
     def _apply_filter(self, *_):
-        text = self.search.text().strip().lower()
+        text = self.search.search_text().strip().lower()
         reason = self.reason_combo.currentData() or ""
         shown = []
         for row in range(self.table.rowCount()):
@@ -242,7 +246,7 @@ class StrategyTradesView(QWidget):
         for row in self.visible_rows():
             if self.table.item(row, COL_TICKER).text() != ticker:
                 continue
-            if exit_date is not None and self.table.item(row, 1).text() != f"{exit_date:%Y-%m-%d}":
+            if exit_date is not None and self.table.item(row, COL_EXIT).text() != f"{exit_date:%Y-%m-%d}":
                 continue
             self.table.selectRow(row)
             self.table.scrollToItem(self.table.item(row, 0))
