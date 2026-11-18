@@ -4,7 +4,7 @@ review_agy.md #1: _on_cell_double_clicked/_delete_selected used to index
 self._records (always ascending by date) with the QTableWidget's visual row
 index, which no longer matches once the table's default descending sort
 indicator (set in _build_ui) re-sorts the rows. Both now look up the record
-by the date bound to column 0's UserRole instead.
+by the date bound to the date column's UserRole (COL_DATE) instead.
 
 Isolation note: trade_db.save_asset_records() does a full-table replace, and
 TradingRecordTab methods call it on every edit/delete. An earlier version of
@@ -21,6 +21,7 @@ its entire duration via setUp/tearDown, not just around construction.
 import unittest
 from unittest.mock import patch
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 app = QApplication.instance() or QApplication([])
@@ -60,15 +61,15 @@ class TestSortSafeRecordLookup(_AssetsTabTestCase):
             {"date": "2026-01-16", "total": 3000.0, "manual": True},
         ]
         self.tab._refresh_table()
-        # Default sort indicator is descending by date (column 0), so
+        # Default sort indicator is descending by date (COL_DATE), so
         # visual row 0 is 2026-01-16 even though self._records[0] is
         # 2026-01-02 -- the exact mismatch this fix targets.
         self.assertEqual(self.tab._records[0]["date"], "2026-01-02")
-        self.assertIn("2026-01-16", self.tab._table.item(0, 0).text())
+        self.assertEqual(self.tab._table.item(0, self.tab.COL_DATE).text(), "2026-01-16")
 
     def test_double_click_edits_the_visually_selected_date_not_records0(self):
         with patch("ui.assets_tab.QInputDialog.getText", return_value=("3,500", True)):
-            self.tab._on_cell_double_clicked(0, 4)  # visually the 2026-01-16 row
+            self.tab._on_cell_double_clicked(0, self.tab.COL_TOTAL_ASSETS)  # visually the 2026-01-16 row
         edited = next(r for r in self.tab._records if r["date"] == "2026-01-16")
         self.assertEqual(edited["total"], 3500.0)
         self.assertTrue(edited["manual"])
@@ -267,3 +268,37 @@ class TestMetricsSnapshotOnly(_AssetsTabTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTableLayout(_AssetsTabTestCase):
+    """2026-11-18 (user direction, docs/ui.md 8.30): 주차 and 날짜 in their own
+    columns; 총자산(KRW) and KOSPI 대비(%) as one header cell over both rows,
+    KOSPI 대비 right of 총자산."""
+
+    def test_columns_groups_and_merged_cells(self):
+        tab = self._make_tab()
+        hdr = tab._grouped_hdr
+        labels = hdr._sub_labels
+        self.assertEqual(labels[:2], ["주차", "날짜"])
+        self.assertEqual(labels[tab.COL_TOTAL_ASSETS], "총자산(KRW)")
+        self.assertEqual(labels[tab.COL_TOTAL_ASSETS + 1], "KOSPI 대비(%)")
+        self.assertEqual(set(hdr._merged), {0, 1, tab.COL_TOTAL_ASSETS, tab.COL_TOTAL_ASSETS + 1})
+        groups = {g[0]: (g[1], g[2]) for g in hdr._sections}
+        self.assertEqual(groups, {"KOSPI": (2, 3), "주간 손익": (7, 2), "누적 손익": (9, 2)})
+        covered = {c for _, s, n, _ in hdr._sections for c in range(s, s + n)} | set(hdr._merged)
+        self.assertEqual(covered, set(range(tab._table.columnCount())))      # every column has a header
+        tab._on_currency_changed("USD")
+        self.assertEqual(hdr._sub_labels[tab.COL_TOTAL_ASSETS], "총자산(USD)")
+
+    def test_week_and_date_cells_sort_by_date_across_a_year(self):
+        tab = self._make_tab()
+        tab._records = [
+            {"date": "2025-12-26", "total": 1000.0, "manual": True},
+            {"date": "2026-01-02", "total": 1100.0, "manual": True},
+        ]
+        tab._refresh_table()
+        t = tab._table
+        self.assertEqual([t.item(r, tab.COL_DATE).text() for r in range(2)], ["2026-01-02", "2025-12-26"])
+        self.assertEqual([t.item(r, 0).text() for r in range(2)], ["W01", "W52"])
+        t.sortItems(0, Qt.SortOrder.AscendingOrder)                 # by week = by date, not "W01" < "W52"
+        self.assertEqual([t.item(r, tab.COL_DATE).text() for r in range(2)], ["2025-12-26", "2026-01-02"])
