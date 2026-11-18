@@ -8,13 +8,14 @@ The indicators, gate, scores and ranks all come from ``scoring.compute_scores``
         as many names as there are free slots, highest total first; size from
         2-4 (1% risk / (2 x ATR20), 20% cap, whole shares), filled at t+1 open
   sell  relative, weekly check day: gate passed and total rank < score_sell_pct
-        absolute, every session: MA50Div < 0, or close < entry - 2 x ATR20
+        absolute, every session: MA{n}Div < 0 (close below the score_ma_long-day
+        trend line, n = 60 since v07), or close < entry - 2 x ATR20
   not   Donchian-10 exit (``exit_channel``) is never read; an overheated holding
         is never sold for being overheated
 
-A holding that fails the gate for a reason other than MA50Div < 0 (Range52 below
+A holding that fails the gate for a reason other than MA{n}Div < 0 (Range52 below
 the floor, overheated, no longer liquid) has no total rank, so neither weekly
-rule applies to it: it stays until MA50Div < 0 or the stop (9-16 decision 1).
+rule applies to it: it stays until MA{n}Div < 0 or the stop (9-16 decision 1).
 """
 from __future__ import annotations
 
@@ -25,7 +26,9 @@ from strategy.trend_following.config import StrategyParams, Variant
 from strategy.trend_following.scoring import ScoreBook
 from strategy.trend_following.signals import Features, entry_regime
 
-REASON_MA50 = "ma50_exit"        # absolute sell: close below the 50-day average (2-5 (5) absolute 1)
+# Absolute sell: close below the score_ma_long-day trend line (2-5 (5) absolute 1). The key keeps
+# its v06 name so saved trades and reports still match (spec 10-13); only its labels say "추세선".
+REASON_MA50 = "ma50_exit"
 REASON_STOP = "stop"             # absolute sell: initial ATR stop (2-5 (5) absolute 2, same as 3-2)
 REASON_RANK = "score_rank_out"   # relative sell: gated but total rank below score_sell_pct
 

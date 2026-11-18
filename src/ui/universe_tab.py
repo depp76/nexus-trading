@@ -31,7 +31,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
-from paths import UNIVERSE_CACHE_FILE, CUSTOM_SETTINGS_FILE
+import paths
+from paths import CUSTOM_SETTINGS_FILE
 from threads.fetch_threads import (
     SingleStockFetchThread,
     AllDataFetchThread,
@@ -47,7 +48,7 @@ from ui.heat_legend import HeatLegend
 from ui.filter_popups import RangeFilterPopup
 from ui.universe_views import (
     BUILTIN_VIEWS, MARKETS, count_matches, describe_ranges, describe_view, empty_state as empty_view,
-    market_list, normalize as normalize_view, same_state as same_view, view_display_name,
+    market_list, migrate_views, normalize as normalize_view, same_state as same_view, view_display_name,
 )
 from i18n import tr
 from ui.dialogs.stock_report import show_stock_report_result
@@ -133,7 +134,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._refresh_views_combo()   # filled even before any data arrives
 
         # Try to load cached universe data to make startup instant, but always refresh to latest afterwards.
-        cached = safe_load_json(UNIVERSE_CACHE_FILE, default=None)
+        cached = safe_load_json(paths.UNIVERSE_CACHE_FILE, default=None)
         if cached:
             self.all_data = cached
             self._reload_table()
@@ -448,6 +449,10 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             # (user direction); drop their saved state so it does not linger.
             for stale in ("column_groups", "density"):
                 self.custom_settings.pop(stale, None)
+            # Migration (2026-11-18): saved views filtering "MA50 Div" now filter "MA60 Div".
+            if migrate_views(self.custom_settings.get("views")):
+                self.save_custom_settings()
+                QTimer.singleShot(0, self._announce_view_migration)
             # Migration: old array "highlighted" -> dict "highlights"
             if isinstance(self.custom_settings.get("highlighted"), list):
                 hl_dict = self.custom_settings.setdefault("highlights", {})
@@ -455,6 +460,11 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
                     hl_dict[t] = "Tg"
                 del self.custom_settings["highlighted"]
                 self.save_custom_settings()
+
+    def _announce_view_migration(self):
+        """Once, after the window is wired: saved views moved from MA50 Div to MA60 Div."""
+        self.status_message.emit(tr("저장된 보기의 'MA50 Div' 필터를 'MA60 Div'로 옮겼습니다 (추세선 60일, 스펙 v07).",
+                                    "Saved views: the 'MA50 Div' filter now applies to 'MA60 Div' (60-day trend line, spec v07)."))
 
     def save_custom_settings(self):
         try:
@@ -619,7 +629,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             # refresh that fetched nothing and had nothing to fall back on).
             return
         try:
-            atomic_save_json(UNIVERSE_CACHE_FILE, self.all_data)
+            # paths.UNIVERSE_CACHE_FILE is read here, not imported, so tests can point it elsewhere.
+            atomic_save_json(paths.UNIVERSE_CACHE_FILE, self.all_data)
         except Exception as e:
             logger.warning("Error caching universe data: %s", e, exc_info=True)
 

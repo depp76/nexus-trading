@@ -24,7 +24,7 @@ class StockMaLauncherMixin:
         if not ticker:
             return
         self._on_stock_ma_status(tr(f"{name} ({ticker}) 이평 차트를 불러오는 중...",
-                                    f"Loading MA20 & MA50 for {name} ({ticker})..."))
+                                    f"Loading the MA chart for {name} ({ticker})..."))
         # The thread echoes market/change_mode back in its finished signal,
         # so the slot gets this request's context even with several in flight.
         # The chart's strategy lines follow the variant pinned in the tab, if any.

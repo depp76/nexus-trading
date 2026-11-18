@@ -37,7 +37,7 @@ RANGE_FIELDS = (
     RangeField("chg", tr("등락", "Chg"), "%", 1.0, True),
     RangeField("range52w", tr("52주 위치", "52W position"), tr("범위 대비 %", "% of range"), 0.01, False),
     RangeField("ma20div", "MA20 Div", tr("가격 / MA x100", "price / MA x100"), 1.0, False),
-    RangeField("ma50div", "MA50 Div", tr("가격 / MA x100", "price / MA x100"), 1.0, False),
+    RangeField("ma60div", "MA60 Div", tr("가격 / MA x100", "price / MA x100"), 1.0, False),
     RangeField("d3", "3D", "%", 1.0, True),
     RangeField("d10", "10D", "%", 1.0, True),
     RangeField("d20", "20D", "%", 1.0, True),
@@ -45,6 +45,35 @@ RANGE_FIELDS = (
     RangeField("d120", "120D", "%", 1.0, True),
 )
 FIELD_BY_KEY = {f.key: f for f in RANGE_FIELDS}
+# Range keys that were renamed: a saved view / filter with the old key is moved to the new one
+# when it is read. MA50 Div became MA60 Div on 2026-11-18 (spec v07: the strategy's trend line);
+# the bounds are kept as typed (both are price / MA x100 around 100).
+LEGACY_RANGE_KEYS = {"ma50div": "ma60div"}
+
+
+def migrate_ranges(ranges: dict) -> tuple[dict, bool]:
+    """`ranges` with legacy keys renamed (a new key already present wins); and whether anything moved."""
+    out, moved = {}, False
+    for key, bounds in (ranges or {}).items():
+        new = LEGACY_RANGE_KEYS.get(key)
+        if new is not None:
+            moved = True
+            if new in (ranges or {}):
+                continue
+            key = new
+        out[key] = bounds
+    return out, moved
+
+
+def migrate_views(views: list) -> bool:
+    """Rename legacy range keys in saved views in place; True when any view changed."""
+    changed = False
+    for v in views or []:
+        ranges, moved = migrate_ranges(v.get("ranges") or {})
+        if moved:
+            v["ranges"] = ranges
+            changed = True
+    return changed
 
 # The toolbar's markets in display order: the row "market" value -> button label.
 # key (stored in rows, settings and saved views) -> toggle label. The US
@@ -90,7 +119,7 @@ def normalize(state: dict) -> dict:
     out["market"] = market_list(state.get("market"))
     out["status"] = state.get("status") or ""
     out["search"] = (state.get("search") or "").strip()
-    for key, bounds in (state.get("ranges") or {}).items():
+    for key, bounds in migrate_ranges(state.get("ranges") or {})[0].items():
         if key not in FIELD_BY_KEY or not bounds:
             continue
         lo, hi = (list(bounds) + [None, None])[:2]

@@ -4,7 +4,8 @@ report (trend_following.md 6-4 "강건성", 6-5, 9-17; docs/nexus/validation_che
 What it adds on top of ``run_research`` (all on the development window, 1x costs):
   E1  the five weekly check weekdays, worst-weekday CAGR / MDD per variant;
   E2  the pre-registered neighbour set ``config.E2_NEIGHBORS`` (one field at a time, 31 extra
-      runs for the full matrix; N6 / N7 add 6 for the v07 candidates C1L-C3L, spec 10-2) judged
+      runs for the full matrix up to v06; N6 / N7 on C1-C3 make it 37 since v07, spec 10-2 / 10-13)
+      judged
       by |delta Sharpe| > ``config.E2_SHARPE_JUMP``;
   E4  contribution of the top 5% of trades (by net P&L) and the result without them;
   E5  a counter of every strategy backtest executed for the report;
@@ -299,9 +300,9 @@ def _stop(should_stop) -> None:
 
 
 def variant_for_neighbor(vid: str, field_name: str | None):
-    """`vid`'s Variant, without its own override of `field_name` when it has one: a v07
-    candidate overrides score_ma_long (60), and Variant.apply() runs after the neighbour is put
-    into the params, so the override would silently undo N6 / N7 (spec 10-9 item 2)."""
+    """`vid`'s Variant, without its own override of `field_name` when it has one: a row that
+    overrides the field (the 10-11 ids did for score_ma_long; C1S-C3S do) would otherwise undo the
+    neighbour, because Variant.apply() runs after the neighbour is put into the params (10-9 item 2)."""
     v = get_variant(vid)
     if field_name is None or field_name not in dict(v.score_overrides):
         return v
@@ -522,7 +523,7 @@ def _e1_section(res: RobustnessResult) -> list[str]:
 
 def _registered_base(field_name: str, vids) -> object:
     """The base value a neighbour row moves away from: the variants' own value of the field
-    (a v07 candidate's score_ma_long is 60, not the StrategyParams() default 50)."""
+    (C1S-C3S pin score_ma_long at 50 while the StrategyParams() default is 60 since v07)."""
     vals = {getattr(get_variant(v).apply(StrategyParams()), field_name) for v in vids}
     return vals.pop() if len(vals) == 1 else "/".join(str(x) for x in sorted(vals))
 

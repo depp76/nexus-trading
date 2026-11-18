@@ -1,5 +1,5 @@
 """tests/test_chart_ma_warmup.py — docs/ma60_unification_2026-11-18.md step
-[1a]: the MA chart's MA20 / MA50 / MA60 / MA200 (MA10 gone), strict chart
+[1a]: the MA chart's MA20 / MA60 / MA200 (MA10 gone; MA50 too since spec v07), strict chart
 averages (min_samples=window) with warm-up history loaded ahead of the first
 shown day, the divergence / RSI values unchanged, and the major-index window's
 60 / 200-day lines. Synthetic prices only; the loader is patched."""
@@ -57,7 +57,7 @@ class TestStrictChartMas(unittest.TestCase):
 
     def test_first_window_minus_one_bars_are_missing(self):
         df = add_chart_mas(_history(date(2024, 1, 1), date(2025, 6, 30)))
-        for w in (20, 50, 60, 200):
+        for w in (20, 60, 200):
             col = df.get_column(f"SMA{w}")
             self.assertEqual(col[: w - 1].null_count(), w - 1, w)
             self.assertEqual(col[w - 1:].null_count(), 0, w)
@@ -92,7 +92,7 @@ class TestStockFetchWarmup(unittest.TestCase):
         df, _ = self._fetch(_history(date(2015, 1, 1)))
         first = df.row(0, named=True)
         self.assertGreaterEqual(first["Date"], datetime.now().date() - timedelta(days=1826))
-        for w in (20, 50, 60, 200):
+        for w in (20, 60, 200):
             self.assertIsNotNone(first[f"SMA{w}"], w)
 
     def test_divergence_and_rsi_are_unchanged(self):
@@ -103,7 +103,7 @@ class TestStockFetchWarmup(unittest.TestCase):
         start = df.get_column("Date")[0]
         before = _compute_indicators(hist.filter(pl.col("Date") >= start), (20,))
         self.assertEqual(df.height, before.height)
-        for col in ("MA20_Div", "MA50_Div", "RSI14", "MA20", "MA50"):
+        for col in ("MA20_Div", "MA60_Div", "RSI14", "MA20", "MA60"):
             self.assertTrue(_frame_equal(df.get_column(col), before.get_column(col)), col)
 
     def test_a_longer_lookback_does_not_change_a_days_value(self):
@@ -192,10 +192,12 @@ class TestStockChartMenu(unittest.TestCase):
             cls.df, _ = market.fetch_stock_ma_multi("005930", "KOSPI", windows=(20,))
 
     def test_menu_end_labels_and_hover_have_ma60_ma200_not_ma10(self):
-        self.assertEqual(_MA_KEYS, ("MA20", "MA50", "MA60", "MA200"))
+        self.assertEqual(_MA_KEYS, ("MA20", "MA60", "MA200"))
         self.assertNotIn("MA10", _SERIES)
         d = StockMaDialog("005930", "Samsung", "KOSPI", self.df)
-        self.assertEqual([d._series_buttons[k].text() for k in _MA_KEYS], ["MA20", "MA50", "MA60", "MA200"])
+        self.assertEqual([d._series_buttons[k].text() for k in _MA_KEYS], ["MA20", "MA60", "MA200"])
+        self.assertNotIn("MA50", d._series_buttons)
+        self.assertNotIn("SMA50", self.df.columns)
         self.assertNotIn("MA10", d._lines)
         for k in _MA_KEYS:
             d._set_series(k, True)
@@ -212,7 +214,7 @@ class TestStockChartMenu(unittest.TestCase):
     def test_divergence_lines_keep_their_colours(self):
         d = StockMaDialog("005930", "Samsung", "KOSPI", self.df)
         self.assertEqual(d._lines["Div(20)"].get_color(), "#d1c5ff")
-        self.assertEqual(d._lines["Div(50)"].get_color(), "#a993ff")
+        self.assertEqual(d._lines["Div(60)"].get_color(), "#a993ff")      # the long divergence line: MA60
         d.close()
 
     def test_period_change_keeps_the_values(self):

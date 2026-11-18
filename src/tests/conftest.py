@@ -25,3 +25,6 @@ import pytest  # noqa: E402
 def _isolated_holdout_ledger(tmp_path, monkeypatch):
     import paths
     monkeypatch.setattr(paths, "HOLDOUT_LEDGER_FILE", str(tmp_path / "holdout_ledger.jsonl"))
+    # Same for the Universe cache (2026-11-18: a Universe test's table render saved its one
+    # fixture row over the real universe_cache.json).
+    monkeypatch.setattr(paths, "UNIVERSE_CACHE_FILE", str(tmp_path / "universe_cache.json"))
