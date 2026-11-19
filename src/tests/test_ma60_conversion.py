@@ -15,7 +15,7 @@ app = QApplication.instance() or QApplication([])
 from data.indicators import _compute_indicators, fetch_historical_changes  # noqa: E402
 from ui.universe_columns import COLUMNS, COL_MA60DIV  # noqa: E402
 from ui.universe_views import (  # noqa: E402
-    FIELD_BY_KEY, LEGACY_RANGE_KEYS, matches, migrate_ranges, migrate_views, normalize,
+    FIELD_BY_KEY, LEGACY_RANGE_KEYS, matches, migrate_ranges, normalize,
 )
 
 
@@ -67,13 +67,9 @@ class TestUniverseColumnAndFilter(unittest.TestCase):
                "values": {"ma60div": 104.0}}
         self.assertTrue(matches(row, normalize({"ranges": {"ma50div": [100, 110]}})))
 
-    def test_saved_views_are_rewritten_once_and_announced(self):
-        views = [{"name": "MA 위", "market": "ALL", "status": "", "search": "", "ranges": {"ma50div": [100.0, None]}},
-                 {"name": "저PER", "market": "ALL", "status": "", "search": "", "ranges": {"tper": [0.0, 12.0]}}]
-        self.assertTrue(migrate_views(views))
-        self.assertEqual(views[0]["ranges"], {"ma60div": [100.0, None]})
-        self.assertFalse(migrate_views(views))                      # already moved
-
+    def test_old_saved_views_are_dropped(self):
+        """The saved views went into the Filters panel on 2026-11-19: a `views`
+        key left in custom_settings.json is dropped on load (docs/ui.md 8.9)."""
         from ui.universe_tab import UniverseTab
         settings = {"views": [{"name": "old", "market": "ALL", "status": "", "search": "",
                                "ranges": {"ma50div": [None, 98.0]}}]}
@@ -81,14 +77,9 @@ class TestUniverseColumnAndFilter(unittest.TestCase):
         def fake_load(path, default=None):
             return settings if str(path).endswith("custom_settings.json") else default
         with patch("ui.universe_tab.safe_load_json", side_effect=fake_load), \
-                patch("ui.universe_tab.atomic_save_json") as save:
+                patch("ui.universe_tab.atomic_save_json"):
             tab = UniverseTab()
-            got = []
-            tab.status_message.connect(got.append)
-            QApplication.processEvents()
-        self.assertEqual(tab.custom_settings["views"][0]["ranges"], {"ma60div": [None, 98.0]})
-        save.assert_called()
-        self.assertEqual(len([m for m in got if "MA60 Div" in m]), 1)
+        self.assertNotIn("views", tab.custom_settings)
 
 
 class TestTestsLeaveTheRealCacheAlone(unittest.TestCase):

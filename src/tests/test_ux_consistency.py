@@ -371,7 +371,7 @@ class TestButtonOrderAndSizing(unittest.TestCase):
         # 종목 추가 right of the search box; 전략 신호 then the primary at the right end (2026-11-16)
         self.assertLess(x(tab.search_input), x(tab.add_ticker_btn))
         self.assertLess(x(tab.add_ticker_btn), x(next(iter(tab._market_buttons.values()))))
-        self.assertLess(x(tab.views_btn), x(tab.signal_btn))
+        self.assertLess(x(tab.filters_btn), x(tab.signal_btn))
         self.assertLess(x(tab.signal_btn), x(tab.refresh_btn))
         self.assertEqual(tab.signal_btn.text(), "전략 신호")
         tab.hide()

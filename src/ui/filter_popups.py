@@ -14,8 +14,10 @@ from PyQt6.QtGui import QFont
 
 from i18n import tr
 from ui.common import create_font, FONT_BODY, FONT_CAPTION, make_button, _set_field_error
-from ui.universe_views import RANGE_FIELDS
-from ui.theme import LINE_GROUP, SURFACE
+from ui.universe_views import (
+    RANGE_FIELDS, add_preset, describe_ranges, preset_is_on, preset_label, remove_preset,
+)
+from ui.theme import LINE, LINE_GROUP, SURFACE
 
 
 # ---------------------------------------------------------------------------
@@ -138,10 +140,16 @@ class RangeFilterPopup(QFrame):
     """Min/max inputs for every range-filterable column (ui.universe_views.
     RANGE_FIELDS). Apply emits the ranges dict; Clear empties every field
     and applies. A blank field means "no bound"; an unparsable one is
-    outlined in red and blocks Apply."""
+    outlined in red and blocks Apply.
+
+    `presets` -- (FilterPreset, row count) pairs -- are the quick-pick check
+    boxes at the top (the former saved views, folded in on 2026-11-19; docs/ui.md
+    8.9): ticking one fills its fields and applies at once, unticking clears
+    them; a box is ticked while the fields hold its bounds (typed or not).
+    The panel stays open after a quick pick."""
     applied = pyqtSignal(dict)
 
-    def __init__(self, ranges: dict, parent=None):
+    def __init__(self, ranges: dict, parent=None, presets=()):
         super().__init__(parent, Qt.WindowType.Popup)
         self.setObjectName("DashboardCard")
         self.setFrameShape(QFrame.Shape.StyledPanel)
@@ -157,6 +165,26 @@ class RangeFilterPopup(QFrame):
         hint.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
         hint.setWordWrap(True)
         v.addWidget(hint)
+
+        self._preset_checks = []
+        if presets:
+            picks = QHBoxLayout()
+            picks.setSpacing(14)
+            head = QLabel(tr("빠른 선택", "Quick picks"))
+            head.setObjectName("muted")
+            picks.addWidget(head)
+            for preset, count in presets:
+                cb = QCheckBox(f"{preset_label(preset)}  ({count})")
+                cb.setToolTip(describe_ranges(preset.ranges))
+                cb.clicked.connect(lambda checked, p=preset: self._on_preset(p, checked))
+                picks.addWidget(cb)
+                self._preset_checks.append((preset, cb))
+            picks.addStretch()
+            v.addLayout(picks)
+            line = QFrame()
+            line.setFixedHeight(1)
+            line.setStyleSheet(f"background: {LINE}; border: none;")
+            v.addWidget(line)
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(6)
@@ -175,6 +203,7 @@ class RangeFilterPopup(QFrame):
                 if val is not None:
                     e.setText(f"{val:g}")
                 e.returnPressed.connect(self._apply)
+                e.textEdited.connect(self._sync_presets)
             grid.addWidget(lbl, r, 0)
             grid.addWidget(lo_e, r, 1)
             grid.addWidget(QLabel("\u2013"), r, 2)
@@ -191,29 +220,34 @@ class RangeFilterPopup(QFrame):
         btns.addWidget(clear_btn)
         btns.addWidget(apply_btn)
         v.addLayout(btns)
+        self._sync_presets()
 
     @staticmethod
-    def _parse(edit: QLineEdit):
+    def _parse(edit: QLineEdit, mark: bool = True):
         text = edit.text().replace(",", "").strip()
         if not text:
-            _set_field_error(edit, "")
+            if mark:
+                _set_field_error(edit, "")
             return None, True
         try:
             value = float(text)
             if value != value or value in (float("inf"), float("-inf")):
                 raise ValueError
         except ValueError:
-            _set_field_error(edit, tr("숫자를 입력하세요", "Enter a number"))
+            if mark:
+                _set_field_error(edit, tr("숫자를 입력하세요", "Enter a number"))
             return None, False
-        _set_field_error(edit, "")
+        if mark:
+            _set_field_error(edit, "")
         return value, True
 
-    def values(self):
-        """(ranges dict, all fields valid)."""
+    def values(self, mark: bool = True):
+        """(ranges dict, all fields valid). `mark=False` leaves the red
+        outlines alone (the quick picks' sync while typing)."""
         out, ok = {}, True
         for key, (lo_e, hi_e) in self._edits.items():
-            lo, ok_lo = self._parse(lo_e)
-            hi, ok_hi = self._parse(hi_e)
+            lo, ok_lo = self._parse(lo_e, mark)
+            hi, ok_hi = self._parse(hi_e, mark)
             ok = ok and ok_lo and ok_hi
             if lo is not None and hi is not None and lo > hi:
                 lo, hi = hi, lo
@@ -227,6 +261,28 @@ class RangeFilterPopup(QFrame):
             return
         self.applied.emit(ranges)
         self.close()
+
+    def _set_fields(self, ranges: dict):
+        for key, (lo_e, hi_e) in self._edits.items():
+            lo, hi = (list(ranges.get(key) or []) + [None, None])[:2]
+            lo_e.setText("" if lo is None else f"{lo:g}")
+            hi_e.setText("" if hi is None else f"{hi:g}")
+
+    def _sync_presets(self):
+        ranges, _ok = self.values(mark=False)
+        for preset, cb in self._preset_checks:
+            cb.setChecked(preset_is_on(ranges, preset))
+
+    def _on_preset(self, preset, checked: bool):
+        """A quick pick: add or remove its bounds and apply; the panel stays open."""
+        ranges, ok = self.values()
+        if not ok:
+            self._sync_presets()           # a field is not a number: nothing applied
+            return
+        ranges = add_preset(ranges, preset) if checked else remove_preset(ranges, preset)
+        self._set_fields(ranges)
+        self._sync_presets()
+        self.applied.emit(ranges)
 
     def _clear(self):
         for lo_e, hi_e in self._edits.values():

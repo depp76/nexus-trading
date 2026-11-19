@@ -1,17 +1,18 @@
-"""ui/universe_views.py — Trading Universe range filters and saved views
-(docs/ui.md 2.6 / 8.9). Pure logic, no Qt: StockTable turns each table row
-into a plain dict (`row_values`) and both the table's row filtering and the
-per-view match counts go through `matches()` here, so a view's count is
-always exactly the number of rows the view shows.
+"""ui/universe_views.py — Trading Universe filter state, range filters and
+their presets (docs/ui.md 2.6 / 8.9). Pure logic, no Qt: StockTable turns
+each table row into a plain dict (`row_values`) and both the table's row
+filtering and the per-preset match counts go through `matches()` here, so a
+preset's count is always exactly the number of rows it shows.
 
-A *filter state* (also what a saved view stores) is a dict:
+A *filter state* is a dict:
     {"market": "ALL" | [market, ...], "status": ""|"On"|"Tg",
      "search": str, "ranges": {field_key: [lo | None, hi | None]}}
 `market` is the list of markets switched on in the toolbar (MARKETS keys),
-or "ALL" for a view that leaves the market selection alone (the built-in
-views, "clear filters"); index rows are never hidden by it. An older saved
-view's single market string reads as a one-market list. Range bounds are
-kept in the units the user typed (see RANGE_FIELDS).
+or "ALL" for a state that leaves the market selection alone; index rows are
+never hidden by it. A single market string reads as a one-market list.
+Range bounds are kept in the units the user typed (see RANGE_FIELDS).
+The saved views were folded into the Filters panel on 2026-11-19 (user
+direction): what is left of them are FILTER_PRESETS, its quick picks.
 """
 from __future__ import annotations
 
@@ -45,7 +46,7 @@ RANGE_FIELDS = (
     RangeField("d120", "120D", "%", 1.0, True),
 )
 FIELD_BY_KEY = {f.key: f for f in RANGE_FIELDS}
-# Range keys that were renamed: a saved view / filter with the old key is moved to the new one
+# Range keys that were renamed: a filter with the old key is moved to the new one
 # when it is read. MA50 Div became MA60 Div on 2026-11-18 (spec v07: the strategy's trend line);
 # the bounds are kept as typed (both are price / MA x100 around 100).
 LEGACY_RANGE_KEYS = {"ma50div": "ma60div"}
@@ -64,16 +65,6 @@ def migrate_ranges(ranges: dict) -> tuple[dict, bool]:
         out[key] = bounds
     return out, moved
 
-
-def migrate_views(views: list) -> bool:
-    """Rename legacy range keys in saved views in place; True when any view changed."""
-    changed = False
-    for v in views or []:
-        ranges, moved = migrate_ranges(v.get("ranges") or {})
-        if moved:
-            v["ranges"] = ranges
-            changed = True
-    return changed
 
 # The toolbar's markets in display order: key (stored in rows, settings and
 # saved views; never changed) -> display name (row meta, status lines, view
@@ -98,22 +89,54 @@ def market_list(market) -> list | str:
     picked = [m for m in MARKETS if m in given]
     return picked or "ALL"
 
-# The spec's own examples (docs/ui.md 2.6: "저PER", "신고가 근접"); always
-# listed, never deleted. Held/Target are the toolbar's status button.
-BUILTIN_VIEWS = (
-    {"name": "저PER", "market": "ALL", "status": "", "search": "", "ranges": {"tper": [0.0, 12.0]}},
-    {"name": "52주 신고가 근접", "market": "ALL", "status": "", "search": "", "ranges": {"range52w": [90.0, None]}},
+@dataclass(frozen=True)
+class FilterPreset:
+    """A quick pick at the top of the Filters panel: a name and the ranges
+    ticking it fills in (docs/ui.md 8.9; the former built-in saved views)."""
+    name: str         # key, kept Korean (the label is translated by preset_label)
+    ranges: dict      # {field_key: [lo | None, hi | None]} in RANGE_FIELDS units
+
+
+# The spec's own examples (docs/ui.md 2.6: "저PER", "신고가 근접").
+FILTER_PRESETS = (
+    FilterPreset("저PER", {"tper": [0.0, 12.0]}),
+    FilterPreset("52주 신고가 근접", {"range52w": [90.0, None]}),
 )
-# English labels of the built-in views. A view's "name" is its key (combo item
-# data, the built-in-name check), so it stays Korean; only the label shown in
-# the Views list is translated. User-saved names are shown as typed.
-_BUILTIN_VIEW_EN = {"저PER": "Low tPER", "52주 신고가 근접": "Near 52W High"}
+_PRESET_EN = {"저PER": "Low tPER", "52주 신고가 근접": "Near 52W High"}
 
 
-def view_display_name(name: str) -> str:
-    """The Views-list label of a view: built-in names in the UI language."""
-    en = _BUILTIN_VIEW_EN.get(name)
-    return tr(name, en) if en else name
+def preset_label(preset: FilterPreset) -> str:
+    en = _PRESET_EN.get(preset.name)
+    return tr(preset.name, en) if en else preset.name
+
+
+def _clean_ranges(ranges: dict) -> dict:
+    return normalize({"ranges": ranges})["ranges"]
+
+
+def preset_is_on(ranges: dict, preset: FilterPreset) -> bool:
+    """Ticked exactly while every range of the preset is in force, whether
+    it got there by ticking the box or by typing the same bounds."""
+    current, own = _clean_ranges(ranges), _clean_ranges(preset.ranges)
+    return bool(own) and all(current.get(k) == b for k, b in own.items())
+
+
+def add_preset(ranges: dict, preset: FilterPreset) -> dict:
+    """`ranges` with the preset's ranges added (ticked presets all apply);
+    a bound on the same column is replaced, which unticks a preset that set
+    it differently."""
+    out = _clean_ranges(ranges)
+    out.update(_clean_ranges(preset.ranges))
+    return out
+
+
+def remove_preset(ranges: dict, preset: FilterPreset) -> dict:
+    """`ranges` without the preset's own ranges; other bounds stay."""
+    out = _clean_ranges(ranges)
+    for k, b in _clean_ranges(preset.ranges).items():
+        if out.get(k) == b:
+            del out[k]
+    return out
 
 
 def empty_state() -> dict:
@@ -143,53 +166,6 @@ def same_state(a: dict, b: dict) -> bool:
     na.pop("name", None)
     nb.pop("name", None)
     return na == nb
-
-
-def view_is_on(current: dict, view: dict) -> bool:
-    """Is every condition of `view` in force in the filter state `current`?
-    This is a saved view's check box (docs/ui.md 8.9, 2026-11-19): ticked
-    exactly while its conditions are part of the current filters, whether
-    they got there by ticking it or by typing them. A view with no condition
-    of its own (nothing but "ALL" markets) is never on."""
-    c, v = normalize(current), normalize(view)
-    if v["market"] == "ALL" and not v["status"] and not v["search"] and not v["ranges"]:
-        return False
-    if v["market"] != "ALL" and c["market"] != v["market"]:
-        return False
-    if v["status"] and c["status"] != v["status"]:
-        return False
-    if v["search"] and c["search"] != v["search"]:
-        return False
-    return all(c["ranges"].get(k) == b for k, b in v["ranges"].items())
-
-
-def add_view(current: dict, view: dict) -> dict:
-    """`current` with `view`'s conditions added (ticking its box): the views
-    ticked together all apply (AND). A condition on the same field replaces
-    the current one, which unticks a view that set it differently."""
-    c, v = normalize(current), normalize(view)
-    if v["market"] != "ALL":
-        c["market"] = v["market"]
-    if v["status"]:
-        c["status"] = v["status"]
-    if v["search"]:
-        c["search"] = v["search"]
-    c["ranges"].update(v["ranges"])
-    return c
-
-
-def remove_view(current: dict, view: dict) -> dict:
-    """`current` without `view`'s conditions (unticking its box). Markets stay
-    as they are: they are the toolbar's toggles, not a filter to clear."""
-    c, v = normalize(current), normalize(view)
-    if v["status"] and c["status"] == v["status"]:
-        c["status"] = ""
-    if v["search"] and c["search"] == v["search"]:
-        c["search"] = ""
-    for k, b in v["ranges"].items():
-        if c["ranges"].get(k) == b:
-            del c["ranges"][k]
-    return c
 
 
 def matches(row: dict, state: dict) -> bool:
@@ -229,21 +205,6 @@ def matches(row: dict, state: dict) -> bool:
 
 def count_matches(rows: list, state: dict) -> int:
     return sum(1 for r in rows if matches(r, state))
-
-
-def describe_view(state: dict) -> str:
-    """'KOSPI · Held · "samsung" · tPER 0-12' -- the Views list tooltip."""
-    s = normalize(state)
-    parts = []
-    if s["market"] != "ALL":
-        parts.append("+".join(MARKETS[m] for m in s["market"]))
-    if s["status"]:
-        parts.append({"On": tr("보유", "Held"), "Tg": tr("관심", "Target")}.get(s["status"], s["status"]))
-    if s["search"]:
-        parts.append(f'"{s["search"]}"')
-    if s["ranges"]:
-        parts.append(describe_ranges(s["ranges"]))
-    return " \u00b7 ".join(parts) or tr("필터 없음", "No filter")
 
 
 def describe_ranges(ranges: dict) -> str:

@@ -46,8 +46,8 @@ from ui.universe_table import StockTable
 from ui.heat_legend import HeatLegend
 from ui.filter_popups import RangeFilterPopup
 from ui.universe_views import (
-    BUILTIN_VIEWS, MARKETS, add_view, count_matches, remove_view, view_is_on, market_display, describe_ranges, describe_view,
-    market_list, migrate_views, normalize as normalize_view, view_display_name,
+    FILTER_PRESETS, MARKETS, count_matches, market_display, describe_ranges, market_list, normalize as normalize_view,
+    preset_is_on, preset_label,
 )
 from i18n import tr
 from ui.dialogs.stock_report import show_stock_report_result
@@ -130,7 +130,6 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._markets = self._saved_markets()
         self._sync_market_buttons()
         self._update_filters_button()
-        self._refresh_views_menu()   # filled even before any data arrives
 
         # Try to load cached universe data to make startup instant, but always refresh to latest afterwards.
         cached = safe_load_json(paths.UNIVERSE_CACHE_FILE, default=None)
@@ -191,12 +190,6 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         bar.addSpacing(self._GROUP_GAP)
         self.filters_btn = make_button(tr("필터", "Filters"), checkable=True, on_click=self._open_range_filters)
         bar.addWidget(self.filters_btn)
-        # Saved views as check boxes in the button's menu (user direction
-        # 2026-11-19; was a combo box): the ticked views apply together.
-        self.views_btn = make_button(tr("저장된 보기", "Views"), checkable=True)
-        self._views_menu = self._build_views_menu()
-        self.views_btn.setMenu(self._views_menu)
-        bar.addWidget(self.views_btn)
 
         bar.addStretch()
 
@@ -299,7 +292,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         direction 2026-11-16): the widest label any of them can show, so no
         label change resizes a button. This tab's labels are registered at
         the bottom of this module."""
-        fix_toolbar_widths([*self._market_buttons.values(), self.tg_filter_btn, self.filters_btn, self.views_btn,
+        fix_toolbar_widths([*self._market_buttons.values(), self.tg_filter_btn, self.filters_btn,
                             self.add_ticker_btn, self.signal_btn, self.refresh_btn])
 
     # ---Markets (docs/ui.md 2.1) ---
@@ -451,12 +444,10 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             self.custom_settings.update(data)
             # Column-group and density toggles were removed on 2026-09-19
             # (user direction); drop their saved state so it does not linger.
-            for stale in ("column_groups", "density"):
+            # The saved views went into the Filters panel's quick picks on
+            # 2026-11-19 (docs/ui.md 8.9); user views are no longer read.
+            for stale in ("column_groups", "density", "views"):
                 self.custom_settings.pop(stale, None)
-            # Migration (2026-11-18): saved views filtering "MA50 Div" now filter "MA60 Div".
-            if migrate_views(self.custom_settings.get("views")):
-                self.save_custom_settings()
-                QTimer.singleShot(0, self._announce_view_migration)
             # Migration: old array "highlighted" -> dict "highlights"
             if isinstance(self.custom_settings.get("highlighted"), list):
                 hl_dict = self.custom_settings.setdefault("highlights", {})
@@ -464,11 +455,6 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
                     hl_dict[t] = "Tg"
                 del self.custom_settings["highlighted"]
                 self.save_custom_settings()
-
-    def _announce_view_migration(self):
-        """Once, after the window is wired: saved views moved from MA50 Div to MA60 Div."""
-        self.status_message.emit(tr("저장된 보기의 'MA50 Div' 필터를 'MA60 Div'로 옮겼습니다 (추세선 60일, 스펙 v07).",
-                                    "Saved views: the 'MA50 Div' filter now applies to 'MA60 Div' (60-day trend line, spec v07)."))
 
     def save_custom_settings(self):
         try:
@@ -677,9 +663,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.table.apply_col_filters(text, status=self._status_filter, market=self.selected_markets(),
                                      ranges=self._ranges)
         self._update_filters_button()
-        self._refresh_views_menu()
 
-    # ---Range filters and saved views (docs/ui.md 2.6 / 8.9) ---
+    # ---Filter state and range filters with their quick picks (docs/ui.md 2.6 / 8.9) ---
     def current_view_state(self) -> dict:
         return normalize_view({"market": self.selected_markets(), "status": self._status_filter,
                                "search": self.search_input.text(), "ranges": self._ranges})
@@ -726,13 +711,19 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         n = len(self._ranges)
         self.filters_btn.setText(tr(f"필터 ({n})", f"Filters ({n})") if n else tr("필터", "Filters"))
         self.filters_btn.setChecked(bool(n))
-        self.filters_btn.setToolTip(describe_ranges(self._ranges) if n else
-                                    tr("숫자 범위 필터: 시총, PER, 등락, 52주 위치, MA Div, 모멘텀",
-                                       "Numeric range filters: Cap, PER, change, 52W position, MA Div, momentum"))
+        picked = [preset_label(p) for p in FILTER_PRESETS if preset_is_on(self._ranges, p)]
+        summary = describe_ranges(self._ranges)
+        if picked:
+            summary = " · ".join(picked) + "\n" + summary
+        self.filters_btn.setToolTip(
+            summary if n else
+            tr("숫자 범위 필터와 빠른 선택(저PER, 52주 신고가 근접): 시총, PER, 등락, 52주 위치, MA Div, 모멘텀",
+               "Numeric range filters and quick picks (Low tPER, Near 52W High): Cap, PER, change, "
+               "52W position, MA Div, momentum"))
 
     def _open_range_filters(self):
         self._update_filters_button()          # undo the click's own toggle
-        popup = RangeFilterPopup(self._ranges)
+        popup = RangeFilterPopup(self._ranges, presets=self._preset_counts())
         popup.applied.connect(self._on_ranges_applied)
         popup.move(self.filters_btn.mapToGlobal(self.filters_btn.rect().bottomLeft()))
         popup.show()
@@ -742,74 +733,12 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._ranges = normalize_view({"ranges": ranges})["ranges"]
         self.filter_table()
 
-    def _user_views(self) -> list:
-        return self.custom_settings.setdefault("views", [])
-
-    def _all_views(self) -> list:
-        return [dict(v, builtin=True) for v in BUILTIN_VIEWS] + [dict(v, builtin=False) for v in self._user_views()]
-
-    def _build_views_menu(self) -> QMenu:
-        """The "저장된 보기" menu: nothing but a check box per view with its
-        live row count (filled by _refresh_views_menu; user direction
-        2026-11-19, docs/ui.md 8.9). Ticking a box adds that view's conditions
-        to the current filters, unticking removes them; the menu stays open
-        so several can be ticked."""
-        menu = QMenu(self)
-        self._views_panel = QWidget()
-        self._views_col = QVBoxLayout(self._views_panel)
-        self._views_col.setContentsMargins(12, 8, 16, 8)
-        self._views_col.setSpacing(6)
-        self._view_checks: dict[str, QCheckBox] = {}
-        action = QWidgetAction(menu)
-        action.setDefaultWidget(self._views_panel)
-        menu.addAction(action)
-        return menu
-
-    def _refresh_views_menu(self):
-        """Each view's box: its live row count, ticked while its conditions are
-        in force (universe_views.view_is_on). The boxes are rebuilt only when
-        the set of views changes, so a click never deletes the box it came from."""
+    def _preset_counts(self) -> list:
+        """(preset, rows it would show) for the Filters panel's quick picks:
+        each preset alone, within the markets that are on."""
         rows = self.table.all_row_values()
-        current = self.current_view_state()
-
-        def resolved(view):
-            # A view with market "ALL" means "the markets that are on".
-            return dict(view, market=current["market"]) if market_list(view.get("market")) == "ALL" else view
-
-        views = self._all_views()
-        if [v["name"] for v in views] != list(self._view_checks):
-            for cb in self._view_checks.values():
-                self._views_col.removeWidget(cb)
-                cb.deleteLater()
-            self._view_checks = {}
-            for v in views:
-                cb = QCheckBox()
-                cb.clicked.connect(lambda checked, n=v["name"]: self._on_view_toggled(n, checked))
-                self._views_col.addWidget(cb)
-                self._view_checks[v["name"]] = cb
-        ticked = []
-        for v in views:
-            cb = self._view_checks[v["name"]]
-            cb.setText(f"{view_display_name(v['name'])}  ({count_matches(rows, resolved(v))})")
-            cb.setToolTip(describe_view(v))
-            on = view_is_on(current, v)
-            cb.setChecked(on)
-            if on:
-                ticked.append(view_display_name(v["name"]))
-        self._views_panel.adjustSize()
-        self.views_btn.setChecked(bool(ticked))
-        self.views_btn.setToolTip(
-            tr("선택한 보기: ", "Ticked views: ") + ", ".join(ticked) if ticked else
-            tr("저장된 보기: 시장·상태·검색어·범위 필터 조합과 그 보기의 종목 수. 여러 개를 체크하면 모두 적용됩니다.",
-               "Saved views: a market / status / search / range-filter combination, with the number of rows "
-               "it shows. Tick several and they all apply."))
-
-    def _on_view_toggled(self, name: str, checked: bool):
-        view = next((v for v in self._all_views() if v["name"] == name), None)
-        if view is None:
-            return
-        current = self.current_view_state()
-        self.apply_view_state(add_view(current, view) if checked else remove_view(current, view))
+        markets = self.selected_markets()
+        return [(p, count_matches(rows, {"market": markets, "ranges": p.ranges})) for p in FILTER_PRESETS]
 
     # ---Per-stock MA (20 + 60) ---
     def _on_ma_chart_requested(self, ticker: str):
@@ -1244,6 +1173,6 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 register_toolbar_labels(
     *(UniverseTab._MARKET_BUTTON_TEXT.get(m, label).replace("&", "&&") for m, label in MARKETS.items()),
     *(label for _, label in UniverseTab._STATUS_FILTER_STATES),
-    tr("필터", "Filters"), tr("필터 (99)", "Filters (99)"), tr("저장된 보기", "Views"),
+    tr("필터", "Filters"), tr("필터 (99)", "Filters (99)"),
     tr("종목 추가", "Add Ticker"), tr("전략 신호", "Signals"), tr("새로고침", "Refresh"),
 )
