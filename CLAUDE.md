@@ -143,8 +143,9 @@ Dev tooling is in `requirements-dev.txt`
   (every custom-painted table cell: `CellDelegate` base + the Universe/History delegates),
   `ma_chart.py` (`StockMaLauncherMixin`, the MA-chart dialog launcher; `UniverseTab` is its
   only user now),
-  `universe_views.py` (Trading Universe range filters + saved views, pure: `matches()` drives both the
-  table's row hiding and the Views counts; docs/ui.md 8.9),
+  `universe_views.py` (Trading Universe filter state, range filters and the Filters panel's quick-pick
+  `FILTER_PRESETS` (the saved views were folded in on 2026-11-19), pure: `matches()` drives both the
+  table's row hiding and the preset counts; docs/ui.md 8.9),
   `colors.py` / `theme.py` (the dark "Soft Slate" theme since 2026-11-14, docs/ui.md 8.16:
   `app_palette()` and `apply_matplotlib_theme()` are installed by `main.py` next to the QSS, so
   no widget or chart falls back to default black text; PROFIT/LOSS color rule, design tokens and the global QSS —

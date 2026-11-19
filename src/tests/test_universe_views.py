@@ -1,14 +1,14 @@
-"""tests/test_universe_views.py — Trading Universe range filters and saved
-views (docs/ui.md 2.6 / 8.9): the pure matcher, the table's row values and
-filtering, and the tab's Views list."""
+"""tests/test_universe_views.py — Trading Universe filters (docs/ui.md 2.6 /
+8.9): the pure matcher, the table's row values and filtering, and the Filters
+panel's quick picks (the former saved views, folded in on 2026-11-19)."""
 import unittest
 from unittest.mock import patch
 
 from PyQt6.QtWidgets import QApplication
 
 from ui.universe_views import (
-    BUILTIN_VIEWS, add_view, count_matches, describe_ranges, describe_view, empty_state, matches, normalize,
-    remove_view, same_state, view_is_on,
+    FILTER_PRESETS, add_preset, count_matches, describe_ranges, empty_state, matches, normalize, preset_is_on,
+    remove_preset, same_state,
 )
 
 app = QApplication.instance() or QApplication([])
@@ -56,12 +56,12 @@ class TestMatches(unittest.TestCase):
         self.assertFalse(matches(bond, {"ranges": {"chg": [0, None]}}))
         self.assertTrue(matches(bond, {"ranges": {"tper": [None, None]}}))  # empty bounds = no filter
 
-    def test_builtin_views_and_counts(self):
+    def test_presets_and_counts(self):
         rows = [_row(values={"tper": 8.0}), _row(values={"tper": 30.0}), _row(values={"tper": -5.0}),
                 _row(values={"range52w": 0.93})]
-        low_per, near_high = BUILTIN_VIEWS
-        self.assertEqual(count_matches(rows, low_per), 1)      # negative PER is not "low"
-        self.assertEqual(count_matches(rows, near_high), 1)
+        low_per, near_high = FILTER_PRESETS
+        self.assertEqual(count_matches(rows, {"ranges": low_per.ranges}), 1)      # negative PER is not "low"
+        self.assertEqual(count_matches(rows, {"ranges": near_high.ranges}), 1)
 
     def test_normalize_same_state_and_descriptions(self):
         a = normalize({"market": "KOSPI", "search": "  x ", "ranges": {"tper": [None, 12], "bogus": [1, 2],
@@ -70,8 +70,6 @@ class TestMatches(unittest.TestCase):
         self.assertTrue(same_state(a, dict(a, name="mine")))
         self.assertEqual(describe_ranges({"tper": [0, 12], "range52w": [90, None]}),
                          "tPER 0–12 · 52주 위치 ≥ 90")
-        self.assertEqual(describe_view({"status": "On", "ranges": {}}), "보유")
-        self.assertEqual(describe_view(empty_state()), "필터 없음")
 
 
 def _stock(ticker, market="KOSPI", per=None, price=100.0, low=None, high=None, mode="pct", chg=0.0):
@@ -118,94 +116,85 @@ class TestTableFiltering(_TabCase):
         self.assertEqual(self._visible(tab), ["A", "B", "C"])
         self.assertEqual(tab.filters_btn.text(), "필터")
 
-    def test_tper_filter_and_low_per_view_count(self):
+    def test_tper_filter_and_low_per_preset(self):
         tab = self._tab([_stock("A", per=8.0), _stock("B", per=25.0), _stock("C")])
         tab._on_ranges_applied({"tper": [0, 12]})
         self.assertEqual(self._visible(tab), ["A"])
-        self.assertEqual(tab._view_checks["저PER"].text(), "저PER  (1)")
-        self.assertTrue(tab._view_checks["저PER"].isChecked())     # typed by hand: the view's box is ticked
+        self.assertTrue(tab.filters_btn.toolTip().startswith("저PER"))   # typed by hand: the preset is on
 
 
-class TestViews(_TabCase):
-    """Saved views are check boxes in the "저장된 보기" menu (docs/ui.md 8.9, 2026-11-19)."""
+class TestFilterPresets(_TabCase):
+    """The Filters panel's quick picks (docs/ui.md 8.9, 2026-11-19)."""
 
-    def _texts(self, tab):
-        return [cb.text() for cb in tab._view_checks.values()]
+    def _popup(self, tab):
+        tab._open_range_filters()
+        return tab._range_popup
 
-    def _toggle(self, tab, name, checked=True):
-        cb = tab._view_checks[name]
+    @staticmethod
+    def _checks(popup):
+        return {p.name: cb for p, cb in popup._preset_checks}
+
+    @staticmethod
+    def _toggle(cb, checked=True):
         cb.setChecked(checked)
         cb.clicked.emit(checked)
 
-    def test_counts_and_ticking_views(self):
+    def test_no_views_button_any_more(self):
+        tab = self._tab([_stock("A")])
+        self.assertFalse(hasattr(tab, "views_btn"))
+
+    def test_counts_and_ticking_presets(self):
         tab = self._tab([_stock("A", price=99, low=50, high=100, per=8.0),
                          _stock("B", price=60, low=50, high=100, per=8.0),
                          _stock("C", price=99, low=50, high=100, per=25.0)])
-        self.assertEqual(self._texts(tab), ["저PER  (2)", "52주 신고가 근접  (2)"])
-        self.assertFalse(tab.views_btn.isChecked())
-        self._toggle(tab, "52주 신고가 근접")
-        self.assertEqual(self._visible(tab), ["A", "C"])
-        self.assertTrue(tab.views_btn.isChecked())
-        self._toggle(tab, "저PER")                       # both ticked: both apply
+        popup = self._popup(tab)
+        checks = self._checks(popup)
+        self.assertEqual([cb.text() for cb in checks.values()], ["저PER  (2)", "52주 신고가 근접  (2)"])
+        self.assertFalse(any(cb.isChecked() for cb in checks.values()))
+        self._toggle(checks["52주 신고가 근접"])
+        self.assertEqual(self._visible(tab), ["A", "C"])            # applied at once
+        self.assertEqual(popup._edits["range52w"][0].text(), "90")   # and shown in its fields
+        self.assertTrue(popup.isVisible())                           # panel stays open
+        self._toggle(checks["저PER"])                                # both ticked: both apply
         self.assertEqual(self._visible(tab), ["A"])
-        self.assertTrue(all(cb.isChecked() for cb in tab._view_checks.values()))
-        self._toggle(tab, "52주 신고가 근접", False)      # untick one: the other stays
+        self.assertEqual(tab.filters_btn.text(), "필터 (2)")
+        self._toggle(checks["52주 신고가 근접"], False)             # untick one: the other stays
         self.assertEqual(self._visible(tab), ["A", "B"])
-        self.assertTrue(tab._view_checks["저PER"].isChecked())
-        self.assertFalse(tab._view_checks["52주 신고가 근접"].isChecked())
-        self._toggle(tab, "저PER", False)
-        self.assertEqual(self._visible(tab), ["A", "B", "C"])
-        self.assertFalse(tab.views_btn.isChecked())
+        self.assertEqual(popup._edits["range52w"][0].text(), "")
+        self.assertTrue(checks["저PER"].isChecked())
+        popup.close()
 
-    def test_menu_holds_only_the_check_boxes(self):
-        tab = self._tab([_stock("A", price=99, low=50, high=100)])
-        self.assertEqual(len(tab._views_menu.actions()), 1)   # the one panel of check boxes
-        self._toggle(tab, "52주 신고가 근접")
-        self.assertEqual(len(tab._views_menu.actions()), 1)
-
-    def test_a_user_view_from_settings_is_a_check_box_too(self):
-        tab = self._tab([_stock("A", market="KOSPI"), _stock("B", market="KOSDAQ")])
-        tab.custom_settings["views"] = [{"name": "Kosdaq only", "market": ["KOSDAQ"], "status": "",
-                                         "search": "S", "ranges": {}}]
-        tab.filter_table()
-        self.assertIn("Kosdaq only  (1)", self._texts(tab))
-        self._toggle(tab, "Kosdaq only")
-        self.assertEqual(tab.selected_markets(), ["KOSDAQ"])    # the view keeps its markets
-        self.assertEqual(self._visible(tab), ["B"])
-        self._toggle(tab, "Kosdaq only", False)                 # untick: search cleared, markets stay
-        self.assertEqual(tab.selected_markets(), ["KOSDAQ"])
-        self.assertEqual(tab.search_input.text(), "")
+    def test_typing_syncs_the_boxes_and_keeps_other_bounds(self):
+        tab = self._tab([_stock("A", per=8.0)])
+        tab._on_ranges_applied({"cap": [100, None], "tper": [0, 12]})
+        popup = self._popup(tab)
+        checks = self._checks(popup)
+        self.assertTrue(checks["저PER"].isChecked())
+        popup._edits["tper"][1].setText("10")
+        popup._edits["tper"][1].textEdited.emit("10")
+        self.assertFalse(checks["저PER"].isChecked())
+        self._toggle(checks["저PER"])                                # back to its bounds; Cap kept
+        self.assertEqual(tab._ranges, {"cap": [100.0, None], "tper": [0.0, 12.0]})
+        popup.close()
 
 
-class TestViewChecks(unittest.TestCase):
-    """view_is_on / add_view / remove_view: the saved-view check boxes (docs/ui.md 8.9, 2026-11-19)."""
+class TestPresetLogic(unittest.TestCase):
+    """preset_is_on / add_preset / remove_preset (docs/ui.md 8.9, 2026-11-19)."""
 
-    LOW_PER = {"ranges": {"tper": [0, 12]}}
-    NEAR_HIGH = {"ranges": {"range52w": [90, None]}}
+    LOW_PER, NEAR_HIGH = FILTER_PRESETS
 
-    def test_add_and_remove_combine_views(self):
-        state = add_view(add_view(empty_state(), self.LOW_PER), self.NEAR_HIGH)
-        self.assertTrue(view_is_on(state, self.LOW_PER) and view_is_on(state, self.NEAR_HIGH))
-        state = remove_view(state, self.LOW_PER)
-        self.assertFalse(view_is_on(state, self.LOW_PER))
-        self.assertTrue(view_is_on(state, self.NEAR_HIGH))
+    def test_add_and_remove_combine_presets(self):
+        ranges = add_preset(add_preset({}, self.LOW_PER), self.NEAR_HIGH)
+        self.assertTrue(preset_is_on(ranges, self.LOW_PER) and preset_is_on(ranges, self.NEAR_HIGH))
+        ranges = remove_preset(ranges, self.LOW_PER)
+        self.assertFalse(preset_is_on(ranges, self.LOW_PER))
+        self.assertTrue(preset_is_on(ranges, self.NEAR_HIGH))
 
-    def test_same_field_replaces_and_unticks_the_other(self):
-        state = add_view(add_view(empty_state(), self.LOW_PER), {"ranges": {"tper": [0, 8]}})
-        self.assertFalse(view_is_on(state, self.LOW_PER))
-        self.assertEqual(remove_view(state, self.LOW_PER)["ranges"], {"tper": [0.0, 8.0]})   # not its bounds: kept
-
-    def test_markets_set_on_add_and_kept_on_remove(self):
-        view = {"market": ["KOSDAQ"], "search": "S"}
-        state = add_view({"market": ["KOSPI", "KOSDAQ"]}, view)
-        self.assertEqual(state["market"], ["KOSDAQ"])
-        self.assertTrue(view_is_on(state, view))
-        state = remove_view(state, view)
-        self.assertEqual((state["market"], state["search"]), (["KOSDAQ"], ""))
-        self.assertFalse(view_is_on(state, view))
-
-    def test_a_view_without_conditions_is_never_on(self):
-        self.assertFalse(view_is_on(empty_state(), empty_state()))
+    def test_same_field_replaces_and_other_bounds_are_kept(self):
+        ranges = {"tper": [0, 8], "cap": [100, None]}
+        self.assertFalse(preset_is_on(ranges, self.LOW_PER))
+        self.assertEqual(remove_preset(ranges, self.LOW_PER), {"tper": [0.0, 8.0], "cap": [100.0, None]})
+        self.assertEqual(add_preset(ranges, self.LOW_PER), {"tper": [0.0, 12.0], "cap": [100.0, None]})
 
 
 class TestMarketLists(unittest.TestCase):
@@ -223,7 +212,6 @@ class TestMarketLists(unittest.TestCase):
         self.assertEqual(normalize({"market": ["S&P500", "KOSPI", "bogus"]})["market"], ["KOSPI", "S&P500"])
         self.assertEqual(normalize({"market": []})["market"], "ALL")
         self.assertEqual(normalize({"market": "ALL"})["market"], "ALL")
-        self.assertEqual(describe_view({"market": ["KOSPI", "NASDAQ 100"]}), "KOSPI+NASDAQ")     # display name (8.32)
 
 
 class _FakeFetch:
