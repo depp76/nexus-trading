@@ -4,7 +4,7 @@ filtering, and the tab's Views list."""
 import unittest
 from unittest.mock import patch
 
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtWidgets import QApplication
 
 from ui.universe_views import (
     BUILTIN_VIEWS, add_view, count_matches, describe_ranges, describe_view, empty_state, matches, normalize,
@@ -137,9 +137,6 @@ class TestViews(_TabCase):
         cb.setChecked(checked)
         cb.clicked.emit(checked)
 
-    def _actions(self, tab):
-        return {a.text(): a.isEnabled() for a in tab._views_menu.actions() if a.text()}
-
     def test_counts_and_ticking_views(self):
         tab = self._tab([_stock("A", price=99, low=50, high=100, per=8.0),
                          _stock("B", price=60, low=50, high=100, per=8.0),
@@ -160,48 +157,24 @@ class TestViews(_TabCase):
         self.assertEqual(self._visible(tab), ["A", "B", "C"])
         self.assertFalse(tab.views_btn.isChecked())
 
-    def test_menu_items_stay_the_same_when_a_view_is_ticked(self):
-        tab = self._tab([_stock("A", price=99, low=50, high=100), _stock("B", price=60, low=50, high=100)])
-        before = self._actions(tab)
-        self.assertEqual(before, {"전체 보기 (필터 해제)": False, "현재 필터를 보기로 저장...": False,
-                                  "저장된 보기 삭제...": False})
+    def test_menu_holds_only_the_check_boxes(self):
+        tab = self._tab([_stock("A", price=99, low=50, high=100)])
+        self.assertEqual(len(tab._views_menu.actions()), 1)   # the one panel of check boxes
         self._toggle(tab, "52주 신고가 근접")
-        after = self._actions(tab)
-        self.assertEqual(list(after), list(before))
-        self.assertTrue(after["전체 보기 (필터 해제)"])
-        self.assertTrue(after["현재 필터를 보기로 저장..."])
-        tab._view_clear_action.trigger()
-        self.assertEqual(self._visible(tab), ["A", "B"])
-        self.assertFalse(tab._view_checks["52주 신고가 근접"].isChecked())
+        self.assertEqual(len(tab._views_menu.actions()), 1)
 
-    def test_save_and_delete_a_user_view(self):
+    def test_a_user_view_from_settings_is_a_check_box_too(self):
         tab = self._tab([_stock("A", market="KOSPI"), _stock("B", market="KOSDAQ")])
-        tab.set_markets(["KOSDAQ"])                 # switching KOSPI off drops its rows
-        self.assertEqual(self._visible(tab), ["B"])
-        tab.search_input.setText("S")               # markets alone are not a filter
-        with patch("ui.universe_tab.QInputDialog.getText", return_value=("Kosdaq only", True)):
-            tab._view_save_action.trigger()
-        self.assertEqual(tab.custom_settings["views"][0]["name"], "Kosdaq only")
-        self.assertEqual(tab.custom_settings["views"][0]["market"], ["KOSDAQ"])   # the view keeps the markets
+        tab.custom_settings["views"] = [{"name": "Kosdaq only", "market": ["KOSDAQ"], "status": "",
+                                         "search": "S", "ranges": {}}]
+        tab.filter_table()
         self.assertIn("Kosdaq only  (1)", self._texts(tab))
-        self.assertTrue(tab._view_checks["Kosdaq only"].isChecked())
-        tab.apply_view_state(empty_view_state())    # clear filters: markets stay as they are
-        self.assertEqual(tab.selected_markets(), ["KOSDAQ"])
+        self._toggle(tab, "Kosdaq only")
+        self.assertEqual(tab.selected_markets(), ["KOSDAQ"])    # the view keeps its markets
         self.assertEqual(self._visible(tab), ["B"])
-        with patch("ui.universe_tab.QInputDialog.getItem", return_value=("Kosdaq only", True)), \
-             patch("ui.universe_tab.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
-            tab._view_delete_action.trigger()
-        self.assertEqual(tab.custom_settings["views"], [])
-        self.assertFalse(any(t.startswith("Kosdaq only") for t in self._texts(tab)))
-
-    def test_builtin_names_are_reserved(self):
-        tab = self._tab([_stock("A")])
-        tab.search_input.setText("S")
-        with patch("ui.universe_tab.QInputDialog.getText", return_value=("저PER", True)), \
-             patch("ui.universe_tab.QMessageBox.warning") as warn:
-            tab._view_save_action.trigger()
-        warn.assert_called_once()
-        self.assertEqual(tab.custom_settings.get("views", []), [])
+        self._toggle(tab, "Kosdaq only", False)                 # untick: search cleared, markets stay
+        self.assertEqual(tab.selected_markets(), ["KOSDAQ"])
+        self.assertEqual(tab.search_input.text(), "")
 
 
 class TestViewChecks(unittest.TestCase):
