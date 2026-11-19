@@ -145,6 +145,53 @@ def same_state(a: dict, b: dict) -> bool:
     return na == nb
 
 
+def view_is_on(current: dict, view: dict) -> bool:
+    """Is every condition of `view` in force in the filter state `current`?
+    This is a saved view's check box (docs/ui.md 8.9, 2026-11-19): ticked
+    exactly while its conditions are part of the current filters, whether
+    they got there by ticking it or by typing them. A view with no condition
+    of its own (nothing but "ALL" markets) is never on."""
+    c, v = normalize(current), normalize(view)
+    if v["market"] == "ALL" and not v["status"] and not v["search"] and not v["ranges"]:
+        return False
+    if v["market"] != "ALL" and c["market"] != v["market"]:
+        return False
+    if v["status"] and c["status"] != v["status"]:
+        return False
+    if v["search"] and c["search"] != v["search"]:
+        return False
+    return all(c["ranges"].get(k) == b for k, b in v["ranges"].items())
+
+
+def add_view(current: dict, view: dict) -> dict:
+    """`current` with `view`'s conditions added (ticking its box): the views
+    ticked together all apply (AND). A condition on the same field replaces
+    the current one, which unticks a view that set it differently."""
+    c, v = normalize(current), normalize(view)
+    if v["market"] != "ALL":
+        c["market"] = v["market"]
+    if v["status"]:
+        c["status"] = v["status"]
+    if v["search"]:
+        c["search"] = v["search"]
+    c["ranges"].update(v["ranges"])
+    return c
+
+
+def remove_view(current: dict, view: dict) -> dict:
+    """`current` without `view`'s conditions (unticking its box). Markets stay
+    as they are: they are the toolbar's toggles, not a filter to clear."""
+    c, v = normalize(current), normalize(view)
+    if v["status"] and c["status"] == v["status"]:
+        c["status"] = ""
+    if v["search"] and c["search"] == v["search"]:
+        c["search"] = ""
+    for k, b in v["ranges"].items():
+        if c["ranges"].get(k) == b:
+            del c["ranges"][k]
+    return c
+
+
 def matches(row: dict, state: dict) -> bool:
     """Does a table row pass a filter state? `row` is
     {"market", "status", "name", "ticker", "mode", "values": {key: float | None}}

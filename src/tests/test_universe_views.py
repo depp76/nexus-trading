@@ -7,7 +7,8 @@ from unittest.mock import patch
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from ui.universe_views import (
-    BUILTIN_VIEWS, count_matches, describe_ranges, describe_view, empty_state, matches, normalize, same_state,
+    BUILTIN_VIEWS, add_view, count_matches, describe_ranges, describe_view, empty_state, matches, normalize,
+    remove_view, same_state, view_is_on,
 )
 
 app = QApplication.instance() or QApplication([])
@@ -121,27 +122,57 @@ class TestTableFiltering(_TabCase):
         tab = self._tab([_stock("A", per=8.0), _stock("B", per=25.0), _stock("C")])
         tab._on_ranges_applied({"tper": [0, 12]})
         self.assertEqual(self._visible(tab), ["A"])
-        self.assertIn("저PER  (1)", [tab.views_combo.itemText(i) for i in range(tab.views_combo.count())])
+        self.assertEqual(tab._view_checks["저PER"].text(), "저PER  (1)")
+        self.assertTrue(tab._view_checks["저PER"].isChecked())     # typed by hand: the view's box is ticked
 
 
 class TestViews(_TabCase):
-    def _texts(self, tab):
-        c = tab.views_combo
-        return [c.itemText(i) for i in range(c.count())]
+    """Saved views are check boxes in the "저장된 보기" menu (docs/ui.md 8.9, 2026-11-19)."""
 
-    def test_counts_and_applying_a_builtin_view(self):
-        tab = self._tab([_stock("A", price=99, low=50, high=100), _stock("B", price=60, low=50, high=100)])
-        texts = self._texts(tab)
-        self.assertIn("52주 신고가 근접  (1)", texts)
-        self.assertIn("저PER  (0)", texts)
-        idx = texts.index("52주 신고가 근접  (1)")
-        tab._on_view_activated(idx)
+    def _texts(self, tab):
+        return [cb.text() for cb in tab._view_checks.values()]
+
+    def _toggle(self, tab, name, checked=True):
+        cb = tab._view_checks[name]
+        cb.setChecked(checked)
+        cb.clicked.emit(checked)
+
+    def _actions(self, tab):
+        return {a.text(): a.isEnabled() for a in tab._views_menu.actions() if a.text()}
+
+    def test_counts_and_ticking_views(self):
+        tab = self._tab([_stock("A", price=99, low=50, high=100, per=8.0),
+                         _stock("B", price=60, low=50, high=100, per=8.0),
+                         _stock("C", price=99, low=50, high=100, per=25.0)])
+        self.assertEqual(self._texts(tab), ["저PER  (2)", "52주 신고가 근접  (2)"])
+        self.assertFalse(tab.views_btn.isChecked())
+        self._toggle(tab, "52주 신고가 근접")
+        self.assertEqual(self._visible(tab), ["A", "C"])
+        self.assertTrue(tab.views_btn.isChecked())
+        self._toggle(tab, "저PER")                       # both ticked: both apply
         self.assertEqual(self._visible(tab), ["A"])
-        self.assertEqual(tab.views_combo.currentText(), "52주 신고가 근접  (1)")  # the active view is selected
-        clear = self._texts(tab).index("전체 보기 (필터 해제)")
-        tab._on_view_activated(clear)
+        self.assertTrue(all(cb.isChecked() for cb in tab._view_checks.values()))
+        self._toggle(tab, "52주 신고가 근접", False)      # untick one: the other stays
         self.assertEqual(self._visible(tab), ["A", "B"])
-        self.assertEqual(tab.views_combo.currentIndex(), 0)
+        self.assertTrue(tab._view_checks["저PER"].isChecked())
+        self.assertFalse(tab._view_checks["52주 신고가 근접"].isChecked())
+        self._toggle(tab, "저PER", False)
+        self.assertEqual(self._visible(tab), ["A", "B", "C"])
+        self.assertFalse(tab.views_btn.isChecked())
+
+    def test_menu_items_stay_the_same_when_a_view_is_ticked(self):
+        tab = self._tab([_stock("A", price=99, low=50, high=100), _stock("B", price=60, low=50, high=100)])
+        before = self._actions(tab)
+        self.assertEqual(before, {"전체 보기 (필터 해제)": False, "현재 필터를 보기로 저장...": False,
+                                  "저장된 보기 삭제...": False})
+        self._toggle(tab, "52주 신고가 근접")
+        after = self._actions(tab)
+        self.assertEqual(list(after), list(before))
+        self.assertTrue(after["전체 보기 (필터 해제)"])
+        self.assertTrue(after["현재 필터를 보기로 저장..."])
+        tab._view_clear_action.trigger()
+        self.assertEqual(self._visible(tab), ["A", "B"])
+        self.assertFalse(tab._view_checks["52주 신고가 근접"].isChecked())
 
     def test_save_and_delete_a_user_view(self):
         tab = self._tab([_stock("A", market="KOSPI"), _stock("B", market="KOSDAQ")])
@@ -149,16 +180,17 @@ class TestViews(_TabCase):
         self.assertEqual(self._visible(tab), ["B"])
         tab.search_input.setText("S")               # markets alone are not a filter
         with patch("ui.universe_tab.QInputDialog.getText", return_value=("Kosdaq only", True)):
-            tab._on_view_activated(self._texts(tab).index("현재 필터를 보기로 저장..."))
+            tab._view_save_action.trigger()
         self.assertEqual(tab.custom_settings["views"][0]["name"], "Kosdaq only")
         self.assertEqual(tab.custom_settings["views"][0]["market"], ["KOSDAQ"])   # the view keeps the markets
         self.assertIn("Kosdaq only  (1)", self._texts(tab))
+        self.assertTrue(tab._view_checks["Kosdaq only"].isChecked())
         tab.apply_view_state(empty_view_state())    # clear filters: markets stay as they are
         self.assertEqual(tab.selected_markets(), ["KOSDAQ"])
         self.assertEqual(self._visible(tab), ["B"])
         with patch("ui.universe_tab.QInputDialog.getItem", return_value=("Kosdaq only", True)), \
              patch("ui.universe_tab.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
-            tab._on_view_activated(self._texts(tab).index("저장된 보기 삭제..."))
+            tab._view_delete_action.trigger()
         self.assertEqual(tab.custom_settings["views"], [])
         self.assertFalse(any(t.startswith("Kosdaq only") for t in self._texts(tab)))
 
@@ -167,9 +199,40 @@ class TestViews(_TabCase):
         tab.search_input.setText("S")
         with patch("ui.universe_tab.QInputDialog.getText", return_value=("저PER", True)), \
              patch("ui.universe_tab.QMessageBox.warning") as warn:
-            tab._on_view_activated(self._texts(tab).index("현재 필터를 보기로 저장..."))
+            tab._view_save_action.trigger()
         warn.assert_called_once()
         self.assertEqual(tab.custom_settings.get("views", []), [])
+
+
+class TestViewChecks(unittest.TestCase):
+    """view_is_on / add_view / remove_view: the saved-view check boxes (docs/ui.md 8.9, 2026-11-19)."""
+
+    LOW_PER = {"ranges": {"tper": [0, 12]}}
+    NEAR_HIGH = {"ranges": {"range52w": [90, None]}}
+
+    def test_add_and_remove_combine_views(self):
+        state = add_view(add_view(empty_state(), self.LOW_PER), self.NEAR_HIGH)
+        self.assertTrue(view_is_on(state, self.LOW_PER) and view_is_on(state, self.NEAR_HIGH))
+        state = remove_view(state, self.LOW_PER)
+        self.assertFalse(view_is_on(state, self.LOW_PER))
+        self.assertTrue(view_is_on(state, self.NEAR_HIGH))
+
+    def test_same_field_replaces_and_unticks_the_other(self):
+        state = add_view(add_view(empty_state(), self.LOW_PER), {"ranges": {"tper": [0, 8]}})
+        self.assertFalse(view_is_on(state, self.LOW_PER))
+        self.assertEqual(remove_view(state, self.LOW_PER)["ranges"], {"tper": [0.0, 8.0]})   # not its bounds: kept
+
+    def test_markets_set_on_add_and_kept_on_remove(self):
+        view = {"market": ["KOSDAQ"], "search": "S"}
+        state = add_view({"market": ["KOSPI", "KOSDAQ"]}, view)
+        self.assertEqual(state["market"], ["KOSDAQ"])
+        self.assertTrue(view_is_on(state, view))
+        state = remove_view(state, view)
+        self.assertEqual((state["market"], state["search"]), (["KOSDAQ"], ""))
+        self.assertFalse(view_is_on(state, view))
+
+    def test_a_view_without_conditions_is_never_on(self):
+        self.assertFalse(view_is_on(empty_state(), empty_state()))
 
 
 class TestMarketLists(unittest.TestCase):

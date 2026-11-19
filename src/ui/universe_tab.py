@@ -26,7 +26,7 @@ from collections import Counter
 from datetime import datetime
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QMessageBox, QInputDialog, QMenu, QCheckBox, QWidgetAction,
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QInputDialog, QMenu, QCheckBox, QWidgetAction,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
@@ -46,7 +46,7 @@ from ui.universe_table import StockTable
 from ui.heat_legend import HeatLegend
 from ui.filter_popups import RangeFilterPopup
 from ui.universe_views import (
-    BUILTIN_VIEWS, MARKETS, count_matches, market_display, describe_ranges, describe_view, empty_state as empty_view,
+    BUILTIN_VIEWS, MARKETS, add_view, count_matches, remove_view, view_is_on, market_display, describe_ranges, describe_view, empty_state as empty_view,
     market_list, migrate_views, normalize as normalize_view, same_state as same_view, view_display_name,
 )
 from i18n import tr
@@ -130,7 +130,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._markets = self._saved_markets()
         self._sync_market_buttons()
         self._update_filters_button()
-        self._refresh_views_combo()   # filled even before any data arrives
+        self._refresh_views_menu()   # filled even before any data arrives
 
         # Try to load cached universe data to make startup instant, but always refresh to latest afterwards.
         cached = safe_load_json(paths.UNIVERSE_CACHE_FILE, default=None)
@@ -191,13 +191,12 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         bar.addSpacing(self._GROUP_GAP)
         self.filters_btn = make_button(tr("필터", "Filters"), checkable=True, on_click=self._open_range_filters)
         bar.addWidget(self.filters_btn)
-        self.views_combo = QComboBox()
-        self.views_combo.setMinimumWidth(170)
-        self.views_combo.setToolTip(tr("저장된 보기: 시장·상태·검색어·범위 필터 조합과 그 보기의 종목 수",
-                                       "Saved views: a market / status / search / range-filter combination, "
-                                       "with the number of rows it shows"))
-        self.views_combo.activated.connect(self._on_view_activated)
-        bar.addWidget(self.views_combo)
+        # Saved views as check boxes in the button's menu (user direction
+        # 2026-11-19; was a combo box): the ticked views apply together.
+        self.views_btn = make_button(tr("저장된 보기", "Views"), checkable=True)
+        self._views_menu = self._build_views_menu()
+        self.views_btn.setMenu(self._views_menu)
+        bar.addWidget(self.views_btn)
 
         bar.addStretch()
 
@@ -300,7 +299,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         direction 2026-11-16): the widest label any of them can show, so no
         label change resizes a button. This tab's labels are registered at
         the bottom of this module."""
-        fix_toolbar_widths([*self._market_buttons.values(), self.tg_filter_btn, self.filters_btn,
+        fix_toolbar_widths([*self._market_buttons.values(), self.tg_filter_btn, self.filters_btn, self.views_btn,
                             self.add_ticker_btn, self.signal_btn, self.refresh_btn])
 
     # ---Markets (docs/ui.md 2.1) ---
@@ -678,7 +677,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.table.apply_col_filters(text, status=self._status_filter, market=self.selected_markets(),
                                      ranges=self._ranges)
         self._update_filters_button()
-        self._refresh_views_combo()
+        self._refresh_views_menu()
 
     # ---Range filters and saved views (docs/ui.md 2.6 / 8.9) ---
     def current_view_state(self) -> dict:
@@ -749,9 +748,34 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     def _all_views(self) -> list:
         return [dict(v, builtin=True) for v in BUILTIN_VIEWS] + [dict(v, builtin=False) for v in self._user_views()]
 
-    def _refresh_views_combo(self):
-        """Rebuild the Views list with each view's live row count; select the
-        view that matches the current filters, if any."""
+    def _build_views_menu(self) -> QMenu:
+        """The "저장된 보기" menu: a check box per view with its live row
+        count (filled by _refresh_views_menu), then the three actions, always
+        listed and greyed out when they do not apply (docs/ui.md 8.9). Ticking
+        a box adds that view's conditions to the current filters, unticking
+        removes them; the menu stays open so several can be ticked."""
+        menu = QMenu(self)
+        self._views_panel = QWidget()
+        self._views_col = QVBoxLayout(self._views_panel)
+        self._views_col.setContentsMargins(12, 8, 16, 8)
+        self._views_col.setSpacing(6)
+        self._view_checks: dict[str, QCheckBox] = {}
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(self._views_panel)
+        menu.addAction(action)
+        menu.addSeparator()
+        self._view_clear_action = menu.addAction(tr("전체 보기 (필터 해제)", "Show all (clear filters)"),
+                                                 lambda: self.apply_view_state(empty_view()))
+        self._view_save_action = menu.addAction(tr("현재 필터를 보기로 저장...", "Save current filters as a view..."),
+                                                self._on_save_view)
+        self._view_delete_action = menu.addAction(tr("저장된 보기 삭제...", "Delete a saved view..."),
+                                                  self._on_delete_view)
+        return menu
+
+    def _refresh_views_menu(self):
+        """Each view's box: its live row count, ticked while its conditions are
+        in force (universe_views.view_is_on). The boxes are rebuilt only when
+        the set of views changes, so a click never deletes the box it came from."""
         rows = self.table.all_row_values()
         current = self.current_view_state()
 
@@ -759,46 +783,52 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             # A view with market "ALL" means "the markets that are on".
             return dict(view, market=current["market"]) if market_list(view.get("market")) == "ALL" else view
 
+        views = self._all_views()
+        if [v["name"] for v in views] != list(self._view_checks):
+            for cb in self._view_checks.values():
+                self._views_col.removeWidget(cb)
+                cb.deleteLater()
+            self._view_checks = {}
+            for v in views:
+                cb = QCheckBox()
+                cb.clicked.connect(lambda checked, n=v["name"]: self._on_view_toggled(n, checked))
+                self._views_col.addWidget(cb)
+                self._view_checks[v["name"]] = cb
+        ticked = []
+        for v in views:
+            cb = self._view_checks[v["name"]]
+            cb.setText(f"{view_display_name(v['name'])}  ({count_matches(rows, resolved(v))})")
+            cb.setToolTip(describe_view(v))
+            on = view_is_on(current, v)
+            cb.setChecked(on)
+            if on:
+                ticked.append(view_display_name(v["name"]))
+        self._views_panel.adjustSize()
         is_filtered = not same_view(current, resolved(empty_view()))
-        combo = self.views_combo
-        combo.blockSignals(True)
-        combo.clear()
-        combo.addItem(tr("저장된 보기", "Views"), None)
-        active = 0
-        for v in self._all_views():
-            combo.addItem(f"{view_display_name(v['name'])}  ({count_matches(rows, resolved(v))})", ("view", v["name"]))
-            tip = describe_view(v)
-            combo.setItemData(combo.count() - 1, tip, Qt.ItemDataRole.ToolTipRole)
-            if is_filtered and active == 0 and same_view(resolved(v), current):
-                active = combo.count() - 1
-        combo.insertSeparator(combo.count())
-        if is_filtered:
-            combo.addItem(tr("전체 보기 (필터 해제)", "Show all (clear filters)"), ("clear",))
-            combo.addItem(tr("현재 필터를 보기로 저장...", "Save current filters as a view..."), ("save",))
-        if self._user_views():
-            combo.addItem(tr("저장된 보기 삭제...", "Delete a saved view..."), ("delete",))
-        combo.setCurrentIndex(active)
-        combo.blockSignals(False)
+        self._view_clear_action.setEnabled(is_filtered)
+        self._view_save_action.setEnabled(is_filtered)
+        self._view_delete_action.setEnabled(bool(self._user_views()))
+        self.views_btn.setChecked(bool(ticked))
+        self.views_btn.setToolTip(
+            tr("선택한 보기: ", "Ticked views: ") + ", ".join(ticked) if ticked else
+            tr("저장된 보기: 시장·상태·검색어·범위 필터 조합과 그 보기의 종목 수. 여러 개를 체크하면 모두 적용됩니다.",
+               "Saved views: a market / status / search / range-filter combination, with the number of rows "
+               "it shows. Tick several and they all apply."))
 
-    def _on_view_activated(self, index: int):
-        data = self.views_combo.itemData(index)
-        if data is None:
-            self._refresh_views_combo()
+    def _on_view_toggled(self, name: str, checked: bool):
+        view = next((v for v in self._all_views() if v["name"] == name), None)
+        if view is None:
             return
-        kind = data[0]
-        if kind == "view":
-            view = next((v for v in self._all_views() if v["name"] == data[1]), None)
-            if view is not None:
-                self.apply_view_state(view)
-                return
-        elif kind == "clear":
-            self.apply_view_state(empty_view())
-            return
-        elif kind == "save":
-            self._save_current_view()
-        elif kind == "delete":
-            self._delete_view()
-        self._refresh_views_combo()
+        current = self.current_view_state()
+        self.apply_view_state(add_view(current, view) if checked else remove_view(current, view))
+
+    def _on_save_view(self):
+        self._save_current_view()
+        self._refresh_views_menu()
+
+    def _on_delete_view(self):
+        self._delete_view()
+        self._refresh_views_menu()
 
     def _save_current_view(self):
         name, ok = QInputDialog.getText(self, _TITLE, tr("보기 이름:", "Name for this view:"))
@@ -1274,6 +1304,6 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 register_toolbar_labels(
     *(UniverseTab._MARKET_BUTTON_TEXT.get(m, label).replace("&", "&&") for m, label in MARKETS.items()),
     *(label for _, label in UniverseTab._STATUS_FILTER_STATES),
-    tr("필터", "Filters"), tr("필터 (99)", "Filters (99)"),
+    tr("필터", "Filters"), tr("필터 (99)", "Filters (99)"), tr("저장된 보기", "Views"),
     tr("종목 추가", "Add Ticker"), tr("전략 신호", "Signals"), tr("새로고침", "Refresh"),
 )
