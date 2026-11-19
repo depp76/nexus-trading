@@ -1,8 +1,7 @@
-"""ui/universe_views.py — Trading Universe filter state, range filters and
-their presets (docs/ui.md 2.6 / 8.9). Pure logic, no Qt: StockTable turns
-each table row into a plain dict (`row_values`) and both the table's row
-filtering and the per-preset match counts go through `matches()` here, so a
-preset's count is always exactly the number of rows it shows.
+"""ui/universe_views.py — Trading Universe filter state and the range
+conditions of the 신호 포착 panel (docs/ui.md 2.6 / 8.9). Pure logic, no Qt:
+StockTable turns each table row into a plain dict (`row_values`) and the
+table's row filtering goes through `matches()` here.
 
 A *filter state* is a dict:
     {"market": "ALL" | [market, ...], "status": ""|"On"|"Tg",
@@ -11,8 +10,9 @@ A *filter state* is a dict:
 or "ALL" for a state that leaves the market selection alone; index rows are
 never hidden by it. A single market string reads as a one-market list.
 Range bounds are kept in the units the user typed (see RANGE_FIELDS).
-The saved views were folded into the Filters panel on 2026-11-19 (user
-direction): what is left of them are FILTER_PRESETS, its quick picks.
+The saved views were folded into the Filters panel on 2026-11-19 and its
+quick picks removed the same day (user direction): each range condition is a
+check box instead (docs/ui.md 8.9).
 """
 from __future__ import annotations
 
@@ -88,55 +88,6 @@ def market_list(market) -> list | str:
     given = {market} if isinstance(market, str) else set(market)
     picked = [m for m in MARKETS if m in given]
     return picked or "ALL"
-
-@dataclass(frozen=True)
-class FilterPreset:
-    """A quick pick at the top of the Filters panel: a name and the ranges
-    ticking it fills in (docs/ui.md 8.9; the former built-in saved views)."""
-    name: str         # key, kept Korean (the label is translated by preset_label)
-    ranges: dict      # {field_key: [lo | None, hi | None]} in RANGE_FIELDS units
-
-
-# The spec's own examples (docs/ui.md 2.6: "저PER", "신고가 근접").
-FILTER_PRESETS = (
-    FilterPreset("저PER", {"tper": [0.0, 12.0]}),
-    FilterPreset("52주 신고가 근접", {"range52w": [90.0, None]}),
-)
-_PRESET_EN = {"저PER": "Low tPER", "52주 신고가 근접": "Near 52W High"}
-
-
-def preset_label(preset: FilterPreset) -> str:
-    en = _PRESET_EN.get(preset.name)
-    return tr(preset.name, en) if en else preset.name
-
-
-def _clean_ranges(ranges: dict) -> dict:
-    return normalize({"ranges": ranges})["ranges"]
-
-
-def preset_is_on(ranges: dict, preset: FilterPreset) -> bool:
-    """Ticked exactly while every range of the preset is in force, whether
-    it got there by ticking the box or by typing the same bounds."""
-    current, own = _clean_ranges(ranges), _clean_ranges(preset.ranges)
-    return bool(own) and all(current.get(k) == b for k, b in own.items())
-
-
-def add_preset(ranges: dict, preset: FilterPreset) -> dict:
-    """`ranges` with the preset's ranges added (ticked presets all apply);
-    a bound on the same column is replaced, which unticks a preset that set
-    it differently."""
-    out = _clean_ranges(ranges)
-    out.update(_clean_ranges(preset.ranges))
-    return out
-
-
-def remove_preset(ranges: dict, preset: FilterPreset) -> dict:
-    """`ranges` without the preset's own ranges; other bounds stay."""
-    out = _clean_ranges(ranges)
-    for k, b in _clean_ranges(preset.ranges).items():
-        if out.get(k) == b:
-            del out[k]
-    return out
 
 
 def empty_state() -> dict:

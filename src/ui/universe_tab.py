@@ -44,14 +44,14 @@ from threads.strategy_threads import SignalPicksThread, CANCELLED_MESSAGE
 from strategy import signal_api
 from ui.universe_table import StockTable
 from ui.heat_legend import HeatLegend
-from ui.filter_popups import RangeFilterPopup
+from ui.filter_popups import SignalScanPopup
 from ui.universe_views import (
-    FILTER_PRESETS, MARKETS, count_matches, market_display, describe_ranges, market_list, normalize as normalize_view,
-    preset_is_on, preset_label,
+    MARKETS, count_matches, market_display, describe_ranges, market_list, normalize as normalize_view,
 )
 from i18n import tr
 from ui.dialogs.stock_report import show_stock_report_result
 from ui.dialogs.add_ticker import AddTickerDialog
+from ui.dialogs.signal_conditions import SignalConditionsDialog
 from ui.ma_chart import StockMaLauncherMixin
 
 logger = logging.getLogger(__name__)
@@ -105,7 +105,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._markets_pending = False     # a market was switched on while a fetch ran
         self._status_filter_idx = 0      # index into _STATUS_FILTER_STATES
         self._add_market = "KOSPI"       # last market picked in the Add Ticker dialog
-        self._ranges = {}                # Filters panel: column key -> [lo, hi] (docs/ui.md 8.9)
+        self._ranges = {}                # 신호 포착 panel, ticked conditions: column key -> [lo, hi] (docs/ui.md 8.9)
+        self._ranges_off = {}            # its unticked conditions: kept bounds that do not filter
         # ticker -> (group 0=Top/1=Bottom, rank, tag, tooltip) of the pinned
         # "전략 신호" run; empty = default order (see _sort_all_data).
         self._signal_order = {}
@@ -129,6 +130,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.load_custom_settings()
         self._markets = self._saved_markets()
         self._sync_market_buttons()
+        self._restore_signals()
         self._update_filters_button()
 
         # Try to load cached universe data to make startup instant, but always refresh to latest afterwards.
@@ -186,9 +188,9 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.tg_filter_btn.clicked.connect(self._on_status_filter_clicked)
         bar.addWidget(self.tg_filter_btn)
 
-        # Numeric range filters and saved views (docs/ui.md 2.6 / 8.9).
+        # 신호 포착: numeric range conditions, each a check box (docs/ui.md 2.6 / 8.9).
         bar.addSpacing(self._GROUP_GAP)
-        self.filters_btn = make_button(tr("필터", "Filters"), checkable=True, on_click=self._open_range_filters)
+        self.filters_btn = make_button(tr("신호 포착", "Signal Scan"), checkable=True, on_click=self._open_range_filters)
         bar.addWidget(self.filters_btn)
 
         bar.addStretch()
@@ -444,8 +446,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             self.custom_settings.update(data)
             # Column-group and density toggles were removed on 2026-09-19
             # (user direction); drop their saved state so it does not linger.
-            # The saved views went into the Filters panel's quick picks on
-            # 2026-11-19 (docs/ui.md 8.9); user views are no longer read.
+            # The saved views were removed on 2026-11-19 (docs/ui.md 8.9);
+            # user views are no longer read.
             for stale in ("column_groups", "density", "views"):
                 self.custom_settings.pop(stale, None)
             # Migration: old array "highlighted" -> dict "highlights"
@@ -664,7 +666,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
                                      ranges=self._ranges)
         self._update_filters_button()
 
-    # ---Filter state and range filters with their quick picks (docs/ui.md 2.6 / 8.9) ---
+    # ---Filter state and the 신호 포착 range conditions (docs/ui.md 2.6 / 8.9) ---
     def current_view_state(self) -> dict:
         return normalize_view({"market": self.selected_markets(), "status": self._status_filter,
                                "search": self.search_input.text(), "ranges": self._ranges})
@@ -682,6 +684,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.search_input.setText(state["search"])
         self.search_input.blockSignals(False)
         self._ranges = state["ranges"]
+        self._ranges_off = {k: b for k, b in self._ranges_off.items() if k not in self._ranges}
         self.filter_table()
 
 
@@ -692,6 +695,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         return {"all_data": list(self.all_data), "view": self.current_view_state(),
                 "picks": self._last_picks, "signal_cache": self._signal_cache,
                 "pinned": bool(self._signal_order), "signal_variant": self._signal_variant,
+                "ranges_off": dict(self._ranges_off),
                 "refreshing": not self.refresh_btn.isEnabled()}
 
     def import_state(self, state: dict) -> None:
@@ -699,6 +703,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             self.all_data = list(state["all_data"])
             self._sort_all_data()            # also drops the old Top/Bottom tags
             self._reload_table()
+        self._ranges_off = normalize_view({"ranges": state.get("ranges_off") or {}})["ranges"]
         self.apply_view_state(state["view"])
         if state.get("signal_cache") is not None:
             self._signal_cache = state["signal_cache"]
@@ -709,36 +714,64 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
     def _update_filters_button(self):
         n = len(self._ranges)
-        self.filters_btn.setText(tr(f"필터 ({n})", f"Filters ({n})") if n else tr("필터", "Filters"))
+        self.filters_btn.setText(tr(f"신호 포착 ({n})", f"Signal Scan ({n})") if n else tr("신호 포착", "Signal Scan"))
         self.filters_btn.setChecked(bool(n))
-        picked = [preset_label(p) for p in FILTER_PRESETS if preset_is_on(self._ranges, p)]
         summary = describe_ranges(self._ranges)
-        if picked:
-            summary = " · ".join(picked) + "\n" + summary
+        off = describe_ranges(self._ranges_off)
+        if off:
+            summary = (summary + "\n" if summary else "") + tr(f"꺼짐: {off}", f"Off: {off}")
         self.filters_btn.setToolTip(
-            summary if n else
-            tr("숫자 범위 필터와 빠른 선택(저PER, 52주 신고가 근접): 시총, PER, 등락, 52주 위치, MA Div, 모멘텀",
-               "Numeric range filters and quick picks (Low tPER, Near 52W High): Cap, PER, change, "
-               "52W position, MA Div, momentum"))
+            summary or
+            tr("추가한 신호(시총, PER, 등락, 52주 위치, MA Div, 모멘텀의 범위 조건)를 체크 박스로 켜고 끕니다",
+               "Switch the added signals (range conditions on Cap, PER, change, 52W position, MA Div, "
+               "momentum) on and off with their check boxes"))
 
     def _open_range_filters(self):
+        """The 신호 포착 panel: the added signals as check boxes (docs/ui.md 8.9)."""
         self._update_filters_button()          # undo the click's own toggle
-        popup = RangeFilterPopup(self._ranges, presets=self._preset_counts())
-        popup.applied.connect(self._on_ranges_applied)
+        popup = SignalScanPopup(self._ranges, self._ranges_off, self._signal_counts())
+        popup.changed.connect(self._on_ranges_applied)
+        popup.add_requested.connect(self._open_signal_conditions)
         popup.move(self.filters_btn.mapToGlobal(self.filters_btn.rect().bottomLeft()))
         popup.show()
         self._range_popup = popup              # keep a reference while it is open
 
-    def _on_ranges_applied(self, ranges: dict):
-        self._ranges = normalize_view({"ranges": ranges})["ranges"]
-        self.filter_table()
-
-    def _preset_counts(self) -> list:
-        """(preset, rows it would show) for the Filters panel's quick picks:
-        each preset alone, within the markets that are on."""
+    def _signal_counts(self) -> dict:
+        """field key -> rows that signal alone would show, within the markets that are on."""
         rows = self.table.all_row_values()
         markets = self.selected_markets()
-        return [(p, count_matches(rows, {"market": markets, "ranges": p.ranges})) for p in FILTER_PRESETS]
+        return {k: count_matches(rows, {"market": markets, "ranges": {k: b}})
+                for k, b in {**self._ranges_off, **self._ranges}.items()}
+
+    def _open_signal_conditions(self):
+        """"신호 추가": the condition form as a pop-up dialog. New or edited
+        signals come back ticked, untouched unticked ones stay unticked, an
+        emptied row is removed; the panel reopens to show the check boxes."""
+        dlg = SignalConditionsDialog({**self._ranges_off, **self._ranges}, self)
+        if not dlg.exec():
+            return
+        new = normalize_view({"ranges": dlg.conditions()})["ranges"]
+        on = {k: b for k, b in new.items() if self._ranges_off.get(k) != b}
+        off = {k: b for k, b in new.items() if k not in on}
+        self._on_ranges_applied(on, off)
+        self._open_range_filters()
+
+    def _restore_signals(self):
+        saved = self.custom_settings.get("signals")
+        if isinstance(saved, dict):
+            self._ranges = normalize_view({"ranges": saved.get("on") or {}})["ranges"]
+            self._ranges_off = {k: b for k, b in normalize_view({"ranges": saved.get("off") or {}})["ranges"].items()
+                                if k not in self._ranges}
+
+    def _on_ranges_applied(self, ranges: dict, off: dict | None = None):
+        """The 신호 포착 signals: `ranges` filter (ticked), `off` are kept
+        bounds (unticked). Both are saved in custom_settings.json."""
+        self._ranges = normalize_view({"ranges": ranges})["ranges"]
+        self._ranges_off = {k: b for k, b in normalize_view({"ranges": off or {}})["ranges"].items()
+                            if k not in self._ranges}
+        self.custom_settings["signals"] = {"on": self._ranges, "off": self._ranges_off}
+        self.save_custom_settings()
+        self.filter_table()
 
     # ---Per-stock MA (20 + 60) ---
     def _on_ma_chart_requested(self, ticker: str):
@@ -1169,10 +1202,10 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
 
 # Every label this tab's toolbar buttons can show (the shared toolbar width,
-# ui.common.toolbar_button_width): market toggles, the status cycle, "필터 (n)".
+# ui.common.toolbar_button_width): market toggles, the status cycle, "신호 포착 (n)".
 register_toolbar_labels(
     *(UniverseTab._MARKET_BUTTON_TEXT.get(m, label).replace("&", "&&") for m, label in MARKETS.items()),
     *(label for _, label in UniverseTab._STATUS_FILTER_STATES),
-    tr("필터", "Filters"), tr("필터 (99)", "Filters (99)"),
+    tr("신호 포착", "Signal Scan"), tr("신호 포착 (99)", "Signal Scan (99)"),
     tr("종목 추가", "Add Ticker"), tr("전략 신호", "Signals"), tr("새로고침", "Refresh"),
 )
