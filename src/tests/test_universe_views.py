@@ -1,15 +1,12 @@
 """tests/test_universe_views.py — Trading Universe filters (docs/ui.md 2.6 /
-8.9): the pure matcher, the table's row values and filtering, and the Filters
-panel's quick picks (the former saved views, folded in on 2026-11-19)."""
+8.9): the pure matcher, the table's row values and filtering, and the 신호 포착
+panel's per-condition check boxes (2026-11-19, replacing the quick picks)."""
 import unittest
 from unittest.mock import patch
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QToolButton
 
-from ui.universe_views import (
-    FILTER_PRESETS, add_preset, count_matches, describe_ranges, empty_state, matches, normalize, preset_is_on,
-    remove_preset, same_state,
-)
+from ui.universe_views import count_matches, describe_ranges, empty_state, matches, normalize, same_state
 
 app = QApplication.instance() or QApplication([])
 
@@ -56,12 +53,11 @@ class TestMatches(unittest.TestCase):
         self.assertFalse(matches(bond, {"ranges": {"chg": [0, None]}}))
         self.assertTrue(matches(bond, {"ranges": {"tper": [None, None]}}))  # empty bounds = no filter
 
-    def test_presets_and_counts(self):
+    def test_counts(self):
         rows = [_row(values={"tper": 8.0}), _row(values={"tper": 30.0}), _row(values={"tper": -5.0}),
                 _row(values={"range52w": 0.93})]
-        low_per, near_high = FILTER_PRESETS
-        self.assertEqual(count_matches(rows, {"ranges": low_per.ranges}), 1)      # negative PER is not "low"
-        self.assertEqual(count_matches(rows, {"ranges": near_high.ranges}), 1)
+        self.assertEqual(count_matches(rows, {"ranges": {"tper": [0, 12]}}), 1)      # negative PER is not "low"
+        self.assertEqual(count_matches(rows, {"ranges": {"range52w": [90, None]}}), 1)
 
     def test_normalize_same_state_and_descriptions(self):
         a = normalize({"market": "KOSPI", "search": "  x ", "ranges": {"tper": [None, 12], "bogus": [1, 2],
@@ -110,91 +106,146 @@ class TestTableFiltering(_TabCase):
         self.assertIsNone(vals["C"]["range52w"])              # no 52W range yet -> no value
         tab._on_ranges_applied({"range52w": [85, None]})
         self.assertEqual(self._visible(tab), ["A"])
-        self.assertEqual(tab.filters_btn.text(), "필터 (1)")
+        self.assertEqual(tab.filters_btn.text(), "신호 포착 (1)")
         self.assertTrue(tab.filters_btn.isChecked())
         tab._on_ranges_applied({})
         self.assertEqual(self._visible(tab), ["A", "B", "C"])
-        self.assertEqual(tab.filters_btn.text(), "필터")
+        self.assertEqual(tab.filters_btn.text(), "신호 포착")
 
-    def test_tper_filter_and_low_per_preset(self):
+    def test_tper_filter(self):
         tab = self._tab([_stock("A", per=8.0), _stock("B", per=25.0), _stock("C")])
         tab._on_ranges_applied({"tper": [0, 12]})
         self.assertEqual(self._visible(tab), ["A"])
-        self.assertTrue(tab.filters_btn.toolTip().startswith("저PER"))   # typed by hand: the preset is on
+        self.assertTrue(tab.filters_btn.toolTip().startswith("tPER 0–12"))
 
 
-class TestFilterPresets(_TabCase):
-    """The Filters panel's quick picks (docs/ui.md 8.9, 2026-11-19)."""
+class _FakeConditionsDialog:
+    """Stands in for SignalConditionsDialog: returns `result` (None = cancelled)."""
+    result = None
+    seen = None
+
+    def __init__(self, conditions, parent=None):
+        _FakeConditionsDialog.seen = dict(conditions)
+
+    def exec(self):
+        return self.result is not None
+
+    def conditions(self):
+        return self.result
+
+
+class TestSignalScan(_TabCase):
+    """신호 포착 (docs/ui.md 8.9, 2026-11-19): the panel lists the added signals
+    as check boxes; "신호 추가" opens the condition form as a pop-up dialog."""
 
     def _popup(self, tab):
         tab._open_range_filters()
         return tab._range_popup
 
     @staticmethod
-    def _checks(popup):
-        return {p.name: cb for p, cb in popup._preset_checks}
-
-    @staticmethod
-    def _toggle(cb, checked=True):
+    def _toggle(cb, checked):
         cb.setChecked(checked)
         cb.clicked.emit(checked)
 
-    def test_no_views_button_any_more(self):
+    def _add(self, tab, result):
+        _FakeConditionsDialog.result = result
+        with patch("ui.universe_tab.SignalConditionsDialog", _FakeConditionsDialog):
+            tab._open_signal_conditions()
+        return tab._range_popup
+
+    def test_empty_panel_and_button_name(self):
         tab = self._tab([_stock("A")])
-        self.assertFalse(hasattr(tab, "views_btn"))
-
-    def test_counts_and_ticking_presets(self):
-        tab = self._tab([_stock("A", price=99, low=50, high=100, per=8.0),
-                         _stock("B", price=60, low=50, high=100, per=8.0),
-                         _stock("C", price=99, low=50, high=100, per=25.0)])
+        self.assertEqual(tab.filters_btn.text(), "신호 포착")
         popup = self._popup(tab)
-        checks = self._checks(popup)
-        self.assertEqual([cb.text() for cb in checks.values()], ["저PER  (2)", "52주 신고가 근접  (2)"])
-        self.assertFalse(any(cb.isChecked() for cb in checks.values()))
-        self._toggle(checks["52주 신고가 근접"])
-        self.assertEqual(self._visible(tab), ["A", "C"])            # applied at once
-        self.assertEqual(popup._edits["range52w"][0].text(), "90")   # and shown in its fields
-        self.assertTrue(popup.isVisible())                           # panel stays open
-        self._toggle(checks["저PER"])                                # both ticked: both apply
+        self.assertEqual(popup._checks, {})
+        self.assertFalse(popup._empty.isHidden())
+        self.assertFalse(hasattr(popup, "clear_btn"))                 # no "모두 지우기" (2026-11-19)
+        self.assertEqual(popup.add_btn.text(), "추가")
+        popup.close()
+
+    def test_added_signals_show_as_ticked_boxes_with_counts(self):
+        tab = self._tab([_stock("A", per=8.0, price=99, low=50, high=100),
+                         _stock("B", per=8.0, price=60, low=50, high=100),
+                         _stock("C", per=25.0, price=99, low=50, high=100)])
+        popup = self._add(tab, {"tper": [None, 12], "range52w": [90, None]})
         self.assertEqual(self._visible(tab), ["A"])
-        self.assertEqual(tab.filters_btn.text(), "필터 (2)")
-        self._toggle(checks["52주 신고가 근접"], False)             # untick one: the other stays
-        self.assertEqual(self._visible(tab), ["A", "B"])
-        self.assertEqual(popup._edits["range52w"][0].text(), "")
-        self.assertTrue(checks["저PER"].isChecked())
+        self.assertEqual(tab.filters_btn.text(), "신호 포착 (2)")
+        self.assertEqual([cb.text() for cb in popup._checks.values()],
+                         ["tPER ≤ 12  (2)", "52주 위치 ≥ 90  (2)"])
+        self.assertTrue(all(cb.isChecked() for cb in popup._checks.values()))
+
+        self._toggle(popup._checks["tper"], False)                  # applied at once, panel open
+        self.assertEqual(self._visible(tab), ["A", "C"])
+        self.assertEqual(tab._ranges_off, {"tper": [None, 12.0]})
+        self.assertIn("꺼짐: tPER", tab.filters_btn.toolTip())
+        self._toggle(popup._checks["tper"], True)
+        self.assertEqual(self._visible(tab), ["A"])
         popup.close()
 
-    def test_typing_syncs_the_boxes_and_keeps_other_bounds(self):
+    def test_the_dialog_edits_and_keeps_unticked_signals_off(self):
         tab = self._tab([_stock("A", per=8.0)])
-        tab._on_ranges_applied({"cap": [100, None], "tper": [0, 12]})
+        tab._on_ranges_applied({"cap": [100, None]}, {"tper": [0, 12]})
+        self._add(tab, {"cap": [100, None], "tper": [0, 12], "d20": [5, None]}).close()
+        self.assertEqual(_FakeConditionsDialog.seen, {"cap": [100.0, None], "tper": [0.0, 12.0]})
+        self.assertEqual(tab._ranges, {"cap": [100.0, None], "d20": [5.0, None]})
+        self.assertEqual(tab._ranges_off, {"tper": [0.0, 12.0]})
+        self._add(tab, {"tper": [0, 10]}).close()                   # edited: ticked; cap / d20 emptied: gone
+        self.assertEqual((tab._ranges, tab._ranges_off), ({"tper": [0.0, 10.0]}, {}))
+
+    def test_cancel_changes_nothing(self):
+        tab = self._tab([_stock("A")])
+        tab._on_ranges_applied({"cap": [100, None]})
+        tab._range_popup = None
+        self._add(tab, None)
+        self.assertEqual(tab._ranges, {"cap": [100.0, None]})
+        self.assertIsNone(tab._range_popup)
+
+    def test_remove_signals_one_by_one(self):
+        tab = self._tab([_stock("A", per=8.0)])
+        tab._on_ranges_applied({"cap": [100, None]}, {"tper": [0, 12]})
         popup = self._popup(tab)
-        checks = self._checks(popup)
-        self.assertTrue(checks["저PER"].isChecked())
-        popup._edits["tper"][1].setText("10")
-        popup._edits["tper"][1].textEdited.emit("10")
-        self.assertFalse(checks["저PER"].isChecked())
-        self._toggle(checks["저PER"])                                # back to its bounds; Cap kept
-        self.assertEqual(tab._ranges, {"cap": [100.0, None], "tper": [0.0, 12.0]})
+        popup._rows["cap"].findChild(QToolButton).click()
+        self.assertEqual((tab._ranges, tab._ranges_off), ({}, {"tper": [0.0, 12.0]}))
+        popup._rows["tper"].findChild(QToolButton).click()
+        self.assertEqual((tab._ranges, tab._ranges_off), ({}, {}))
+        self.assertFalse(popup._empty.isHidden())
         popup.close()
 
+    def test_signals_are_saved_and_restored(self):
+        from ui.universe_tab import UniverseTab, CUSTOM_SETTINGS_FILE
+        tab = self._tab([_stock("A")])
+        tab._on_ranges_applied({"cap": [100, None]}, {"tper": [0, 12]})
+        settings = {"signals": tab.custom_settings["signals"]}
+        with patch.object(UniverseTab, "refresh_data"),              patch("ui.universe_tab.safe_load_json",
+                   side_effect=lambda path, default=None: settings if path == CUSTOM_SETTINGS_FILE else default):
+            other = UniverseTab()
+        self.assertEqual((other._ranges, other._ranges_off), ({"cap": [100.0, None]}, {"tper": [0.0, 12.0]}))
+        self.assertEqual(other.filters_btn.text(), "신호 포착 (1)")
 
-class TestPresetLogic(unittest.TestCase):
-    """preset_is_on / add_preset / remove_preset (docs/ui.md 8.9, 2026-11-19)."""
+    def test_off_signals_survive_the_language_switch_state(self):
+        tab = self._tab([_stock("A", per=8.0)])
+        tab._on_ranges_applied({"cap": [100, None]}, {"tper": [0, 12]})
+        state = tab.export_state()
+        other = self._tab([_stock("A", per=8.0)])
+        other.import_state(state)
+        self.assertEqual((other._ranges, other._ranges_off), ({"cap": [100.0, None]}, {"tper": [0.0, 12.0]}))
 
-    LOW_PER, NEAR_HIGH = FILTER_PRESETS
 
-    def test_add_and_remove_combine_presets(self):
-        ranges = add_preset(add_preset({}, self.LOW_PER), self.NEAR_HIGH)
-        self.assertTrue(preset_is_on(ranges, self.LOW_PER) and preset_is_on(ranges, self.NEAR_HIGH))
-        ranges = remove_preset(ranges, self.LOW_PER)
-        self.assertFalse(preset_is_on(ranges, self.LOW_PER))
-        self.assertTrue(preset_is_on(ranges, self.NEAR_HIGH))
-
-    def test_same_field_replaces_and_other_bounds_are_kept(self):
-        ranges = {"tper": [0, 8], "cap": [100, None]}
-        self.assertFalse(preset_is_on(ranges, self.LOW_PER))
-        self.assertEqual(remove_preset(ranges, self.LOW_PER), {"tper": [0.0, 8.0], "cap": [100.0, None]})
-        self.assertEqual(add_preset(ranges, self.LOW_PER), {"tper": [0.0, 12.0], "cap": [100.0, None]})
+class TestSignalConditionsDialog(unittest.TestCase):
+    def test_prefill_parse_and_invalid_blocks_save(self):
+        from ui.dialogs import SignalConditionsDialog
+        dlg = SignalConditionsDialog({"tper": [0, 12]})
+        self.assertEqual(dlg._edits["tper"][1].text(), "12")
+        dlg._edits["d20"][0].setText("10")
+        dlg._edits["d20"][1].setText("-5")                          # swapped into lo <= hi
+        self.assertEqual(dlg.conditions(), {"tper": [0.0, 12.0], "d20": [-5.0, 10.0]})
+        dlg._edits["cap"][0].setText("abc")
+        dlg._on_ok()
+        self.assertEqual(dlg.result(), 0)                           # not accepted
+        dlg._edits["cap"][0].setText("1,000")
+        dlg._on_ok()
+        self.assertEqual(dlg.result(), 1)
+        self.assertEqual(dlg.conditions()["cap"], [1000.0, None])
 
 
 class TestMarketLists(unittest.TestCase):

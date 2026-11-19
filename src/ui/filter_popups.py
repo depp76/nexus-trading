@@ -1,23 +1,22 @@
 """ui/filter_popups.py — the column-filter popups: FilterPopup (Excel-style
-checkbox list) and RangeFilterPopup (the Trading Universe's numeric range
-filters, docs/ui.md 8.9).
+checkbox list) and SignalScanPopup (the Trading Universe's 신호 포착 panel:
+the added signals as check boxes, docs/ui.md 8.9; the signals themselves are
+added in ui/dialogs/signal_conditions.py).
 
 Moved out of ui/widgets.py (2026-11-15, code review #5); ui.widgets still
 re-exports both.
 """
 from PyQt6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLineEdit, QCheckBox, QScrollArea,
-    QWidget, QPushButton, QGridLayout, QLabel,
+    QWidget, QPushButton, QLabel, QToolButton,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 
 from i18n import tr
-from ui.common import create_font, FONT_BODY, FONT_CAPTION, make_button, _set_field_error
-from ui.universe_views import (
-    RANGE_FIELDS, add_preset, describe_ranges, preset_is_on, preset_label, remove_preset,
-)
-from ui.theme import LINE, LINE_GROUP, SURFACE
+from ui.common import create_font, BTN_H, FONT_BODY, FONT_CAPTION, make_button
+from ui.universe_views import RANGE_FIELDS, describe_ranges
+from ui.theme import LINE_GROUP, SURFACE
 
 
 # ---------------------------------------------------------------------------
@@ -133,159 +132,108 @@ class FilterPopup(QFrame):
         self.close()
 
 
-# ---------------------------------------------------------------------------
-# RangeFilterPopup  — numeric range filters for Trading Universe (docs/ui.md 8.9)
-# ---------------------------------------------------------------------------
-class RangeFilterPopup(QFrame):
-    """Min/max inputs for every range-filterable column (ui.universe_views.
-    RANGE_FIELDS). Apply emits the ranges dict; Clear empties every field
-    and applies. A blank field means "no bound"; an unparsable one is
-    outlined in red and blocks Apply.
+# The 신호 포착 panel's "추가" button: 80% of a normal button's text and height.
+ADD_BTN_SCALE = 0.8
 
-    `presets` -- (FilterPreset, row count) pairs -- are the quick-pick check
-    boxes at the top (the former saved views, folded in on 2026-11-19; docs/ui.md
-    8.9): ticking one fills its fields and applies at once, unticking clears
-    them; a box is ticked while the fields hold its bounds (typed or not).
-    The panel stays open after a quick pick."""
-    applied = pyqtSignal(dict)
 
-    def __init__(self, ranges: dict, parent=None, presets=()):
+# ---------------------------------------------------------------------------
+# SignalScanPopup  — the Trading Universe's 신호 포착 panel (docs/ui.md 8.9)
+# ---------------------------------------------------------------------------
+class SignalScanPopup(QFrame):
+    """The added signals (range conditions, one per column) as check boxes,
+    in RANGE_FIELDS order, each with the rows it alone would show and a
+    remove button (user direction 2026-11-19). Ticking, unticking or
+    removing (the row's x) applies at once and the panel stays open. Only ticked signals
+    filter (AND); an unticked one keeps its bounds. "추가" (next to the
+    title) asks the tab
+    to open SignalConditionsDialog.
+
+    `changed` carries (ticked, unticked), both {field_key: [lo, hi]}."""
+    changed = pyqtSignal(dict, dict)
+    add_requested = pyqtSignal()
+
+    def __init__(self, on: dict, off: dict | None = None, counts: dict | None = None, parent=None):
         super().__init__(parent, Qt.WindowType.Popup)
         self.setObjectName("DashboardCard")
         self.setFrameShape(QFrame.Shape.StyledPanel)
+        self._on, self._off = dict(on), dict(off or {})
+        counts = counts or {}
         v = QVBoxLayout(self)
         v.setContentsMargins(12, 10, 12, 10)
         v.setSpacing(6)
-        title = QLabel(tr("범위 필터", "Range filters"))
+        # Header: the title, and "추가" at the panel's right edge, 80% of a
+        # normal button's text and size (user direction 2026-11-19).
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        title = QLabel(tr("신호 포착", "Signal Scan"))
         title.setFont(create_font(FONT_BODY, QFont.Weight.Bold))
-        v.addWidget(title)
-        hint = QLabel(tr("빈 칸은 제한 없음. 필터를 건 열에 값이 없는 종목은 숨깁니다.",
-                      "Blank = no limit. Rows with no value in a filtered column are hidden."))
-        hint.setObjectName("muted")
-        hint.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
-        hint.setWordWrap(True)
-        v.addWidget(hint)
+        self.add_btn = make_button(tr("추가", "Add"), "primary", self._on_add,
+                                   tooltip=tr("신호 추가: 범위 조건 입력 창을 엽니다",
+                                              "Add a signal: opens the range-condition form"))
+        self.add_btn.setFixedHeight(round(BTN_H * ADD_BTN_SCALE))
+        self.add_btn.setStyleSheet(f"font-size: {FONT_BODY * ADD_BTN_SCALE:g}pt; padding: 4px 9px; min-height: 12px;")
+        head.addWidget(title)
+        head.addStretch()
+        head.addWidget(self.add_btn)
+        v.addLayout(head)
 
-        self._preset_checks = []
-        if presets:
-            picks = QHBoxLayout()
-            picks.setSpacing(14)
-            head = QLabel(tr("빠른 선택", "Quick picks"))
-            head.setObjectName("muted")
-            picks.addWidget(head)
-            for preset, count in presets:
-                cb = QCheckBox(f"{preset_label(preset)}  ({count})")
-                cb.setToolTip(describe_ranges(preset.ranges))
-                cb.clicked.connect(lambda checked, p=preset: self._on_preset(p, checked))
-                picks.addWidget(cb)
-                self._preset_checks.append((preset, cb))
-            picks.addStretch()
-            v.addLayout(picks)
-            line = QFrame()
-            line.setFixedHeight(1)
-            line.setStyleSheet(f"background: {LINE}; border: none;")
-            v.addWidget(line)
+        self._checks = {}
+        self._rows = {}
+        for f in RANGE_FIELDS:
+            bounds = self._on.get(f.key) or self._off.get(f.key)
+            if not bounds:
+                continue
+            row = QWidget()
+            h = QHBoxLayout(row)
+            h.setContentsMargins(0, 0, 0, 0)
+            h.setSpacing(6)
+            text = describe_ranges({f.key: bounds})
+            if f.key in counts:
+                text += f"  ({counts[f.key]})"
+            cb = QCheckBox(text)
+            cb.setChecked(f.key in self._on)
+            cb.clicked.connect(lambda checked, k=f.key: self._on_toggled(k, checked))
+            rm = QToolButton()
+            rm.setText("×")
+            rm.setAutoRaise(True)
+            rm.setToolTip(tr("이 신호 지우기", "Remove this signal"))
+            rm.clicked.connect(lambda _c=False, k=f.key: self._on_removed(k))
+            h.addWidget(cb)
+            h.addStretch()
+            h.addWidget(rm)
+            v.addWidget(row)
+            self._checks[f.key] = cb
+            self._rows[f.key] = row
 
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(6)
-        grid.setVerticalSpacing(4)
-        self._edits = {}
-        for r, f in enumerate(RANGE_FIELDS):
-            lo, hi = (list(ranges.get(f.key) or []) + [None, None])[:2]
-            lbl = QLabel(f.label)
-            unit = QLabel(f.unit)
-            unit.setObjectName("faint")
-            lo_e, hi_e = QLineEdit(), QLineEdit()
-            for e, val, ph in ((lo_e, lo, tr("최소", "min")), (hi_e, hi, tr("최대", "max"))):
-                e.setPlaceholderText(ph)
-                e.setFixedWidth(80)
-                e.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                if val is not None:
-                    e.setText(f"{val:g}")
-                e.returnPressed.connect(self._apply)
-                e.textEdited.connect(self._sync_presets)
-            grid.addWidget(lbl, r, 0)
-            grid.addWidget(lo_e, r, 1)
-            grid.addWidget(QLabel("\u2013"), r, 2)
-            grid.addWidget(hi_e, r, 3)
-            grid.addWidget(unit, r, 4)
-            self._edits[f.key] = (lo_e, hi_e)
-        grid.setColumnStretch(5, 1)   # spare width goes past the unit column, not between the inputs
-        v.addLayout(grid)
+        self._empty = QLabel(tr("추가한 신호가 없습니다. '추가'로 조건을 넣으세요.",
+                                "No signals yet. Use 'Add' to add a condition."))
+        self._empty.setObjectName("muted")
+        self._empty.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
+        # Only ever *hide* it here: an explicit show on a child before the
+        # Qt.Popup itself is shown makes Windows close the popup right after
+        # it opens (found 2026-11-19: the panel never appeared with no signals).
+        if self._checks:
+            self._empty.hide()
+        v.addWidget(self._empty)
 
-        btns = QHBoxLayout()
-        btns.addStretch()
-        clear_btn = make_button(tr("지우기", "Clear"), on_click=self._clear)
-        apply_btn = make_button(tr("적용", "Apply"), "primary", self._apply)
-        btns.addWidget(clear_btn)
-        btns.addWidget(apply_btn)
-        v.addLayout(btns)
-        self._sync_presets()
 
-    @staticmethod
-    def _parse(edit: QLineEdit, mark: bool = True):
-        text = edit.text().replace(",", "").strip()
-        if not text:
-            if mark:
-                _set_field_error(edit, "")
-            return None, True
-        try:
-            value = float(text)
-            if value != value or value in (float("inf"), float("-inf")):
-                raise ValueError
-        except ValueError:
-            if mark:
-                _set_field_error(edit, tr("숫자를 입력하세요", "Enter a number"))
-            return None, False
-        if mark:
-            _set_field_error(edit, "")
-        return value, True
+    def _emit(self):
+        self.changed.emit(dict(self._on), dict(self._off))
 
-    def values(self, mark: bool = True):
-        """(ranges dict, all fields valid). `mark=False` leaves the red
-        outlines alone (the quick picks' sync while typing)."""
-        out, ok = {}, True
-        for key, (lo_e, hi_e) in self._edits.items():
-            lo, ok_lo = self._parse(lo_e, mark)
-            hi, ok_hi = self._parse(hi_e, mark)
-            ok = ok and ok_lo and ok_hi
-            if lo is not None and hi is not None and lo > hi:
-                lo, hi = hi, lo
-            if lo is not None or hi is not None:
-                out[key] = [lo, hi]
-        return out, ok
+    def _on_toggled(self, key: str, checked: bool):
+        bounds = self._on.pop(key, None) or self._off.pop(key)
+        (self._on if checked else self._off)[key] = bounds
+        self._emit()
 
-    def _apply(self):
-        ranges, ok = self.values()
-        if not ok:
-            return
-        self.applied.emit(ranges)
+    def _on_removed(self, key: str):
+        self._on.pop(key, None)
+        self._off.pop(key, None)
+        self._checks.pop(key)
+        self._rows.pop(key).hide()
+        self._empty.setVisible(not self._checks)
+        self.adjustSize()
+        self._emit()
+
+    def _on_add(self):
         self.close()
-
-    def _set_fields(self, ranges: dict):
-        for key, (lo_e, hi_e) in self._edits.items():
-            lo, hi = (list(ranges.get(key) or []) + [None, None])[:2]
-            lo_e.setText("" if lo is None else f"{lo:g}")
-            hi_e.setText("" if hi is None else f"{hi:g}")
-
-    def _sync_presets(self):
-        ranges, _ok = self.values(mark=False)
-        for preset, cb in self._preset_checks:
-            cb.setChecked(preset_is_on(ranges, preset))
-
-    def _on_preset(self, preset, checked: bool):
-        """A quick pick: add or remove its bounds and apply; the panel stays open."""
-        ranges, ok = self.values()
-        if not ok:
-            self._sync_presets()           # a field is not a number: nothing applied
-            return
-        ranges = add_preset(ranges, preset) if checked else remove_preset(ranges, preset)
-        self._set_fields(ranges)
-        self._sync_presets()
-        self.applied.emit(ranges)
-
-    def _clear(self):
-        for lo_e, hi_e in self._edits.values():
-            lo_e.clear()
-            hi_e.clear()
-        self._apply()
+        self.add_requested.emit()

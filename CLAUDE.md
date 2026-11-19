@@ -138,14 +138,14 @@ Dev tooling is in `requirements-dev.txt`
   `StockMaDialog(signal_ctx=...)`),
   `widgets.py` (since 2026-11-15 only a re-export of: `table_items.py` `ColSpec`/`NumericItem`,
   `universe_columns.py` the Universe `COLUMNS`/`COL_*`, `universe_table.py` `StockTable`,
-  `filter_popups.py` `FilterPopup`/`RangeFilterPopup`, `table_headers.py` `GroupedHeaderView`,
+  `filter_popups.py` `FilterPopup`/`SignalScanPopup` (the 신호 포착 panel), `table_headers.py` `GroupedHeaderView`,
   `heat_legend.py` `HeatLegend`; new code imports from those modules), `delegates.py`
   (every custom-painted table cell: `CellDelegate` base + the Universe/History delegates),
   `ma_chart.py` (`StockMaLauncherMixin`, the MA-chart dialog launcher; `UniverseTab` is its
   only user now),
-  `universe_views.py` (Trading Universe filter state, range filters and the Filters panel's quick-pick
-  `FILTER_PRESETS` (the saved views were folded in on 2026-11-19), pure: `matches()` drives both the
-  table's row hiding and the preset counts; docs/ui.md 8.9),
+  `universe_views.py` (Trading Universe filter state and the 신호 포착 range conditions (the saved views
+  and quick picks were removed on 2026-11-19; signals are saved in `custom_settings.json` `signals`), pure: `matches()` drives both the
+  table's row hiding and the per-signal counts; docs/ui.md 8.9),
   `colors.py` / `theme.py` (the dark "Soft Slate" theme since 2026-11-14, docs/ui.md 8.16:
   `app_palette()` and `apply_matplotlib_theme()` are installed by `main.py` next to the QSS, so
   no widget or chart falls back to default black text; PROFIT/LOSS color rule, design tokens and the global QSS —
@@ -154,7 +154,7 @@ Dev tooling is in `requirements-dev.txt`
   `QCalendarWidget` rules have no current caller and are kept for the next `QDateEdit`),
   `dialogs/` (one module per
   dialog group: `index_ma`, `stock_ma`, `trade_edit`, `trade_history`, `assets_graph`,
-  `holdings_summary`, `assets_report`, `stock_report`, `variant_picker`, `trend_conditions`, `strategy_trades`, `add_ticker`, `add_record`; import from `ui.dialogs`;
+  `holdings_summary`, `assets_report`, `stock_report`, `variant_picker`, `trend_conditions`, `strategy_trades`, `add_ticker`, `add_record`, `signal_conditions` (신호 추가); import from `ui.dialogs`;
   `StockMaDialog` is split into mixins over shared dialog state since 2026-11-15: `stock_ma_plot`
   (panels, slots, margins, end labels, toggles), `stock_ma_hover` (crosshair/hover), `stock_ma_view`
   (pan/zoom/period/autofit), plus `stock_ma_side` (right panel), `stock_ma_consts`, `stock_ma_helpers`),
