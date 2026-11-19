@@ -26,7 +26,7 @@ from collections import Counter
 from datetime import datetime
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QInputDialog, QMenu, QCheckBox, QWidgetAction,
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QMenu, QCheckBox, QWidgetAction,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
@@ -46,8 +46,8 @@ from ui.universe_table import StockTable
 from ui.heat_legend import HeatLegend
 from ui.filter_popups import RangeFilterPopup
 from ui.universe_views import (
-    BUILTIN_VIEWS, MARKETS, add_view, count_matches, remove_view, view_is_on, market_display, describe_ranges, describe_view, empty_state as empty_view,
-    market_list, migrate_views, normalize as normalize_view, same_state as same_view, view_display_name,
+    BUILTIN_VIEWS, MARKETS, add_view, count_matches, remove_view, view_is_on, market_display, describe_ranges, describe_view,
+    market_list, migrate_views, normalize as normalize_view, view_display_name,
 )
 from i18n import tr
 from ui.dialogs.stock_report import show_stock_report_result
@@ -749,11 +749,11 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         return [dict(v, builtin=True) for v in BUILTIN_VIEWS] + [dict(v, builtin=False) for v in self._user_views()]
 
     def _build_views_menu(self) -> QMenu:
-        """The "저장된 보기" menu: a check box per view with its live row
-        count (filled by _refresh_views_menu), then the three actions, always
-        listed and greyed out when they do not apply (docs/ui.md 8.9). Ticking
-        a box adds that view's conditions to the current filters, unticking
-        removes them; the menu stays open so several can be ticked."""
+        """The "저장된 보기" menu: nothing but a check box per view with its
+        live row count (filled by _refresh_views_menu; user direction
+        2026-11-19, docs/ui.md 8.9). Ticking a box adds that view's conditions
+        to the current filters, unticking removes them; the menu stays open
+        so several can be ticked."""
         menu = QMenu(self)
         self._views_panel = QWidget()
         self._views_col = QVBoxLayout(self._views_panel)
@@ -763,13 +763,6 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         action = QWidgetAction(menu)
         action.setDefaultWidget(self._views_panel)
         menu.addAction(action)
-        menu.addSeparator()
-        self._view_clear_action = menu.addAction(tr("전체 보기 (필터 해제)", "Show all (clear filters)"),
-                                                 lambda: self.apply_view_state(empty_view()))
-        self._view_save_action = menu.addAction(tr("현재 필터를 보기로 저장...", "Save current filters as a view..."),
-                                                self._on_save_view)
-        self._view_delete_action = menu.addAction(tr("저장된 보기 삭제...", "Delete a saved view..."),
-                                                  self._on_delete_view)
         return menu
 
     def _refresh_views_menu(self):
@@ -804,10 +797,6 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             if on:
                 ticked.append(view_display_name(v["name"]))
         self._views_panel.adjustSize()
-        is_filtered = not same_view(current, resolved(empty_view()))
-        self._view_clear_action.setEnabled(is_filtered)
-        self._view_save_action.setEnabled(is_filtered)
-        self._view_delete_action.setEnabled(bool(self._user_views()))
         self.views_btn.setChecked(bool(ticked))
         self.views_btn.setToolTip(
             tr("선택한 보기: ", "Ticked views: ") + ", ".join(ticked) if ticked else
@@ -821,55 +810,6 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             return
         current = self.current_view_state()
         self.apply_view_state(add_view(current, view) if checked else remove_view(current, view))
-
-    def _on_save_view(self):
-        self._save_current_view()
-        self._refresh_views_menu()
-
-    def _on_delete_view(self):
-        self._delete_view()
-        self._refresh_views_menu()
-
-    def _save_current_view(self):
-        name, ok = QInputDialog.getText(self, _TITLE, tr("보기 이름:", "Name for this view:"))
-        name = (name or "").strip()
-        if not ok or not name:
-            return
-        if any(name in (v["name"], view_display_name(v["name"])) for v in BUILTIN_VIEWS):
-            QMessageBox.warning(self, _TITLE, tr(f"'{name}'은(는) 기본 보기 이름입니다. 다른 이름을 입력하세요.",
-                                                 f"'{name}' is a built-in view. Choose another name."))
-            return
-        views = self._user_views()
-        existing = next((i for i, v in enumerate(views) if v["name"] == name), None)
-        if existing is not None:
-            reply = QMessageBox.question(self, _TITLE, tr(f"저장된 보기 '{name}'을(를) 덮어쓸까요?", f"Replace the saved view '{name}'?"),
-                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                         QMessageBox.StandardButton.No)
-            if reply != QMessageBox.StandardButton.Yes:
-                return
-        view = dict(self.current_view_state(), name=name)
-        if existing is None:
-            views.append(view)
-        else:
-            views[existing] = view
-        self.save_custom_settings()
-        self.status_message.emit(tr(f"보기 '{name}' 저장함", f"Saved view '{name}'"))
-
-    def _delete_view(self):
-        names = [v["name"] for v in self._user_views()]
-        if not names:
-            return
-        name, ok = QInputDialog.getItem(self, _TITLE, tr("삭제할 보기:", "Delete which saved view?"), names, 0, False)
-        if not ok or not name:
-            return
-        reply = QMessageBox.question(self, _TITLE, tr(f"저장된 보기 '{name}'을(를) 삭제할까요?", f"Delete the saved view '{name}'?"),
-                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                     QMessageBox.StandardButton.No)
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-        self.custom_settings["views"] = [v for v in self._user_views() if v["name"] != name]
-        self.save_custom_settings()
-        self.status_message.emit(tr(f"보기 '{name}' 삭제함", f"Deleted view '{name}'"))
 
     # ---Per-stock MA (20 + 60) ---
     def _on_ma_chart_requested(self, ticker: str):
