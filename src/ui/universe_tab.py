@@ -62,6 +62,8 @@ from ui.common import (
     atomic_save_json,
     safe_load_json,
     ThreadOwnerMixin,
+    retire_thread,
+    stale_sender,
     make_button,
     make_footer_label,
     TAB_MARGINS,
@@ -364,9 +366,11 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         thread.start()
 
     def _on_market_fetch_failed(self, reason: str, parts: list):
+        if stale_sender(self, "_market_fetch_thread"):
+            return
         shown = ", ".join(_part_label(p) for p in parts)
         self.status_text_changed.emit(tr(f"{shown}을(를) 불러오지 못했습니다 ({reason}).",
-                                         f"Could not load {', '.join(parts)} ({reason})."))
+                                         f"Could not load {shown} ({reason})."))
         self.refresh_failed.emit(tr(f"시장 받기: {reason}", f"market fetch: {reason}"))
 
     def _added_tickers(self) -> set:
@@ -397,6 +401,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     def _on_markets_fetched(self, data: list):
         """Rows of markets switched on after a refresh, merged in place. A
         name that is already here records the new market in `also_in`."""
+        if stale_sender(self, "_market_fetch_thread"):
+            return      # retired by a full refresh (review_agy H6/H8)
         # This fetch is over even if its QThread has not quite returned from
         # run() yet (a queued finished_all can arrive first): forget it, so a
         # market switched on meanwhile is fetched below instead of waiting on
@@ -550,6 +556,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
     def on_single_stock_loaded(self, result, error, ticker=""):
         """SingleStockFetchThread.finished for the Add button."""
+        if stale_sender(self, "_single_fetch_thread"):
+            return      # a newer Add replaced this lookup; it re-enables the button
         self._handle_single_stock_loaded(result, error, is_startup=False, ticker_hint=ticker)
 
     def _on_startup_stock_loaded(self, result, error, ticker=""):
@@ -695,7 +703,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         return {"all_data": list(self.all_data), "view": self.current_view_state(),
                 "picks": self._last_picks, "signal_cache": self._signal_cache,
                 "pinned": bool(self._signal_order), "signal_variant": self._signal_variant,
-                "ranges_off": dict(self._ranges_off),
+                "ranges_off": dict(self._ranges_off), "add_market": self._add_market,
                 "refreshing": not self.refresh_btn.isEnabled()}
 
     def import_state(self, state: dict) -> None:
@@ -708,9 +716,12 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         if state.get("signal_cache") is not None:
             self._signal_cache = state["signal_cache"]
         self._signal_variant = state.get("signal_variant", self._signal_variant)
+        self._add_market = state.get("add_market", self._add_market)
         picks = state.get("picks")
         if picks is not None and state.get("pinned"):
             self._on_signals_finished(picks, "")   # re-pin with tags in the new language
+        else:
+            self._last_picks = picks               # kept for a later re-pin (review_agy L4)
 
     def _update_filters_button(self):
         n = len(self._ranges)
@@ -914,6 +925,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         """`picks`: universe_signals.SignalPicks (None on failure). A run whose
         rows were replaced by a refresh since it started is dropped
         (SignalCache.generation; review_codex.md 2026-11-18 #3)."""
+        if getattr(self, "_signal_thread", None) is not None and stale_sender(self, "_signal_thread"):
+            return      # a run replaced by a newer one (review_agy H6); a refresh is the generation check's
         self.signal_btn.setEnabled(True)
         if generation is None:
             generation = getattr(self.sender(), "cache_generation", None)
@@ -1010,6 +1023,13 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self._prev_data = list(self.all_data)
         self._full_failure = None
         self._signal_cache.bump()      # signal runs started on the old rows are stale from here
+        # A 60 s tick or a market-toggle fetch still running would write its
+        # copy of the old rows over this refresh (review_agy H8); this refresh
+        # covers every market switched on, so a pending toggle fetch goes too.
+        retire_thread(self, "_lw_fetch_thread")
+        retire_thread(self, "_market_fetch_thread")
+        self._markets_pending = False
+        self._lw_failure = ""
         self.all_data = []
         self._refresh_markets = set(self._markets)
         self.market_status = {m: tr("대기", "Waiting") for m in ["Indices"] + self.selected_markets()}
@@ -1051,9 +1071,17 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
     def _on_universe_lightweight_failed(self, reason: str):
         # Arrives before finished_all (same emitting thread, queued in order).
+        if stale_sender(self, "_lw_fetch_thread"):
+            return
         self._lw_failure = reason
 
+    # The fields a 60 s tick may change on a row (UniverseLightweightFetchThread,
+    # data.cache.refresh_row_per); everything else on the row is left alone.
+    _LW_FIELDS = ("price", "usd_price", "changes", "trailing_per", "forward_per")
+
     def _on_universe_lightweight_loaded(self, updated_data):
+        if stale_sender(self, "_lw_fetch_thread"):
+            return      # retired by a full refresh (review_agy H6/H8)
         reason = getattr(self, "_lw_failure", "")
         if reason:
             # Nothing new arrived: keep the table and the last good update
@@ -1063,22 +1091,27 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             self.refresh_failed.emit(reason)
             return
         # UniverseLightweightFetchThread preserves all_data's order/length
-        # and only reassigns item["changes"] (to a freshly-fetched dict) for
-        # tickers whose price actually moved -- every unchanged item keeps
-        # the exact same "changes" dict object it had before the thread ran.
-        # That lets us tell which rows actually need a UI refresh by object
-        # identity, without a value-by-value diff.
-        #
+        # and only reassigns the _LW_FIELDS of tickers whose price moved
+        # (item["changes"] to a freshly-fetched dict); an unchanged item keeps
+        # the same objects, so the identity check skips most comparisons.
         if [x.get("ticker") for x in updated_data] != [x.get("ticker") for x in self.all_data]:
             # Rows were added or removed while the tick ran (a market switched
             # on/off, a ticker added): its copy is stale, the next tick redoes it.
             return
         changed_rows = {
             i for i, (old_item, new_item) in enumerate(zip(self.all_data, updated_data))
-            if old_item.get("changes") is not new_item.get("changes")
+            if any(old_item.get(k) is not new_item.get(k) and old_item.get(k) != new_item.get(k)
+                   for k in self._LW_FIELDS)
         }
 
-        self.all_data = updated_data
+        # Copy the tick's fields into the rows in place rather than replacing
+        # all_data with the thread's copy: anything else changed on a row while
+        # the tick ran (signal_tag, also_in, ...) stays (review_agy H8).
+        for i in changed_rows:
+            row, new = self.all_data[i], updated_data[i]
+            for key in self._LW_FIELDS:
+                if key in new:
+                    row[key] = new[key]
         highlights = self.custom_settings.get("highlights", {})
 
         # Save current scroll position
@@ -1088,7 +1121,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         # changed get their cells rebuilt, PER included (the thread recomputes
         # it from the new price, data.cache.refresh_row_per); unchanged rows
         # are not touched at all, unlike a full load_data().
-        self.table.update_changed_rows(updated_data, changed_rows, highlights)
+        self.table.update_changed_rows(self.all_data, changed_rows, highlights)
         if changed_rows:
             self.filter_table(self.search_input.text())
 
@@ -1099,6 +1132,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.update_last_sync_time()
 
     def on_market_progress(self, market, current, total):
+        if stale_sender(self, "fetch_thread", "_market_fetch_thread"):
+            return
         self.market_status[market] = tr(f"불러오는 중 ({current}/{total})", f"Loading ({current}/{total})")
         self.update_status_display()
         self.status_message.emit(tr(f"{_part_label(market)} 시세 받는 중... ({current}/{total})",
@@ -1127,6 +1162,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
                                          f"{prefix} Total {len(self.all_data)} stocks ({summary})"))
 
     def on_market_loaded(self, market, data):
+        if stale_sender(self, "fetch_thread"):
+            return
         self.market_status[market] = tr(f"완료({len(data)})", f"Done({len(data)})")
         self.update_status_display()
         # Accumulate data incrementally so the table updates as each market finishes
@@ -1136,6 +1173,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
 
     def _on_full_refresh_failed(self, reason: str, parts: list):
         # Arrives before finished_all (same emitting thread, queued in order).
+        if stale_sender(self, "fetch_thread"):
+            return
         self._full_failure = (reason, parts)
 
     def _with_previous_rows(self, all_data: list, parts: list) -> list:
@@ -1149,6 +1188,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         return all_data + kept
 
     def on_finished_all(self, all_data):
+        if stale_sender(self, "fetch_thread"):
+            return      # a refresh replaced by a newer one; that one re-enables the button
         failure = getattr(self, "_full_failure", None)
         self._full_failure = None
         try:
@@ -1174,7 +1215,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
                 shown = ", ".join(_part_label(p) for p in parts)
                 self.update_total_status(prefix=tr(f"갱신 실패 ({reason}). {shown}은(는) 이전 행을 유지했습니다.",
                                                    f"Refresh failed ({reason}); kept the previous rows for "
-                                                   f"{', '.join(parts)}."))
+                                                   f"{shown}."))
                 self.refresh_failed.emit(tr(f"전체 갱신: {reason}", f"full refresh: {reason}"))
             else:
                 self.update_total_status()

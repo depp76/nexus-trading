@@ -10,6 +10,7 @@ Uses GOOGLE_API_KEY from .env.
 import os
 import json
 import logging
+import threading
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -18,10 +19,17 @@ logger = logging.getLogger(__name__)
 # Lazy SDK import — google-genai is optional; errors surface gracefully.
 # ---------------------------------------------------------------------------
 _genai_client = None   # google.genai.Client instance (shared singleton)
+# Two report threads can ask for the client at once; one builds it (review_agy L1).
+_client_lock = threading.Lock()
 
 
 def _get_client():
     """Return a cached Gemini client, or raise RuntimeError with a friendly message."""
+    with _client_lock:
+        return _get_client_locked()
+
+
+def _get_client_locked():
     global _genai_client
     if _genai_client is not None:
         return _genai_client
@@ -45,7 +53,12 @@ def _get_client():
 
 
 _DEFAULT_MODEL = "gemini-2.5-flash"
-_MODEL = os.environ.get("GEMINI_MODEL", _DEFAULT_MODEL).strip() or _DEFAULT_MODEL
+
+
+def _model() -> str:
+    """GEMINI_MODEL read at call time, not import time, so a .env loaded
+    after this module was imported still applies (review_agy L1)."""
+    return os.environ.get("GEMINI_MODEL", _DEFAULT_MODEL).strip() or _DEFAULT_MODEL
 
 
 def _generate(prompt: str, *, json_mode: bool = False, model: str = None) -> str:
@@ -58,7 +71,7 @@ def _generate(prompt: str, *, json_mode: bool = False, model: str = None) -> str
 
     from google.genai import types as genai_types  # type: ignore
 
-    chosen_model = model or _MODEL
+    chosen_model = model or _model()
 
     response = client.models.generate_content(
         model=chosen_model,
