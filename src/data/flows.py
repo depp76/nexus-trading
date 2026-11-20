@@ -2,7 +2,7 @@
 institution / retail) with a per-ticker JSON cache under cache/investor_flows/.
 
 Source: the Naver Finance frgn page scraped by
-``data.collectors.naver._fetch_investor_trend_naver`` (20 rows per page, back
+``data.collectors.naver.fetch_investor_trend_paged`` (60 rows per page, back
 years). Quantities are net shares; the Trend Following dataset multiplies them
 by the same row's close to get a KRW amount. Investor data is final only after
 the close, so anything built from day t is acted on at t+1 (spec 5) -- the
@@ -22,7 +22,7 @@ from datetime import date, datetime, timedelta
 import polars as pl
 
 from paths import FLOWS_CACHE_DIR
-from data.collectors.naver import _fetch_investor_trend_naver
+from data.collectors.naver import fetch_investor_trend_paged
 
 logger = logging.getLogger(__name__)
 
@@ -162,16 +162,37 @@ def get_investor_flows(ticker: str, start: str, today: date | None = None) -> pl
             days = _business_days_between(newest, today) + 5
         try:
             with _FETCH_SEMAPHORE:
-                fetched = _fetch_investor_trend_naver(ticker, days=days)
+                fetched, complete = fetch_investor_trend_paged(ticker, days=days)
         except Exception:
             # boundary: one ticker's failed fetch falls back to its cached rows; the fetcher catches HTTP errors itself.
             logger.warning("investor flow fetch failed for %s", ticker, exc_info=True)
-            fetched = []
+            fetched, complete = [], False
         new_rows = _normalise_rows(fetched)
+        if new_rows and not complete and newest is not None and min(new_rows) > newest.isoformat():
+            # A walk cut short by a failed page that does not reach back to the cached
+            # rows would leave a gap behind the new newest row, which later calls would
+            # never fill (they only fetch past the newest row). Keep the cache as it is.
+            logger.warning("investor flow fetch for %s incomplete and not contiguous; not cached", ticker)
+            new_rows = {}
         if new_rows:
-            rows.update(new_rows)
-            if need_history or newest is None:
-                cache["covers_from"] = start_d.isoformat()
             with _CACHE_LOCK:
+                # Re-read under the lock: another thread may have saved this ticker
+                # while this one was on the network (review_agy.md H1).
+                cache = _load_cache(ticker)
+                disk_newest = max(cache["rows"]) if cache["rows"] else None
+                cache["rows"].update(new_rows)
+                if complete and (need_history or newest is None):
+                    cache["covers_from"] = _merged_covers_from(cache.get("covers_from"), disk_newest, start_d)
                 _save_cache(ticker, cache)
+            rows = cache["rows"]
     return _rows_to_frame(rows, start_d)
+
+
+def _merged_covers_from(disk_covers_from, disk_newest, start_d: date) -> str:
+    """covers_from after a complete walk from today back to `start_d`. The file's
+    own, earlier covers_from (e.g. saved by another thread meanwhile) is kept only
+    when its rows reach `start_d`, so the two ranges join without a gap."""
+    other = _parse_date(disk_covers_from) if disk_covers_from else None
+    if other is not None and other < start_d and disk_newest and disk_newest >= start_d.isoformat():
+        return other.isoformat()
+    return start_d.isoformat()

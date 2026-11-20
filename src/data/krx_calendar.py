@@ -106,8 +106,10 @@ def get_krx_sessions(start: date, end: date) -> list[date]:
             if fresh:
                 days.update(fresh)
                 # Claim today's refresh only if it reached every live day asked for; a partial
-                # walk must not suppress the retry for the days it did not reach.
-                live_done = all(d in fresh for d in needed if d >= today)
+                # walk must not suppress the retry for the days it did not reach, and neither
+                # may a walk over past days only (all([]) is True; review_agy.md M3).
+                live_needed = [d for d in needed if d >= today]
+                live_done = bool(live_needed) and all(d in fresh for d in live_needed)
                 _save_cache(days, today if live_done else (fetched_on or today - timedelta(days=1)))
         missing = [d for d in all_days if d not in days]
         if missing:

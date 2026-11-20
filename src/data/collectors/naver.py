@@ -278,6 +278,20 @@ def _fetch_naver_info(code: str) -> tuple:
     return "", 0
 
 
+def _listing_marcap(item: dict) -> int:
+    """KRW market cap of one marketValue item: marketValueRaw (exact KRW), else
+    marketValue (100M KRW units), else 0. A malformed value costs that one row its
+    market cap instead of dropping the whole 100-row page (review_agy.md M5)."""
+    raw_marcap = item.get("marketValueRaw")
+    if raw_marcap not in (None, ""):
+        try:
+            return int(float(str(raw_marcap).replace(",", "")))
+        except (TypeError, ValueError):
+            logger.debug("Naver listing: bad marketValueRaw %r for %s", raw_marcap, item.get("itemCode"))
+    cleaned = re.sub(r'[^\d]', '', str(item.get("marketValue") or "0").replace(",", ""))
+    return int(cleaned) * 100_000_000 if cleaned else 0
+
+
 def _fetch_kr_listing_naver(market, top_n):
     """Primary KR market-listing source: fetch top stocks sorted by market cap
     via Naver Mobile JSON API. Returns list of dicts: [{'Code', 'Name', 'Marcap'}]."""
@@ -295,20 +309,12 @@ def _fetch_kr_listing_naver(market, top_n):
             stocks = data.get("stocks", [])
             rows = []
             for s in stocks:
-                code = str(s.get("itemCode", "")).strip().zfill(6)
-                name = str(s.get("stockName", "")).strip()
+                # zfill only after the emptiness test: "".zfill(6) is "000000" (M5).
+                code = str(s.get("itemCode") or "").strip()
+                name = str(s.get("stockName") or "").strip()
                 if not code or not name:
                     continue
-                # marketValueRaw is the exact market capitalization in KRW
-                raw_marcap = s.get("marketValueRaw")
-                if raw_marcap is not None:
-                    marcap = int(raw_marcap)
-                else:
-                    # Fallback to marketValue in 100M KRW units
-                    mv_str = str(s.get("marketValue", "0")).replace(",", "")
-                    cleaned = re.sub(r'[^\d]', '', mv_str)
-                    marcap = int(cleaned) * 100_000_000 if cleaned else 0
-                rows.append({"Code": code, "Name": name, "Marcap": marcap})
+                rows.append({"Code": code.zfill(6), "Name": name, "Marcap": _listing_marcap(s)})
             return rows
         except PAYLOAD_ERRORS:
             logger.warning("Naver listing API fetch failed for market=%s page=%d", market, pg, exc_info=True)
@@ -385,10 +391,10 @@ def _fetch_index_investor_trend(market: str, days: int = 60) -> list:
         if not date_str:
             return None
         bizdate = date_str.replace("-", "")
-        close_price = int(float(item.get("closePrice", "0").replace(",", "")))
-
         url_trend = f"https://m.stock.naver.com/api/index/{market}/trend?bizdate={bizdate}"
         try:
+            # Inside the try: one day with an odd closePrice is skipped, not the whole list (M5).
+            close_price = int(float(str(item.get("closePrice") or "0").replace(",", "")))
             r = _NAVER_SESSION.get(url_trend, timeout=5)
             r.raise_for_status()
             t_data = r.json()
@@ -459,7 +465,17 @@ def _fetch_investor_trend_naver(ticker: str, days: int = 60) -> list:
     `days` rows. Source: Naver mobile ``/api/stock/<code>/trend``. The legacy frgn.naver
     page became a script-rendered page without tables (confirmed 2026-10-14), so the old
     table scrape returned nothing. Paging is by ``bizdate`` (rows strictly before that
-    date); the plain ``page`` parameter is ignored by the server."""
+    date); the plain ``page`` parameter is ignored by the server. A page that fails ends
+    the walk with the rows collected so far; `fetch_investor_trend_paged` also says
+    whether that happened."""
+    return fetch_investor_trend_paged(ticker, days)[0]
+
+
+def fetch_investor_trend_paged(ticker: str, days: int = 60) -> tuple:
+    """`_fetch_investor_trend_naver` plus a completeness flag: (rows, complete), where
+    complete is False when a page request failed before `days` rows or the end of the
+    series were reached, so the rows are only the newest part of what was asked for.
+    data/flows.py records full coverage only for a complete walk (review_agy.md H1)."""
     if isinstance(ticker, int):
         ticker = f"{ticker:06d}"
     elif isinstance(ticker, str) and ticker.isdigit():
@@ -468,6 +484,7 @@ def _fetch_investor_trend_naver(ticker: str, days: int = 60) -> list:
     url = f"https://m.stock.naver.com/api/stock/{ticker}/trend"
     rows: list = []
     bizdate = None
+    complete = True
     while len(rows) < days:
         params = {"pageSize": _TREND_PAGE_SIZE}
         if bizdate:
@@ -476,17 +493,18 @@ def _fetch_investor_trend_naver(ticker: str, days: int = 60) -> list:
             res = _NAVER_SESSION.get(url, params=params, timeout=8)
             res.raise_for_status()
             items = res.json()
+            if not items:
+                break
+            rows.extend(_parse_trend_rows(items))
+            oldest = str(items[-1].get("bizdate") or "")
         except PAYLOAD_ERRORS:
             logger.warning("[_fetch_investor_trend_naver] Error for ticker=%s bizdate=%s", ticker, bizdate, exc_info=True)
+            complete = False
             break
-        if not items:
-            break
-        rows.extend(_parse_trend_rows(items))
-        oldest = str(items[-1].get("bizdate") or "")
         if len(oldest) != 8 or oldest == bizdate or len(items) < _TREND_PAGE_SIZE:
             break
         bizdate = oldest
-    return rows[:days]
+    return rows[:days], complete
 
 
 def _naver_quarter_periods(info: dict):

@@ -15,6 +15,7 @@ class TestUsdKrwCache(unittest.TestCase):
     def setUp(self):
         data_fetcher._USD_KRW_CACHE["rate"] = None
         data_fetcher._USD_KRW_CACHE["df"] = None
+        data_fetcher._USD_KRW_CACHE["failed_at"] = None
 
     @patch("data.fx._fetch_usd_krw_history")
     def test_cached_rate_is_reused(self, mock_fetch):

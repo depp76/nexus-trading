@@ -120,7 +120,10 @@ class TestSessions(CalendarCase):
             f.write("{not json")
         self.assertEqual(len(krx_calendar.get_krx_sessions(date(2024, 1, 1), date(2024, 1, 5))), 5)
         with open(self.path, encoding="utf-8") as f:
-            self.assertEqual(json.load(f)["fetched_on"], TODAY.isoformat())
+            saved = json.load(f)
+        self.assertIn("2024-01-05", saved["days"])
+        # Only past days were fetched, so today's live refresh is not claimed (review_agy.md M3).
+        self.assertEqual(saved["fetched_on"], (TODAY - timedelta(days=1)).isoformat())
 
 
 class TestWeeklyCheckDates(CalendarCase):

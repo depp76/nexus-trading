@@ -35,7 +35,7 @@ class TestInvestorFlows(unittest.TestCase):
 
     def test_fetches_once_then_serves_from_cache(self):
         today = date(2026, 9, 28)   # Monday
-        with patch.object(flows, "_fetch_investor_trend_naver", return_value=_naver_rows(30)) as fetch:
+        with patch.object(flows, "fetch_investor_trend_paged", return_value=(_naver_rows(30), True)) as fetch:
             df = flows.get_investor_flows("5930", "2026-08-01", today=today)
             self.assertEqual(fetch.call_count, 1)
             self.assertEqual(fetch.call_args.args[0], "005930")
@@ -49,14 +49,14 @@ class TestInvestorFlows(unittest.TestCase):
 
     def test_refetches_when_history_is_missing(self):
         today = date(2026, 9, 28)
-        with patch.object(flows, "_fetch_investor_trend_naver", return_value=_naver_rows(30)) as fetch:
+        with patch.object(flows, "fetch_investor_trend_paged", return_value=(_naver_rows(30), True)) as fetch:
             flows.get_investor_flows("000660", "2026-08-01", today=today)
             flows.get_investor_flows("000660", "2025-01-01", today=today)   # earlier start -> fetch again
             self.assertEqual(fetch.call_count, 2)
             self.assertGreater(fetch.call_args.kwargs["days"], 400)
 
     def test_fetch_failure_returns_empty_frame(self):
-        with patch.object(flows, "_fetch_investor_trend_naver", side_effect=RuntimeError("down")):
+        with patch.object(flows, "fetch_investor_trend_paged", side_effect=RuntimeError("down")):
             df = flows.get_investor_flows("000001", "2026-08-01", today=date(2026, 9, 28))
             self.assertEqual(df.height, 0)
             self.assertIn("Date", df.columns)
