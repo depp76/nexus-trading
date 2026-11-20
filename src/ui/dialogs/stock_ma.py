@@ -17,7 +17,7 @@ docs/ui.md "MA Chart Redesign" mockup (12 issues, phases A-D):
      rebased onto the price axis; divergence bands are three (overheated /
      neutral / depressed) around ui.colors.MA_DIV_NEUTRAL_PCT, the same
      constant the Universe table reads, with 100 centred.
-  D  period buttons (1M..5Y/All); a crosshair shared by every panel.
+  D  period buttons (1M..10Y/All); a crosshair shared by every panel.
 
 2026-10-15 (user direction): the exclusive view segment (Short / Long /
 Close only / Divergence / Equal Weight) became independent, multi-select

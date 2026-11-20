@@ -198,7 +198,7 @@ class TestStockChart(unittest.TestCase):
         self.assertGreaterEqual(width, d._period_combo.sizeHint().width())
         # period combo: every period, single choice
         self.assertEqual([d._period_combo.itemText(i) for i in range(d._period_combo.count())],
-                         ["1개월", "3개월", "6개월", "1년", "3년", "5년", "전체"])
+                         ["1개월", "3개월", "6개월", "1년", "3년", "5년", "10년", "전체"])
         buttons = [d._series_buttons["Div"], *d._panel_buttons.values()]
         self.assertEqual(len({x.width() for x in buttons}), 1)
         self.assertTrue(all(x.width() >= x.sizeHint().width() for x in buttons))
