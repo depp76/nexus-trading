@@ -194,7 +194,7 @@ def update_changed_rows(self, data, changed_rows, highlights=None):
 | --- | --- | --- | --- | --- | --- |
 | 1 | Name / Ticker | — | 150 | 2.4 | 종목명 + `티커 · 시장` + 고정 크기 상태 버튼(클릭 시 순환, 1.7) |
 | 2 | Cap | 억원 | 80 | 고정 | 조 단위 축약 |
-| 3 | tPER | 배 | 54 | .55 | <12 초록 / >60 빨강 |
+| 3 | tPER | 배 | 54 | .55 | <12 초록 / >60·음수(적자) 빨강 |
 | 4 | fPER | 배 | 54 | .55 | |
 | 5 | Price | 원 | 80 | 고정 | |
 | 6 | Chg | 전일 % | 58 | .62 | PROFIT/LOSS |

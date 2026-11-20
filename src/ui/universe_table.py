@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QRect, QTimer
 from PyQt6.QtGui import QColor, QFont, QPainter, QKeySequence
+from PyQt6 import sip
 
 from i18n import tr
 from ui.common import create_font, FONT_BODY, _EmptyHint
@@ -195,6 +196,18 @@ class StockTable(QTableWidget):
         # market filters show fewer rows than fit (2026-11-15).
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.doubleClicked.connect(self._on_row_activated)
+        # Status-button clicks must not move focus, selection or the current
+        # cell (user report 2026-11-20). Qt hands click focus to the table
+        # before mousePressEvent runs, so the widget that had focus is
+        # remembered here and given it back; _status_press swallows the
+        # rest of that press (move/release), whose stale press position
+        # would otherwise drag-select rows.
+        self._status_press = False
+        self._mouse_focus_pending = False
+        self._focus_before = None
+        app = QApplication.instance()
+        if app is not None:
+            app.focusChanged.connect(self._on_app_focus_changed)
 
         self._build_frozen_column()
         # A manual header drag on column 0 bypasses _stretch_columns, so the
@@ -335,27 +348,73 @@ class StockTable(QTableWidget):
         data = self._row_identity(row)
         return data["ticker"] if data else None
 
+    def _on_app_focus_changed(self, old, now):
+        if now is self:
+            self._focus_before = old
+
+    def focusInEvent(self, event):
+        self._mouse_focus_pending = event.reason() == Qt.FocusReason.MouseFocusReason
+        super().focusInEvent(event)
+
+    def _status_button_press(self, event):
+        """Handle a left press/double-click on a status button: cycle the
+        row's status and leave focus, selection and current cell as they
+        were. Returns False when the press is not on a status button."""
+        gained_focus, self._mouse_focus_pending = self._mouse_focus_pending, False
+        if event.button() != Qt.MouseButton.LeftButton:
+            return False
+        ticker = self._status_button_ticker_at(event.pos())
+        if ticker is None:
+            return False
+        self._status_press = True
+        if gained_focus:
+            self._restore_focus()
+        self.toggle_requested.emit(ticker)
+        event.accept()
+        return True
+
+    def _restore_focus(self):
+        """Give focus back to the widget that had it before this click; with
+        none (or it is gone), hand it to the parent as _drop_focus does."""
+        prev = self._focus_before
+        self._focus_before = None
+        if prev is not None and not sip.isdeleted(prev) and prev.isVisible() and prev.isEnabled():
+            prev.setFocus(Qt.FocusReason.OtherFocusReason)
+            return
+        parent = self.parentWidget()
+        if parent is None:
+            self.clearFocus()
+            return
+        if parent.focusPolicy() == Qt.FocusPolicy.NoFocus:
+            parent.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        parent.setFocus(Qt.FocusReason.OtherFocusReason)
+
     def mousePressEvent(self, event):
         """A left click on a row's status button cycles that row's status
         (toggle_requested); every other click behaves as before."""
-        if event.button() == Qt.MouseButton.LeftButton:
-            ticker = self._status_button_ticker_at(event.pos())
-            if ticker is not None:
-                self.toggle_requested.emit(ticker)
-                event.accept()
-                return
+        if self._status_button_press(event):
+            return
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event):
         """Two quick clicks on the status button advance it twice instead of
         opening the MA chart (the second press arrives as this event)."""
-        if event.button() == Qt.MouseButton.LeftButton:
-            ticker = self._status_button_ticker_at(event.pos())
-            if ticker is not None:
-                self.toggle_requested.emit(ticker)
-                event.accept()
-                return
+        if self._status_button_press(event):
+            return
         super().mouseDoubleClickEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._status_press:
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._status_press:
+            self._status_press = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def _row_identity(self, row):
         """The (ticker, status) UserRole payload for a view row, or None.
@@ -618,8 +677,9 @@ class StockTable(QTableWidget):
         every row's ~20 columns from scratch.
 
         Used by the 60s lightweight auto-refresh (UniverseLightweightFetchThread),
-        which only ever changes price/changes for a subset of tickers -- name,
-        market, ticker, market cap and PER never change on that path. Rebuilding
+        which only ever changes price/changes (and the PER that follows the
+        price) for a subset of tickers -- name, market, ticker and market cap
+        never change on that path. Rebuilding
         every cell of every row on every tick regardless (as load_data() does)
         means tens of thousands of QTableWidgetItem allocations a minute for a
         few-hundred-row universe, for cells whose displayed value didn't move.
@@ -770,7 +830,9 @@ class StockTable(QTableWidget):
         """COL_TPER / COL_FPER: tPER / fPER. tPER's color is a cheap/expensive value
         judgment (docs/ui.md mockup: green <12x, warning-red >60x), a
         different axis from the PROFIT/LOSS up/down convention, so it
-        intentionally does not reuse those two colors."""
+        intentionally does not reuse those two colors. A negative PER (a
+        loss-making company, shown as is since 2026-11-20) is warning-red too,
+        never the "cheap" green."""
         for col, key in ((COL_TPER, 'trailing_per'), (COL_FPER, 'forward_per')):
             val = item.get(key)
             if val is not None:
@@ -778,7 +840,7 @@ class StockTable(QTableWidget):
                 cell.setTextAlignment(_RIGHT)
                 cell.setFont(self._numeric_font)
                 if col == COL_TPER:
-                    color = OK if val < 12 else WARN if val > 60 else TEXT
+                    color = WARN if val < 0 or val > 60 else OK if val < 12 else TEXT
                     cell.setForeground(QColor(color))
             else:
                 cell = _empty_numeric_item()

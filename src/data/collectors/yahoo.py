@@ -18,6 +18,7 @@ from data.cache import (
     _get_yf_crumb,
     start_date,
     safe_float,
+    per_from_eps,
 )
 from data.frames import _to_polars
 from data.indicators import fetch_historical_changes
@@ -193,6 +194,8 @@ class _UsChunkMeta:
     name: dict = field(default_factory=dict)
     trailing_per: dict = field(default_factory=dict)
     forward_per: dict = field(default_factory=dict)
+    eps_trailing: dict = field(default_factory=dict)   # USD, for data.cache.refresh_row_per
+    eps_forward: dict = field(default_factory=dict)
 
 
 def _is_valid_pe(v) -> bool:
@@ -281,8 +284,17 @@ def _apply_v7_quotes(yf_symbols: list, meta: _UsChunkMeta) -> None:
             fpe = item.get("forwardPE")
             if _is_valid_pe(tpe):
                 meta.trailing_per[sym] = round(float(tpe), 1)
+            else:
+                # Yahoo leaves trailingPE out for a negative trailing EPS:
+                # show the negative PER instead of a blank cell.
+                neg = per_from_eps(item.get("regularMarketPrice"), item.get("epsTrailingTwelveMonths"))
+                if neg is not None:
+                    meta.trailing_per[sym] = neg
             if _is_valid_pe(fpe):
                 meta.forward_per[sym] = round(float(fpe), 1)
+            for eps_map, src in ((meta.eps_trailing, "epsTrailingTwelveMonths"), (meta.eps_forward, "epsForward")):
+                if _is_valid_pe(item.get(src)):
+                    eps_map[sym] = float(item[src])
     except PAYLOAD_ERRORS:
         logger.warning("YF v7 quote fetch error (chunk)", exc_info=True)
 
@@ -388,6 +400,8 @@ def _process_us_symbol(symbol: str, name: str, meta: _UsChunkMeta, run: _UsBulkR
             "changes": changes,
             "trailing_per": meta.trailing_per.get(yf_symbol),
             "forward_per": meta.forward_per.get(yf_symbol),
+            "eps_trailing": meta.eps_trailing.get(yf_symbol),
+            "eps_forward": meta.eps_forward.get(yf_symbol),
         }
     except Exception:
         # boundary: one bad symbol must not sink the chunk; logged with traceback.

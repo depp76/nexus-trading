@@ -17,6 +17,7 @@ from data.cache import (
     is_kr_code,
     is_us_market,
     safe_float,
+    refresh_row_per,
     _USD_KRW_CACHE,       # tests reset the FX session cache through the facade
     _HIST_CACHE_STATS,    # tests assert the counters are shared with data.cache
     _YF_SESSION,          # tests patch the Yahoo session's .get

@@ -1085,9 +1085,9 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         v_scroll = self.table.verticalScrollBar().value()
 
         # Incremental update: only the rows whose price/changes actually
-        # changed get their cells rebuilt (identity/cap/PER never change on
-        # this path, so there's no need to touch them at all, unlike a full
-        # load_data()).
+        # changed get their cells rebuilt, PER included (the thread recomputes
+        # it from the new price, data.cache.refresh_row_per); unchanged rows
+        # are not touched at all, unlike a full load_data().
         self.table.update_changed_rows(updated_data, changed_rows, highlights)
         if changed_rows:
             self.filter_table(self.search_input.text())
