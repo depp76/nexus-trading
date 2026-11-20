@@ -40,26 +40,35 @@ from ui.colors import OK, WARN, DANGER
 load_dotenv(ENV_FILE)
 
 import logging
+import logging.handlers
 logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
-
-# ── Structured logging setup ──────────────────────────────────────────────────
-# Root logger at INFO: WARNING+ goes to both app.log and the console, and INFO
-# (e.g. _HIST_CACHE hit/miss stats, auto-backup completion) goes to app.log only.
-# Leaving the root at DEBUG would make every third-party library's debug records
-# get built and then thrown away by the handlers (roadmap 6-1a).
-_log_formatter = logging.Formatter(
-    "%(asctime)s %(levelname)-8s %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-_file_handler = logging.FileHandler(APP_LOG_FILE, encoding="utf-8")
-_file_handler.setLevel(logging.INFO)
-_file_handler.setFormatter(_log_formatter)
-_stream_handler = logging.StreamHandler()
-_stream_handler.setLevel(logging.WARNING)
-_stream_handler.setFormatter(_log_formatter)
-logging.basicConfig(level=logging.INFO, handlers=[_file_handler, _stream_handler])
 logger = logging.getLogger(__name__)  # module-level logger for main.py
-# ─────────────────────────────────────────────────────────────────────────────
+
+# app.log rotation: 5 MB per file, three old files kept (review_agy M1).
+_LOG_MAX_BYTES = 5 * 1024 * 1024
+_LOG_BACKUPS = 3
+
+
+def setup_logging(log_file: str = APP_LOG_FILE) -> None:
+    """Structured logging for the app, called from the entry point only, so
+    importing this module (tests) never opens the real app.log (review_agy M1).
+
+    Root logger at INFO: WARNING+ goes to both app.log and the console, and INFO
+    (e.g. _HIST_CACHE hit/miss stats, auto-backup completion) goes to app.log only.
+    Leaving the root at DEBUG would make every third-party library's debug records
+    get built and then thrown away by the handlers (roadmap 6-1a)."""
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    file_handler = logging.handlers.RotatingFileHandler(
+        log_file, maxBytes=_LOG_MAX_BYTES, backupCount=_LOG_BACKUPS, encoding="utf-8")
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(formatter)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(logging.WARNING)
+    stream_handler.setFormatter(formatter)
+    logging.basicConfig(level=logging.INFO, handlers=[file_handler, stream_handler], force=True)
 
 
 # --- Phase 3-1: split out to the threads/ package ---
@@ -81,7 +90,8 @@ from ui.strategy_tab import StrategyTab
 # MainWindow built next uses the fresh modules (docs/ui.md 8.20).
 _UI_NAMES = {
     "ui.common": ("create_font", "apply_matplotlib_font", "FONT_FAMILY_CSS", "FONT_TITLE", "FONT_HEADING",
-                  "FONT_BODY", "cancel_thread", "refresh_state", "RefreshFailures", "EqualWidthTabBar"),
+                  "FONT_BODY", "cancel_thread", "retire_when_idle", "refresh_state", "RefreshFailures",
+                  "EqualWidthTabBar"),
     "ui.language_switch": ("LanguageSwitch",),
     "ui.theme": ("app_qss", "app_palette", "apply_matplotlib_theme", "TEXT_EMPTY"),
     "ui.colors": ("OK", "WARN", "DANGER"),
@@ -129,9 +139,19 @@ def switch_language(old: "MainWindow", lang: str) -> "MainWindow":
     thread and no worker is killed: the old window is hidden at once and
     destroyed after its last worker ends (review_codex.md 2026-11-18 #2; it
     used to wait up to 2 s per thread here and then terminate() it). Data
-    caches (data.*) and the database are untouched."""
+    caches (data.*) and the database are untouched.
+
+    A second call for a window already replaced (two flag clicks queued
+    before the first switch ran) does nothing and returns that window
+    (review_agy H16)."""
+    if old._retired or old._replaced:
+        return old
+    old._replaced = True
     app = QApplication.instance()
     state = old.export_state()
+    # The old tab's MA charts go first, so their workers are cancelled and
+    # counted among the old window's pending threads (review_agy H9).
+    old.universe_tab.close_chart_dialogs()
     pending = old.request_stop_background_work()
     i18n.save_language(lang)
     i18n.set_language(lang)
@@ -154,6 +174,8 @@ class MainWindow(QMainWindow):
         rebuilds the window: the old window's data is carried over instead."""
         super().__init__()
         self._retired = False
+        self._replaced = False          # set by switch_language once a new window is built for it
+        self._switch_queued = False     # a language switch is queued (_on_language_requested)
         self.setWindowTitle("Nexus Trading")
         self.resize(1100, 850)
 
@@ -331,6 +353,9 @@ class MainWindow(QMainWindow):
             if answer != QMessageBox.StandardButton.Yes:
                 self.language_switch.reset()
                 return
+        if self._replaced or self._switch_queued:
+            return      # a switch is already on its way (review_agy H16)
+        self._switch_queued = True
         # Leave this click handler before the window that owns it is replaced.
         QTimer.singleShot(0, lambda: switch_language(self, lang))
 
@@ -339,6 +364,7 @@ class MainWindow(QMainWindow):
             "geometry": self.saveGeometry(), "maximized": self.isMaximized(),
             "tab": self.tabs.currentIndex(), "auto_refresh": self.auto_refresh_cb.isChecked(),
             "last_sync_at": self._last_sync_at,
+            "failures": dict(self._failures._by_source),
             "universe": self.universe_tab.export_state(),
             "history": self.trading_history_tab.export_state(),
             "assets": self.trading_record_tab.export_state(),
@@ -353,7 +379,9 @@ class MainWindow(QMainWindow):
             self._last_sync_at = state["last_sync_at"]
             self.update_time_label.setText(tr(f"최근 갱신 {self._last_sync_at:%H:%M:%S}",
                                               f"last {self._last_sync_at:%H:%M:%S}"))
-            self._update_refresh_indicator()
+        for source, (at, reason) in (state.get("failures") or {}).items():
+            self._failures.fail(source, reason, at)      # the header dot stays red (review_agy L4)
+        self._update_refresh_indicator()
         self.trading_history_tab.import_state(state["history"])
         self.trading_record_tab.import_state(state["assets"])
         self.strategy_tab.import_state(state["strategy"])
@@ -389,15 +417,23 @@ class MainWindow(QMainWindow):
                 continue
         return running
 
+    # How long shutdown waits for the auto-backup (an SQLite online backup and
+    # the pruning of old backup folders) and for any other worker.
+    _BACKUP_STOP_WAIT_MS = 30000
+    _THREAD_STOP_WAIT_MS = 2000
+
     def stop_background_work(self) -> None:
-        """App shutdown: ask every worker to stop, then wait up to 2 s each and
-        terminate what is still alive (the process is ending)."""
+        """App shutdown: ask every worker to stop and wait a little for each.
+        Nothing is terminate()d (review_agy M8): killing a thread mid-backup
+        could leave a half-written backup, and killing one that holds the GIL
+        or a lock can hang the process. The backup gets a long wait; a fetch
+        still running after its wait ends with the process (main's os._exit
+        right after the event loop returns)."""
         for t in self.request_stop_background_work():
             try:
-                if not t.wait(2000):   # wait up to 2 s
-                    t.terminate()     # force-kill if still alive
-                    if not t.wait(500):
-                        logger.warning("Background thread %s did not stop", type(t).__name__)
+                is_backup = t is self._auto_backup_thread
+                if not t.wait(self._BACKUP_STOP_WAIT_MS if is_backup else self._THREAD_STOP_WAIT_MS):
+                    logger.warning("Background thread %s still running at shutdown", type(t).__name__)
             except Exception:  # boundary: shutdown must go on whatever one thread does
                 logger.warning("Failed to cleanly stop background thread", exc_info=True)
 
@@ -491,6 +527,7 @@ class MainWindow(QMainWindow):
 
 
 if __name__ == "__main__":
+    setup_logging()
     print("Starting Nexus Trading...")
     app = QApplication(sys.argv)
     # Windows' native style silently ignores parts of the stylesheet below

@@ -113,8 +113,14 @@ class IndexMaThread(QThread):
         self.variant = variant
 
     def run(self):
-        results = fetch_all_indices_mas()
-        self.finished.emit(results, index_regimes(results, self.variant))
+        try:
+            results = fetch_all_indices_mas()
+            regimes = index_regimes(results, self.variant)
+        except Exception:
+            # boundary: QThread.run; always emit so the dialog leaves its loading state (review_agy H7).
+            logger.error("IndexMaThread failed", exc_info=True)
+            results, regimes = {}, None
+        self.finished.emit(results, regimes)
 
 
 def stock_chart_overlays(ticker: str, market: str, df, variant: str | None = None, now=None) -> list:
@@ -157,6 +163,15 @@ class StockMaThread(QThread):
         self.variant = variant      # the strategy variant whose chart lines to draw (None: default)
 
     def run(self):
+        try:
+            self._run()
+        except Exception as e:
+            # boundary: QThread.run; always emit so the caller's loading state ends (review_agy H7).
+            logger.error("StockMaThread failed for %s", self.ticker, exc_info=True)
+            self.finished.emit(self.ticker, self.name, None, str(e) or type(e).__name__, [],
+                               self.market, self.change_mode, [])
+
+    def _run(self):
         # MA20 feeds the MA20 divergence ratio; the chart's lines are the SMA columns.
         df, err = fetch_stock_ma_multi(self.ticker, self.market, windows=(20,))
 
@@ -211,7 +226,12 @@ class SingleStockFetchThread(QThread):
         self.ticker = ticker
 
     def run(self):
-        result, error = fetch_single_stock(self.market, self.ticker)
+        try:
+            result, error = fetch_single_stock(self.market, self.ticker)
+        except Exception as e:
+            # boundary: QThread.run; always emit so the Add button is re-enabled (review_agy H7).
+            logger.error("SingleStockFetchThread failed for %s", self.ticker, exc_info=True)
+            result, error = None, str(e) or type(e).__name__
         self.finished.emit(result, error or "", self.ticker)
 
 
@@ -626,6 +646,16 @@ class PositionPriceFetchThread(QThread):
         self._skip_fetch = skip_fetch if skip_fetch is not None else [False] * len(names)
 
     def run(self):
+        try:
+            results = self._run()
+        except Exception:
+            # boundary: QThread.run; an empty result still clears the caller's
+            # "loading prices" label (review_agy H7).
+            logger.error("PositionPriceFetchThread failed", exc_info=True)
+            results = []
+        self.prices_ready.emit(results, self.request_id)
+
+    def _run(self) -> list:
         name_to_info = self._resolve_kr_codes()
         price_map = self._fetch_kr_prices(name_to_info)
         us_price_map, us_price_map_usd = self._fetch_us_prices(name_to_info)
@@ -635,9 +665,7 @@ class PositionPriceFetchThread(QThread):
 
         max_workers = min(10, max(1, len(self._names)))
         with ThreadPoolExecutor(max_workers=max_workers) as exe:
-            results = list(exe.map(lambda arg: _compute_pl(*arg), enumerate(self._names)))
-
-        self.prices_ready.emit(results, self.request_id)
+            return list(exe.map(lambda arg: _compute_pl(*arg), enumerate(self._names)))
 
     @staticmethod
     def _match_listing(name: str, df_krx, df_etf):

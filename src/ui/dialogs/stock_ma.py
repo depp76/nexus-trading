@@ -433,6 +433,24 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         self.strategy_section = self._side.strategy_section
         return self._side.widget
 
+    def _stop_strategy_section(self) -> None:
+        """Cancel the "전략 점검" workers of a closing dialog (review_agy H9)."""
+        section = getattr(self, "strategy_section", None)
+        if section is not None:
+            try:
+                section.shutdown()
+            except RuntimeError:
+                pass        # the section's C++ side is already gone
+
+    def closeEvent(self, event):
+        self._stop_strategy_section()
+        super().closeEvent(event)
+
+    def done(self, result: int) -> None:
+        # Esc / reject() reach here without a closeEvent on some Qt versions.
+        self._stop_strategy_section()
+        super().done(result)
+
     def _align_right_panel(self) -> None:
         """Right panel's first line level with the first button line, its
         table's top level with the chart's top edge (StockMaSidePanel.align)."""

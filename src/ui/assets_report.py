@@ -87,9 +87,15 @@ def build_report(trades: list[dict], end_cash: float, points: list[tuple[str, st
     """One row per (date, kind) point.
 
     closes: {ticker: ascending [(date, close)]}, in the instrument's own
-    currency; `usd_krw[date]` converts US-market closes to KRW (positions
-    without a close are valued at cost and flagged `priced=False`).
+    currency; `usd_krw` ({date: rate}) converts US-market closes to KRW at
+    the last rate on or before the date, like the closes (positions without
+    a close or a rate are valued at cost and flagged `priced=False`).
+
+    The cumulative returns are measured from the first point whose total is
+    positive; points before it (and every point, if none is) show None
+    rather than a return off a zero or negative base (review_agy M12-2).
     """
+    fx_series = sorted((d, r) for d, r in usd_krw.items() if r)
     rows = []
     base_total = base_kospi = None
     for d, kind in points:
@@ -99,7 +105,7 @@ def build_report(trades: list[dict], end_cash: float, points: list[tuple[str, st
         for tk, p in holdings_on(trades, d).items():
             px = close_on(closes.get(tk, []), d)
             if px and is_us_market(p["market"]):
-                fx = usd_krw.get(d, 0.0)
+                fx = close_on(fx_series, d)
                 px = px * fx if fx else 0.0
             priced = px > 0
             mv = px * p["qty"] if priced else p["cost"]
@@ -112,11 +118,11 @@ def build_report(trades: list[dict], end_cash: float, points: list[tuple[str, st
         cash = cash_on(trades, end_cash, d)
         total = mv_total + cash
         k = close_on(kospi, d)
-        if base_total is None:
+        if base_total is None and total > 0:
             base_total, base_kospi = total, k
         rows.append({
             "date": d, "kind": kind, "kospi": k,
-            "kospi_cum_pct": (k / base_kospi - 1) * 100 if base_kospi and k else None,
+            "kospi_cum_pct": (k / base_kospi - 1) * 100 if base_total and base_kospi and k else None,
             "cost": cost_total, "value": mv_total, "cash": cash, "total": total,
             "total_cum_pct": (total / base_total - 1) * 100 if base_total else None,
             "holdings": holdings, "priced": all_priced,
