@@ -11,7 +11,7 @@ NaN) when the dataset has no investor-flow data.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 
 import numpy as np
@@ -240,6 +240,19 @@ def compute_features(ds, params: StrategyParams, flow_lead: int = 0) -> Features
         regime_on=regime_on, check_day=check_day, has_flows=has_flows, flow_coverage=flow_coverage,
         regime_cols=regime_cols,
     )
+
+
+def with_check_weekday(f: Features, ds, params: StrategyParams) -> Features:
+    """`f` (``compute_features(ds, q)`` for some q) recomputed for ``params.check_weekday``:
+    the weekday only enters the 2-1 L1 regime (``regime_state``: check days and the state
+    held between them), so only regime_on / check_day / regime_cols are rebuilt and every
+    other array is shared with `f`. Equal to ``compute_features(ds, params)`` when `params`
+    differs from q in check_weekday alone (the robustness E1 runs, review 2026-11-20 M11;
+    test_robustness_cache.py checks the equality)."""
+    idx = np.asarray(ds.index_close, dtype=float)
+    regime_on, check_day, regime_cols = _regime_features(
+        ds.stocks, idx, getattr(ds, "index_by_market", None), params, f.liquid.shape)
+    return replace(f, regime_on=regime_on, check_day=check_day, regime_cols=regime_cols)
 
 
 def entry_regime(f, t: int, n: int) -> np.ndarray:

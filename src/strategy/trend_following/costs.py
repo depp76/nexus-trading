@@ -168,6 +168,11 @@ class CostModel:
         move = prev_close * self.limit_move_pct
         up_tick = tick_size(trade_date, market, prev_close + move)
         down_tick = tick_size(trade_date, market, max(prev_close - move, 1.0))
+        if up_tick <= 0 or down_tick <= 0:
+            # No tick grid (a US listing, tick_size 0): the plain +-move band instead of a
+            # ZeroDivisionError. The engine never asks -- is_limit_up/down return False for US
+            # first (review 2026-11-20 L3).
+            return float(prev_close - move), float(prev_close + move)
         up = prev_close + math.floor(move / up_tick + 1e-9) * up_tick
         down = prev_close - math.floor(move / down_tick + 1e-9) * down_tick
         return float(down), float(up)

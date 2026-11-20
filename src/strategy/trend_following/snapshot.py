@@ -35,7 +35,7 @@ import polars as pl
 
 from paths import CACHE_DIR
 from strategy.trend_following.config import DEV_END, SPEC_VERSION, US_MARKETS
-from strategy.trend_following.dataset import Dataset, PriceBook, check_dev_window
+from strategy.trend_following.dataset import Dataset, PriceBook, check_dev_window, record_holdout_open
 
 SNAPSHOT_FORMAT = 1
 SNAPSHOT_ROOT = Path(CACHE_DIR) / "snapshots"
@@ -134,8 +134,15 @@ def check_snapshot_supported(ds: Dataset) -> None:
     (spec 9-25: snapshots are single-market KOSPI). The format stores one index
     series and one benchmark ticker and restores every benchmark as a Korean ETF,
     so a several-market dataset used to save, hash and load "successfully" with
-    its per-market indices and benchmark mix gone (review_codex.md C5)."""
+    its per-market indices and benchmark mix gone (review_codex.md C5). A dataset with no
+    sessions, or with one flow array but not the other, is refused too (review 2026-11-20 M10)."""
     problems = []
+    if not ds.dates:
+        problems.append("no sessions")          # the manifest's period needs a first and last date
+    if (ds.flow_fi is None) != (ds.flow_retail is None):
+        # Both flow arrays are stored or neither (review 2026-11-20 M10: a dataset with only
+        # flow_fi used to fail part way with an IndexError on the missing retail array).
+        problems.append("only one of the two flow arrays (flow_fi, flow_retail)")
     if getattr(ds, "index_by_market", None):
         problems.append("per-market indices (several markets)")
     us = sorted({m for m in ds.stocks.markets.values() if m in US_MARKETS})
@@ -159,9 +166,8 @@ def save_snapshot(ds: Dataset, path, allow_holdout: bool = False) -> dict:
     complete and verified: everything is written to a temporary sibling,
     loaded back with the hash check, then renamed into place; any failure
     removes the temporary folder and leaves `path` as it was."""
-    if ds.dates:
-        check_dev_window(ds.dates[-1], allow_holdout, "dataset last date")
-    check_snapshot_supported(ds)        # before anything is written
+    check_snapshot_supported(ds)        # before anything is written (also refuses an empty dataset)
+    check_dev_window(ds.dates[-1], allow_holdout, "dataset last date")
     target = Path(path)
     check_snapshot_target_free(target)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -169,7 +175,9 @@ def save_snapshot(ds: Dataset, path, allow_holdout: bool = False) -> dict:
     staging.mkdir()
     try:
         manifest = _write_snapshot_files(ds, staging)
-        load_snapshot(staging, allow_holdout=allow_holdout)      # read back: the hash must match
+        # Read back: the hash must match. Not a new opening of the hold-out (the data was
+        # loaded, and recorded, by load_dataset), so no ledger line.
+        load_snapshot(staging, allow_holdout=allow_holdout, _record_holdout=False)
         # A target created meanwhile is not overwritten: on Windows the rename
         # fails on any existing target, elsewhere on a non-empty folder.
         check_snapshot_target_free(target)
@@ -223,15 +231,21 @@ def _read_array(folder: Path, name: str) -> np.ndarray:
     return pl.read_parquet(folder / f"{name}.parquet").to_numpy().astype(float, copy=False)
 
 
-def load_snapshot(path, allow_holdout: bool = False, verify: bool = True) -> Dataset:
+def load_snapshot(path, allow_holdout: bool = False, verify: bool = True,
+                  _record_holdout: bool = True) -> Dataset:
     """Rebuild the Dataset saved by `save_snapshot`; the content hash must match
-    the manifest (SnapshotIntegrityError otherwise)."""
+    the manifest (SnapshotIntegrityError otherwise). A snapshot reaching past
+    DEV_END loads only with `allow_holdout`, and that load is recorded in the
+    hold-out ledger (``dataset.record_holdout_open``, spec 10-7 / 10-15)."""
     folder = Path(path)
     man = read_manifest(folder)
     series = pl.read_parquet(folder / "series.parquet")
     dates = [d if isinstance(d, date) else d.date() for d in series.get_column("Date").to_list()]
     if dates:
         check_dev_window(dates[-1], allow_holdout, "snapshot last date")
+        if _record_holdout:
+            start_idx = min(max(int(man.get("start_idx", 0)), 0), len(dates) - 1)
+            record_holdout_open(dates[start_idx], dates[-1], "load_snapshot", {"snapshot": str(folder)})
     tickers = list(man["tickers"])
 
     def book(prefix: str, cols: list[str], markets: dict, names: dict) -> PriceBook:
