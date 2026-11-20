@@ -66,6 +66,10 @@ def cagr(nav: np.ndarray, dates: list[date]) -> float:
     days = (dates[-1] - dates[0]).days
     if days <= 0:
         return 0.0
+    if nav[-1] <= 0:
+        # Wiped out: a fractional power of a negative ratio is complex (float() raised
+        # TypeError). Unreachable for a long-only NAV, which stays > 0 (review 2026-11-20 L3).
+        return -1.0
     return float((nav[-1] / NAV_BASE) ** (365.0 / days) - 1.0)
 
 
@@ -168,7 +172,9 @@ def information_ratio(strat_rets: np.ndarray, bm_rets: np.ndarray) -> float:
     if len(d) < 3:
         return 0.0
     sd = np.std(d, ddof=1)
-    return float(np.mean(d) / sd * np.sqrt(TRADING_DAYS)) if sd > 0 else 0.0
+    # Same float-noise floor as sharpe (review 2026-11-20 L3): a tracking spread <= 1e-12 a day
+    # is two identical series up to rounding, not a ratio worth reporting.
+    return float(np.mean(d) / sd * np.sqrt(TRADING_DAYS)) if sd > _SD_EPS else 0.0
 
 
 def period_returns(nav: np.ndarray, dates: list[date], periods=PERIODS) -> dict[str, float | None]:

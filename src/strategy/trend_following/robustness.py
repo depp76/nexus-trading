@@ -36,10 +36,10 @@ from strategy.trend_following.metrics import (
     NAV_BASE, beta_alpha, cagr, max_drawdown, nav_returns, session_rf, sharpe, summarize_run,
 )
 from strategy.trend_following.research import (
-    SUMMARY_COLUMNS, ResearchRequest, ResearchResult, _num, _pct, _table, cash_flow_table, run_research,
+    SUMMARY_COLUMNS, ResearchRequest, ResearchResult, _check_stop, _num, _pct, _say, _table, cached_scores,
+    cash_flow_table, run_research,
 )
-from strategy.trend_following.scoring import compute_scores
-from strategy.trend_following.signals import compute_features
+from strategy.trend_following.signals import compute_features, with_check_weekday
 
 WEEKDAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri")
 GROUP_BASE = "6-2 base matrix (variant x cost)"
@@ -71,7 +71,8 @@ def neighbor_params(base: StrategyParams, field_name: str, value) -> StrategyPar
 
 def planned_e2_runs(variant_ids: tuple[str, ...] | None = None) -> list[tuple[str, str, object, str]]:
     """(neighbour id, field, value, variant id) for every E2 run, in table order, restricted to
-    `variant_ids` (default: all). The full set has 31 rows; C1-C3 never appear."""
+    `variant_ids` (default: all). The full set has 37 rows since v07: 31 on A0-A5 / B plus
+    N6 / N7 (score_ma_long) on C1-C3 (spec 10-13 / 10-14)."""
     wanted = set(variant_ids) if variant_ids is not None else None
     return [(nid, f, v, vid) for nid, f, v, vids in E2_NEIGHBORS for vid in vids
             if wanted is None or vid in wanted]
@@ -288,15 +289,13 @@ class RobustnessResult:
         return render_robustness_markdown(self, header)
 
 
-def _say(progress, msg: str) -> None:
-    if progress is not None:
-        progress(msg)
+_stop = _check_stop        # the matrix runner's cancel check (one copy, review 2026-11-20 L3)
 
 
-def _stop(should_stop) -> None:
-    from strategy.trend_following.dataset import ResearchCancelled
-    if should_stop is not None and should_stop():
-        raise ResearchCancelled("cancelled")
+# Feature arrays never read a 2-5 score field (compute_features takes none of them), so an E2
+# neighbour that moves only one of these (N6 / N7: score_ma_long) reuses the base features
+# (review 2026-11-20 M11; test_robustness_cache.py checks compute_features ignores them).
+SCORE_ONLY_PREFIXES = ("score_", "gate_")
 
 
 def variant_for_neighbor(vid: str, field_name: str | None):
@@ -312,19 +311,21 @@ def variant_for_neighbor(vid: str, field_name: str | None):
 def _run_variant(ds, feats, params, vid: str, cm, score_cache: dict, free_field: str | None = None,
                  cash_interest: bool = True):
     """One backtest of `vid`. `free_field`: the E2 field the neighbour params set, kept out of the
-    variant's own overrides (variant_for_neighbor)."""
+    variant's own overrides (variant_for_neighbor). `score_cache` is shared by the whole report
+    (``research.cached_scores``, keyed by the applied params less the check weekday)."""
     v = variant_for_neighbor(vid, free_field)
-    scores = None
-    if v.mode == "score":
-        if vid not in score_cache:
-            score_cache[vid] = compute_scores(ds.stocks, v.apply(params))
-        scores = score_cache[vid]
+    scores = cached_scores(ds, v.apply(params), score_cache) if v.mode == "score" else None
     return run_backtest(ds, feats, params, v, cm, scores=scores, cash_interest=cash_interest)
 
 
-def _e1_weekday_runs(ds, p, runnable, base1, cm1, counter, progress, should_stop) -> list[WeekdayRun]:
+def _e1_weekday_runs(ds, p, runnable, base1, cm1, counter, progress, should_stop, feats=None,
+                     score_cache: dict | None = None) -> list[WeekdayRun]:
     """Checklist E1 (spec 6-4, 9-17): every variant on each of the five check weekdays; the
-    default weekday reuses the 1x base-matrix run instead of running it again."""
+    default weekday reuses the 1x base-matrix run instead of running it again. The other
+    weekdays rebuild only the regime part of the base features (``with_check_weekday``) and
+    reuse its score books -- the weekday changes neither (review 2026-11-20 M11)."""
+    feats = feats if feats is not None else compute_features(ds, p)
+    score_cache = {} if score_cache is None else score_cache
     weekday_runs: list[WeekdayRun] = []
     for w in range(5):
         if w == p.check_weekday:
@@ -334,22 +335,23 @@ def _e1_weekday_runs(ds, p, runnable, base1, cm1, counter, progress, should_stop
                                                period_stats(s.nav, s.dates, s.rf_period)))
             continue
         pw = replace(p, check_weekday=w)
-        featsw = compute_features(ds, pw)
-        cache: dict = {}
+        featsw = with_check_weekday(feats, ds, pw)
         for vid in runnable:
             _stop(should_stop)
             _say(progress, tr(f"E1: {vid} 점검 요일 {WEEKDAY_NAMES[w]}...", f"E1: {vid} with check weekday {WEEKDAY_NAMES[w]}..."))
-            res = _run_variant(ds, featsw, pw, vid, cm1, cache)
+            res = _run_variant(ds, featsw, pw, vid, cm1, score_cache)
             counter.add(GROUP_E1)
             weekday_runs.append(WeekdayRun(vid, w, stats_from_metrics(summarize_run(res)),
                                            period_stats(res.nav, res.dates, res.rf_period)))
     return weekday_runs
 
 
-def _e2_neighbor_runs(ds, p, variant_ids, base1, cm1, counter, progress, should_stop
-                      ) -> tuple[list[NeighborRun], list[dict], list[str]]:
+def _e2_neighbor_runs(ds, p, variant_ids, base1, cm1, counter, progress, should_stop, feats=None,
+                      score_cache: dict | None = None) -> tuple[list[NeighborRun], list[dict], list[str]]:
     """Checklist E2 (spec 6-4, 9-17): (runs, warm-up checks, skipped notes) over the
-    pre-registered ``E2_NEIGHBORS``; a neighbour the snapshot warm-up cannot cover is skipped."""
+    pre-registered ``E2_NEIGHBORS``; a neighbour the snapshot warm-up cannot cover is skipped.
+    A neighbour on a score-only field reuses the base features `feats` (SCORE_ONLY_PREFIXES)."""
+    score_cache = {} if score_cache is None else score_cache
     neighbor_runs: list[NeighborRun] = []
     checks: list[dict] = []
     skipped: list[str] = []
@@ -365,11 +367,12 @@ def _e2_neighbor_runs(ds, p, variant_ids, base1, cm1, counter, progress, should_
                            f"{chk['needed_sessions']} needed; not run (the window is never shortened) -- report to the CIO")
             continue
         pn = neighbor_params(p, f, v)
-        featsn = compute_features(ds, pn)
+        featsn = (feats if feats is not None and f.startswith(SCORE_ONLY_PREFIXES)
+                  else compute_features(ds, pn))
         for vid in wanted:
             _stop(should_stop)
             _say(progress, tr(f"E2: {vid} {f}={v} ({nid})...", f"E2: {vid} with {f}={v} ({nid})..."))
-            res = _run_variant(ds, featsn, pn, vid, cm1, {}, free_field=f)
+            res = _run_variant(ds, featsn, pn, vid, cm1, score_cache, free_field=f)
             counter.add(GROUP_E2)
             neighbor_runs.append(NeighborRun(
                 nid, f, v, vid, stats_from_metrics(summarize_run(res)),
@@ -406,12 +409,14 @@ def _a2_contamination_runs(ds, p, flow_lead, runnable, base1, cm1, counter, prog
     return contam
 
 
-def _no_interest_runs(ds, p, runnable, base1, cm1, counter, progress, should_stop) -> list[NoInterestRow]:
+def _no_interest_runs(ds, p, runnable, base1, cm1, counter, progress, should_stop, feats=None,
+                      score_cache: dict | None = None) -> list[NoInterestRow]:
     """Spec 10-4 (reference only, never a verdict): each variant at 1x with the cash earning
-    nothing, next to its 1x base run. The metrics still deduct the risk-free rate."""
+    nothing, next to its 1x base run. The metrics still deduct the risk-free rate. Reuses the
+    base matrix's features and score books when given (review 2026-11-20 M11)."""
     rows: list[NoInterestRow] = []
-    feats = compute_features(ds, p)
-    cache: dict = {}
+    feats = feats if feats is not None else compute_features(ds, p)
+    cache: dict = {} if score_cache is None else score_cache
     for vid in runnable:
         _stop(should_stop)
         _say(progress, tr(f"현금 이자 0 (참고): {vid}...", f"Cash interest 0 (reference): {vid}..."))
@@ -429,21 +434,28 @@ def run_robustness(ds, req: RobustnessRequest, progress=None, should_stop=None) 
     cm1 = r.cost_model.scaled(1.0)
     counter = RunCounter(prior=int(req.prior_trials))
 
-    research = run_research(ds, r, progress=progress, should_stop=should_stop)
+    # One feature bundle and one score-book cache for the whole report (review 2026-11-20 M11):
+    # the base matrix, E1 (regime rebuilt per weekday), the score-only E2 neighbours and the
+    # cash-interest-0 reruns all read the arrays the separate computations used to produce.
+    feats = compute_features(ds, p)
+    score_cache: dict = {}
+    research = run_research(ds, r, progress=progress, should_stop=should_stop, features=feats,
+                            score_cache=score_cache)
     base1 = {x.id: x for x in research.runs_at(1.0, "strategy")}
     counter.add(GROUP_BASE, sum(1 for x in research.runs if x.kind == "strategy"))
     runnable = [vid for vid in r.variant_ids if vid in base1]       # flow variants drop out without flows
 
     weekday_runs: list[WeekdayRun] = []
     if req.run_e1:
-        weekday_runs = _e1_weekday_runs(ds, p, runnable, base1, cm1, counter, progress, should_stop)
+        weekday_runs = _e1_weekday_runs(ds, p, runnable, base1, cm1, counter, progress, should_stop,
+                                        feats, score_cache)
 
     neighbor_runs: list[NeighborRun] = []
     checks: list[dict] = []
     skipped: list[str] = []
     if req.run_e2:
         neighbor_runs, checks, skipped = _e2_neighbor_runs(ds, p, r.variant_ids, base1, cm1, counter,
-                                                           progress, should_stop)
+                                                           progress, should_stop, feats, score_cache)
 
     top_rows = _e4_top_trade_rows(runnable, base1, p.seed_krw)
 
@@ -453,7 +465,8 @@ def run_robustness(ds, req: RobustnessRequest, progress=None, should_stop=None) 
                                         progress, should_stop)
     no_interest: list[NoInterestRow] = []
     if req.cash_interest_reference:
-        no_interest = _no_interest_runs(ds, p, runnable, base1, cm1, counter, progress, should_stop)
+        no_interest = _no_interest_runs(ds, p, runnable, base1, cm1, counter, progress, should_stop,
+                                        feats, score_cache)
     return RobustnessResult(req, research, weekday_runs, neighbor_runs, checks, skipped, top_rows, contam,
                             counter, ds.dates[-1] if ds.dates else None, no_interest)
 

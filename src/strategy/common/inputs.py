@@ -25,10 +25,6 @@ from strategy.common.prices import PriceBook, align_frame, check_stop, flow_arra
 
 logger = logging.getLogger(__name__)
 
-# Calendar / regime index per Universe market (the market's own index).
-MARKET_INDEX = {"KOSPI": "KS11", "KOSDAQ": "KS11", "NASDAQ 100": "^NDX", "S&P 500": "^GSPC"}
-
-
 @dataclass
 class DailyInputs:
     book: PriceBook
@@ -100,19 +96,21 @@ def load_daily_inputs(items: list[dict], index_ticker: str = "KS11", need_flows:
         calendar = sorted({to_date(d) for df in frames.values() for d in df.get_column("Date").to_list()})
         index_close = None
     book = PriceBook.from_frames(frames, calendar, markets, names)
-    flow_fi = load_flow_fi(book, progress, should_stop) if need_flows else None
+    flow_fi = load_flow_fi(book, progress, should_stop, start=start) if need_flows else None
     return DailyInputs(book, index_close, index_ticker, flow_fi)
 
 
-def load_flow_fi(book: PriceBook, progress=None, should_stop=None) -> np.ndarray | None:
+def load_flow_fi(book: PriceBook, progress=None, should_stop=None, start: str | None = None) -> np.ndarray | None:
     """KRW foreigner + institution net buys for every name of `book`
-    (Naver investor pages; KR codes only, others stay NaN)."""
+    (Naver investor pages; KR codes only, others stay NaN), from `start`
+    (default ``data.cache.start_date()``) -- ``load_daily_inputs`` passes its own
+    `start`, so prices and flows cover the same lookback (review 2026-11-20 H14)."""
     from data.cache import is_kr_code
     from data.flows import FLOW_FETCH_CONCURRENCY, get_investor_flows
     tickers = [tk for tk in book.tickers if is_kr_code(tk)]
     frames = {}
     done = 0
-    start = start_date()
+    start = start or start_date()
     with ThreadPoolExecutor(max_workers=FLOW_FETCH_CONCURRENCY) as exe:
         futures = {exe.submit(get_investor_flows, tk, start): tk for tk in tickers}
         for fut in as_completed(futures):

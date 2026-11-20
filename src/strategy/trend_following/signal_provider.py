@@ -20,7 +20,8 @@ the screens and a backtest of the variant cannot drift apart:
   proximity to the 52-week high, the order the weekly rebalance holds them in.
 * A0-A5 and B, Bottom: names with the trend-break exit on the latest session
   (close < the prior ``exit_window``-session low; A5 also the FX flow exit),
-  weakest relative strength first.
+  weakest relative strength first -- with no liquidity / traded filter, like the
+  backtest's exits and ``check_stock`` (review 2026-11-20 H14).
 
 The L1 market regime is reported (``regime_on``) but does not empty the lists.
 
@@ -65,6 +66,37 @@ def _pct(x: float) -> str:
 
 def _f2(x) -> str:
     return f"{x:.2f}" if isinstance(x, (int, float)) and np.isfinite(x) else "-"
+
+
+def _regime_on(f, index_close, p: StrategyParams, t: int) -> bool | None:
+    """The L1 state on session `t`, or None when it cannot be judged: no index series, or the
+    index close / MA / lagged MA missing on the session that decided it (the latest weekly check
+    day up to `t`; `t` itself before the first one). ``regime_state`` reads a missing value as
+    "off", which showed a short or empty index history as "L1 off" (review 2026-11-20 M9)."""
+    if index_close is None:
+        return None
+    close = np.asarray(index_close, dtype=float)
+    if close.shape[0] <= t:
+        return None
+    checks = np.flatnonzero(np.asarray(f.check_day[:t + 1], dtype=bool))
+    d = int(checks[-1]) if checks.size else t
+    ma = rolling(close, p.regime_ma, "mean")
+    lagged = shift(ma, p.regime_slope_lookback)
+    if not (np.isfinite(close[d]) and np.isfinite(ma[d]) and np.isfinite(lagged[d])):
+        return None
+    return bool(f.regime_on[t])
+
+
+def _won_floor(p: StrategyParams) -> tuple[str, str]:
+    """The 2-0 liquidity floor as text, (Korean, English): 1e10 -> ("100억", "10B")."""
+    v = float(p.min_avg_trading_value)
+    return f"{v / 1e8:,.0f}억", f"{v / 1e9:,.4g}B"
+
+
+def _range_label(p: StrategyParams) -> str:
+    """Name of the 2-5 trend-position indicator: Range52, or High52 (close / 52-week high) for
+    a row with ``score_range_mode="high52_prox"`` (C3)."""
+    return "High52" if p.score_range_mode == "high52_prox" else "Range52"
 
 
 def _features(book: PriceBook, index_close, flow_fi, p: StrategyParams):
@@ -121,14 +153,17 @@ def pick_signals(variant_id: str, book: PriceBook, index_close: np.ndarray | Non
         order = cand
         top = [name_of(j, float(rs[j]), "RS " + (_pct(rs[j]) if np.isfinite(rs[j]) else "-")) for j in order[:n]]
 
-    exit_mask = base & f.exit_channel[t]
+    # Exits are not filtered by liquidity or the traded flag: the backtest exits a held name on
+    # these signals whatever its trading value, and check_stock shows them the same way
+    # (review 2026-11-20 H14; spec 9-29). Entries keep `base`.
+    exit_mask = f.exit_channel[t].copy()
     if v.flow_exit:
-        exit_mask |= base & f.flow_exit[t]
+        exit_mask |= f.flow_exit[t]
     ex = np.flatnonzero(exit_mask)
     ex = ex[np.argsort(rs_sort[ex], kind="stable")]               # weakest relative strength first
     bottom = [name_of(j, float(rs[j]), "RS " + (_pct(rs[j]) if np.isfinite(rs[j]) else "-")) for j in ex[:n]]
 
-    regime_on = bool(f.regime_on[t]) if index_close is not None else None
+    regime_on = _regime_on(f, index_close, p, t)
     return SignalPicks(variant_id, book.dates[t], top, bottom, regime_on, v.regime, book.N, int(f.liquid[t].sum()),
                        int(len(order)), int(len(ex)),
                        info={"flows": bool(f.has_flows), "flow_coverage": float(f.flow_coverage)})
@@ -146,11 +181,11 @@ def _score_check(vid: str, ticker: str, picks: SignalPicks | None, p: StrategyPa
     s = rec.scored.get(ticker) if rec is not None else None
     gates = [(tr("유동성", "Liquidity"), lambda x: bool(x.liquid)),
              (f"MA{p.score_ma_long}Div > 0", lambda x: bool(np.isfinite(x.ma50_div) and x.ma50_div > 0)),
-             (f"Range52 ≥ {p.gate_range_min:.2f}",
+             (f"{_range_label(p)} ≥ {p.gate_range_min:.2f}",
               lambda x: bool(np.isfinite(x.range52) and x.range52 >= p.gate_range_min)),
              (tr("과열 아님", "Not overheated"), lambda x: not x.overheated)]
     metric_defs = ((f"MA{p.score_ma_long}Div", tr("추세 방향 +", "Trend direction +"), "pct_ma50"),
-                   ("Range52", tr("추세 위치 +", "Trend position +"), "pct_range52"),
+                   (_range_label(p), tr("추세 위치 +", "Trend position +"), "pct_range52"),
                    ("R3", tr("최근 3일 −", "Last 3 days −"), "pct_r3"))
     metrics = [Metric(label, _f2(getattr(s, attr)) if s is not None else "-", help_)
                for label, help_, attr in metric_defs]
@@ -189,7 +224,9 @@ def _stock_rows(v, p: StrategyParams, x) -> tuple[list[CheckRow], list[CheckRow]
     if v.regime:
         entry.append(CheckRow(tr(f"시장 조건: KOSPI > {p.regime_ma}일선, 상승", f"Regime: KOSPI > MA{p.regime_ma}, rising"),
                               x.regime))
-    entry.append(CheckRow(tr("유동성: 20일 평균 거래대금 ≥ 100억", "Liquidity: 20-day avg value ≥ 10B"),
+    floor_ko, floor_en = _won_floor(p)
+    entry.append(CheckRow(tr(f"유동성: {p.volume_window}일 평균 거래대금 ≥ {floor_ko}",
+                             f"Liquidity: {p.volume_window}-day avg value ≥ {floor_en}"),
                           x.liquid, x.adv_text))
     entry.append(CheckRow(tr(f"추세: 종가 > {p.trend_ma_long}일선", f"Trend: close > MA{p.trend_ma_long}"), x.above))
     entry.append(CheckRow(tr(f"추세: {p.trend_ma_long}일선 상승", f"Trend: MA{p.trend_ma_long} rising"), x.rising))
@@ -268,7 +305,7 @@ def check_stock(variant_id: str, ticker: str, book: PriceBook | None, index_clos
     rs = f.rs[t, j]
     adv = f.adv[t, j]
     prox = f.high52_prox[t, j]
-    regime_ok = (bool(f.regime_on[t]) if index_close is not None else None) if v.regime else None
+    regime_ok = _regime_on(f, index_close, p, t) if v.regime else None
     x = SimpleNamespace(
         regime=regime_ok, liquid=bool(f.liquid[t, j]),
         adv_text=tr(f"{adv / 1e8:,.0f}억", f"{adv / 1e9:,.1f}B") if np.isfinite(adv) else "",

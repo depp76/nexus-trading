@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from i18n import tr
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 
 import numpy as np
@@ -96,15 +96,38 @@ def _check_stop(should_stop) -> None:
         raise ResearchCancelled("cancelled")
 
 
-def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> ResearchResult:
+def score_cache_key(params: StrategyParams) -> StrategyParams:
+    """Key of a 2-5 ScoreBook in a shared cache: the variant-applied params with the weekly
+    check weekday set to its default, because ``compute_scores`` never reads it (the C-series
+    weekday only picks the rebalance sessions, in ScoringPolicy). The robustness runner's E1
+    weekday runs and cash-interest-0 reruns reuse the base matrix's score books this way
+    (review 2026-11-20 M11); every other field is part of the key."""
+    return replace(params, check_weekday=StrategyParams().check_weekday)
+
+
+def cached_scores(ds, applied: StrategyParams, cache: dict | None):
+    """``compute_scores(ds.stocks, applied)``, looked up in / stored into `cache` (keyed by
+    ``score_cache_key``; None computes without caching). Score books are read-only."""
+    if cache is None:
+        return compute_scores(ds.stocks, applied)
+    key = score_cache_key(applied)
+    if key not in cache:
+        cache[key] = compute_scores(ds.stocks, applied)
+    return cache[key]
+
+
+def run_research(ds, req: ResearchRequest, progress=None, should_stop=None, features=None,
+                 score_cache: dict | None = None) -> ResearchResult:
     """`should_stop` (no-arg callable) is polled before every backtest and the
-    event study; True raises ResearchCancelled."""
+    event study; True raises ResearchCancelled. `features` is ``compute_features(ds,
+    req.params)`` when the caller already has it, and `score_cache` a dict shared with
+    later runs (``cached_scores``); both only save work (the robustness runner, M11)."""
     p = req.params
     warnings: list[str] = []
     if ds.dates:
         check_dev_window(ds.dates[-1], req.allow_holdout, "dataset last date")
     _say(progress, tr("신호 계산 중...", "Computing signals..."))
-    feats = compute_features(ds, p)
+    feats = features if features is not None else compute_features(ds, p)
 
     if not ds.info.get("bm_is_total_return", True):
         warnings.append("BM1/BM3 use a price-only ETF series (KODEX 200TR unavailable): benchmarks understate "
@@ -132,7 +155,7 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
     skipped: dict[str, str] = {}
     if req.run_backtests and not feats.has_flows:
         skipped.update({vid: "no investor-flow data" for vid in req.variant_ids if get_variant(vid).needs_flows})
-    score_books: dict[str, object] = {}     # C-series ScoreBook per variant: independent of the cost multiplier
+    score_books = {} if score_cache is None else score_cache   # C-series ScoreBooks: independent of the cost multiplier
     if req.run_backtests:
         for mult in req.cost_multipliers:
             cm = req.cost_model.scaled(mult)
@@ -146,9 +169,8 @@ def run_research(ds, req: ResearchRequest, progress=None, should_stop=None) -> R
                     continue
                 _check_stop(should_stop)
                 _say(progress, tr(f"백테스트 {vid} (비용 {mult:g}x)...", f"Backtest {vid} at {mult:g}x costs..."))
-                if v.mode == "score" and vid not in score_books:
-                    score_books[vid] = compute_scores(ds.stocks, v.apply(p))
-                res: BacktestResult = run_backtest(ds, feats, p, v, cm, scores=score_books.get(vid))
+                scores = cached_scores(ds, v.apply(p), score_books) if v.mode == "score" else None
+                res: BacktestResult = run_backtest(ds, feats, p, v, cm, scores=scores)
                 runs.append(RunSummary(vid, v.label, "strategy", mult, summarize_run(res, bm1, bm3),
                                        res.nav, res.dates, res.notes, res.rf_period, res.trades))
             for bid, res in bms.items():

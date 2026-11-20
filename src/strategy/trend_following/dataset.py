@@ -16,11 +16,13 @@ from __future__ import annotations
 
 from i18n import tr
 
+import json
 import logging
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -33,8 +35,9 @@ from data.flows import get_investor_flows, FLOW_FETCH_CONCURRENCY
 from data.rates import get_cd91_series
 from data.fx import get_usd_krw_history
 from data.collectors.yahoo import get_us_listing_ranked
+import paths
 from strategy.trend_following.config import (
-    StrategyParams, BM_TR_TICKER, BM_PRICE_FALLBACK_TICKER, DEV_END,
+    StrategyParams, BM_TR_TICKER, BM_PRICE_FALLBACK_TICKER, DEV_END, SPEC_VERSION,
     MARKET_INDEX, MARKET_BM_ETF, BM_ETF_COST_MARKET, BM_ETF_NAMES, US_MARKETS, normalize_markets,
 )
 
@@ -59,6 +62,41 @@ def check_dev_window(end, allow_holdout: bool = False, what: str = "end date") -
         raise HoldoutGuardError(
             f"{what} {_to_date(end)} is after the development window end {DEV_END}; "
             "the holdout is blocked unless allow_holdout=True is passed explicitly")
+
+
+def record_holdout_open(start, end, source: str, details: dict | None = None,
+                        ledger: str | None = None, now: datetime | None = None) -> dict | None:
+    """Append one line to the hold-out ledger when the window `start`..`end` reaches past
+    DEV_END: from then on the hold-out counts as opened (trend_following.md 9-23, 10-7, 10-15).
+    Called by the load layer itself (``load_dataset``, ``snapshot.load_snapshot``) before any
+    data is read, so every caller that passes ``allow_holdout`` is recorded -- the Strategy tab,
+    a script, a notebook -- and nothing records it a second time. `details` adds the caller's
+    context (the Strategy tab: variants, markets, cost multipliers). Returns the record, or None
+    when the window stays inside the development window. The ledger's folder is created when
+    missing; a write failure is logged, never raised -- the run itself still goes ahead.
+    `ledger` defaults to ``paths.HOLDOUT_LEDGER_FILE``, read at call time (tests point it at a
+    temporary file; the real file is never deleted)."""
+    if end is None or _to_date(end) <= DEV_END:
+        return None
+    ledger = ledger or paths.HOLDOUT_LEDGER_FILE
+    rec = {
+        "opened_at": (now or datetime.now()).isoformat(timespec="seconds"),
+        "source": source,
+        "spec_version": SPEC_VERSION,
+        "start": _to_date(start).isoformat() if start is not None else None,
+        "end": _to_date(end).isoformat(),
+        **(details or {}),
+    }
+    logger.warning("Hold-out opened by a research run: %s", rec)
+    try:
+        folder = os.path.dirname(os.path.abspath(ledger))
+        os.makedirs(folder, exist_ok=True)
+        with open(ledger, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except OSError:
+        logger.error("Could not write the hold-out ledger %s", ledger, exc_info=True)
+    return rec
+
 
 # Spec 2-0 limits the universe to Korean *stocks*. The Naver / FDR listing rows carry only
 # Code / Name / Marcap, so ETFs and ETNs are told apart by name: the issuer brands below
@@ -380,7 +418,7 @@ def load_dataset(start, end=None, universe_size: int = 200, include_flows: bool 
                  min_rows: int = 60, should_stop=None, allow_holdout: bool = False,
                  tickers: list[str] | None = None, ticker_names: dict[str, str] | None = None,
                  fixed_source: str = "", excluded_etf: list[dict] | None = None,
-                 markets=("KOSPI",)) -> Dataset:
+                 markets=("KOSPI",), holdout_record: dict | None = None) -> Dataset:
     """Network path: KOSPI calendar + top-N KOSPI names + optional flows + BM
     ETF + CD91, warmed up WARMUP_CALENDAR_DAYS before `start`. `should_stop`
     (no-arg callable) is polled between fetches; True raises ResearchCancelled.
@@ -392,7 +430,12 @@ def load_dataset(start, end=None, universe_size: int = 200, include_flows: bool 
     Universe: ETFs / ETNs are dropped from the listing (spec 2-0, stocks only) and the top
     `universe_size` stocks are kept. `tickers` pins the list instead (no listing call, no ETF
     filter -- the list is taken as given; `ticker_names` / `excluded_etf` / `fixed_source` are the
-    provenance of the manifest it came from) so a snapshot can be rebuilt for the same names."""
+    provenance of the manifest it came from) so a snapshot can be rebuilt for the same names.
+
+    Hold-out ledger (10-7, 10-15): a window reaching past DEV_END is recorded with
+    ``record_holdout_open`` here, before the first fetch, whoever the caller is; a failed or
+    cancelled load still counts as opened. `holdout_record` adds the caller's fields to that
+    line (``source`` among them; default ``"load_dataset"``)."""
     p = params or StrategyParams()
     start = _to_date(start)
     check_dev_window(start, allow_holdout, "start date")
@@ -401,6 +444,9 @@ def load_dataset(start, end=None, universe_size: int = 200, include_flows: bool 
     warm_start = start - timedelta(days=WARMUP_CALENDAR_DAYS)
     ws = warm_start.isoformat()
     markets = normalize_markets(markets)
+    extra = dict(holdout_record or {})
+    record_holdout_open(start, end, str(extra.pop("source", "load_dataset")),
+                        {"markets": list(markets), **extra})
     if markets != ("KOSPI",) and not tickers:
         return _load_multi_market(start, end, warm_start, markets, universe_size, include_flows, p, progress,
                                   max_workers, min_rows, should_stop, allow_holdout)
@@ -437,7 +483,9 @@ def _load_kospi_calendar(warm_start: date, end: date, progress, should_stop) -> 
     if idx_df is None or idx_df.is_empty():
         raise RuntimeError("KOSPI index history unavailable (data.history returned nothing)")
     idx_dates = [_to_date(d) for d in idx_df.get_column("Date").to_list()]
-    calendar = [d for d in idx_dates if warm_start <= d <= end]
+    # Sorted and de-duplicated like the multi-market calendar (_load_market_indexes); a sorted,
+    # unique index history -- what data.history returns -- gives the same list (review 2026-11-20 L3).
+    calendar = sorted({d for d in idx_dates if warm_start <= d <= end})
     if not calendar:
         raise RuntimeError(f"No KOSPI trading days between {warm_start} and {end}")
     return calendar, align_frame(idx_df, calendar, ["Close"])["Close"]

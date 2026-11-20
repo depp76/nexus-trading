@@ -102,7 +102,13 @@ def row_rank_corr(x: np.ndarray, y: np.ndarray, mask: np.ndarray | None = None, 
     m = np.isfinite(x) & np.isfinite(y)
     if mask is not None:
         m &= mask
-    rx, ry = _row_rank(x, m), _row_rank(y, m)
+    return _ranked_corr(_row_rank(x, m), _row_rank(y, m), m, min_n)
+
+
+def _ranked_corr(rx: np.ndarray, ry: np.ndarray, m: np.ndarray, min_n: int = MIN_NAMES) -> np.ndarray:
+    """``row_rank_corr`` from the row ranks `rx`, `ry` already taken over the cells `m`
+    (``_row_rank(x, m)``), so a caller correlating many pairs over one mask ranks each
+    series once (review 2026-11-20 M11)."""
     n = m.sum(axis=1)
     with np.errstate(divide="ignore", invalid="ignore"):
         cx = np.where(m, rx - np.where(m, rx, 0.0).sum(axis=1, keepdims=True) / n[:, None], 0.0)
@@ -254,11 +260,16 @@ def run_factor_ic(ds, params: StrategyParams | None = None, horizons: tuple[int,
     corr_b = np.eye(len(FACTORS))
     corr_a = np.eye(len(FACTORS))
     corr_days = 0
+    # `common` already requires every raw and percentile value to be finite, so the pair mask
+    # row_rank_corr would build is `common` for every pair: rank each series once (10 ranks
+    # instead of 40, review 2026-11-20 M11; same arrays, test_factor_ic.py checks it).
+    raw_ranks = {f: _row_rank(raw[f], common) for f in FACTORS}
+    pct_ranks = {f: _row_rank(sb.pct[f], common) for f in FACTORS}
     for a in range(len(FACTORS)):
         for b in range(a + 1, len(FACTORS)):
             fa, fb = FACTORS[a], FACTORS[b]
-            for mat, src in ((corr_b, raw), (corr_a, sb.pct)):
-                daily = row_rank_corr(src[fa], src[fb], common)[in_eval]
+            for mat, rk in ((corr_b, raw_ranks), (corr_a, pct_ranks)):
+                daily = _ranked_corr(rk[fa], rk[fb], common)[in_eval]
                 good = daily[np.isfinite(daily)]
                 mat[a, b] = mat[b, a] = float(good.mean()) if good.size else float("nan")
                 corr_days = max(corr_days, int(good.size))

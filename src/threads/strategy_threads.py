@@ -9,9 +9,7 @@ CPU-bound matrix run happens here, never in a UI slot (CLAUDE.md threads rule).
 """
 from __future__ import annotations
 
-import json
 import logging
-from datetime import datetime
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -19,8 +17,7 @@ from i18n import tr
 
 from strategy import signal_api
 from strategy.common.prices import ResearchCancelled
-from strategy.trend_following import SPEC_VERSION, ResearchRequest, load_dataset, run_research
-import paths
+from strategy.trend_following import ResearchRequest, load_dataset, run_research
 
 logger = logging.getLogger(__name__)
 
@@ -29,33 +26,14 @@ logger = logging.getLogger(__name__)
 CANCELLED_MESSAGE = tr("취소됨", "Cancelled")
 
 
-def record_holdout_run(req: ResearchRequest, ledger: str | None = None, now=None) -> dict | None:
-    """Append one line to the hold-out ledger when `req` reaches past the
-    development window (``allow_holdout``), before any data is loaded: from
-    then on the hold-out counts as opened (trend_following.md 9-23, 10-7).
-    Returns the record (None when the run stays inside the window). A write
-    failure is logged, never raised -- the run itself still goes ahead. `ledger` defaults to
-    ``paths.HOLDOUT_LEDGER_FILE``, read at call time (tests point it at a temporary file)."""
-    if not req.allow_holdout:
-        return None
-    ledger = ledger or paths.HOLDOUT_LEDGER_FILE
-    rec = {
-        "opened_at": (now or datetime.now()).isoformat(timespec="seconds"),
-        "source": "strategy_tab",
-        "spec_version": SPEC_VERSION,
-        "start": req.start.isoformat(),
-        "end": req.end.isoformat() if req.end else None,
-        "variants": list(req.variant_ids),
-        "markets": list(req.markets),
-        "cost_multipliers": list(req.cost_multipliers),
-    }
-    logger.warning("Hold-out opened by a research run: %s", rec)
-    try:
-        with open(ledger, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    except OSError:
-        logger.error("Could not write the hold-out ledger %s", ledger, exc_info=True)
-    return rec
+def holdout_record(req: ResearchRequest) -> dict:
+    """The Strategy tab's fields for the hold-out ledger line the load layer writes when
+    `req` reaches past DEV_END (``dataset.record_holdout_open``, trend_following.md 9-23,
+    10-7, 10-15): the source, the variants and the cost multipliers (start, end, markets
+    and the spec version come from ``load_dataset`` itself). The thread used to write the
+    line itself, so a direct ``load_dataset(..., allow_holdout=True)`` was not recorded."""
+    return {"source": "strategy_tab", "variants": list(req.variant_ids),
+            "cost_multipliers": list(req.cost_multipliers)}
 
 
 class TrendFollowingResearchThread(QThread):
@@ -80,12 +58,13 @@ class TrendFollowingResearchThread(QThread):
 
     def run(self):
         req = self.request
-        record_holdout_run(req)
         try:
+            # load_dataset records a run past DEV_END in the hold-out ledger before its first fetch.
             ds = load_dataset(
                 req.start, req.end, universe_size=req.params.universe_size,
                 include_flows=req.include_flows, params=req.params, progress=self.progress.emit,
                 should_stop=self.is_cancelled, allow_holdout=req.allow_holdout, markets=req.markets,
+                holdout_record=holdout_record(req),
             )
             result = run_research(ds, req, progress=self.progress.emit, should_stop=self.is_cancelled)
             self.finished.emit(result, "")

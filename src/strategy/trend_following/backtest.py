@@ -214,9 +214,24 @@ class Engine:
         q = int(math.floor(self.cash / per_share))
         d = self.book.dates[t]
         adv = self._adv_open(t, col)
-        while q > 0 and price * q + cm.buy_cost(d, market, price, q, adv).total > self.cash + 1e-9:
-            q -= 1
-        return q
+
+        def too_dear(n: int) -> bool:
+            return price * n + cm.buy_cost(d, market, price, n, adv).total > self.cash + 1e-9
+
+        if q <= 0 or not too_dear(q):
+            return max(q, 0)
+        # The largest n < q that the cash covers. price * n + buy_cost(n) never falls as n grows
+        # (every 4-1 cost term is a non-negative, non-decreasing function of the fill value, and
+        # IEEE rounding keeps that order), so a bisection on the same test returns exactly the n
+        # the former one-share-at-a-time loop stopped at (review 2026-11-20 L3; spec 4-1).
+        lo, hi = 0, q - 1           # lo: covered (0 always is); hi: the largest n still unknown
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if too_dear(mid):
+                hi = mid - 1
+            else:
+                lo = mid
+        return lo
 
     def weight_cap_qty(self, ticker: str, price: float, cap: float) -> int:
         """Shares that may still be bought so the position stays <= cap x pre-fill equity at `price`."""

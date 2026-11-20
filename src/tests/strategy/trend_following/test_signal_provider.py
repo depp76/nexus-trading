@@ -51,8 +51,8 @@ class TestBreakoutAndHigh52(unittest.TestCase):
         t = TOP + 3                                                  # SPIKE falls 2%/day after TOP
         p = self._picks("A0", t=t)
         f = compute_features(self.ds, StrategyParams())
-        exits = {tk for j, tk in enumerate(self.ds.stocks.tickers)
-                 if f.exit_channel[t, j] and f.liquid[t, j] and f.traded[t, j]}
+        # No liquidity / traded filter on exits (review 2026-11-20 H14), like the backtest.
+        exits = {tk for j, tk in enumerate(self.ds.stocks.tickers) if f.exit_channel[t, j]}
         self.assertIn("SPIKE", exits)
         self.assertEqual({s.ticker for s in p.bottom}, exits)
         rs = [s.value for s in p.bottom]
