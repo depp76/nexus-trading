@@ -14,7 +14,8 @@ import csv
 import json
 import logging
 import os
-from datetime import date, datetime
+import threading
+from datetime import date, datetime, timedelta
 
 import polars as pl
 import requests
@@ -27,6 +28,12 @@ logger = logging.getLogger(__name__)
 ECOS_STAT_CODE = "817Y002"
 ECOS_CD91_ITEM = "010502000"
 _ECOS_URL = "https://ecos.bok.or.kr/api/StatisticSearch/{key}/json/kr/1/100000/{stat}/D/{start}/{end}/{item}"
+# The cache counts as covering [start, end] when its first row is at most this many
+# days after `start` and its last at most this many days before `end`: room for
+# holidays (Chuseok/Seollal run up to five days) and ECOS publishing a day or two late.
+_COVERAGE_SLACK = timedelta(days=7)
+# Serializes the cache file's read-merge-write (and its fixed .tmp path) across threads.
+_CACHE_LOCK = threading.Lock()
 
 
 def _empty() -> pl.DataFrame:
@@ -106,22 +113,40 @@ def read_cd91_csv(path: str | None = None) -> dict[str, float]:
     return out
 
 
+def _cache_covers(cached: dict[str, float], start: str, end: str) -> bool:
+    """True when the cached rows span [start, end] up to _COVERAGE_SLACK at each end
+    (date arithmetic; the old string test treated any row in end's month as covering
+    it and could never be met for a start after the 7th of a month)."""
+    have = sorted(k for k in cached if start <= k <= end)
+    if not have:
+        return False
+    try:
+        start_d = datetime.strptime(start[:10], "%Y-%m-%d").date()
+        end_d = datetime.strptime(end[:10], "%Y-%m-%d").date()
+        first = datetime.strptime(have[0], "%Y-%m-%d").date()
+        last = datetime.strptime(have[-1], "%Y-%m-%d").date()
+    except ValueError:
+        return False
+    return first <= start_d + _COVERAGE_SLACK and last >= end_d - _COVERAGE_SLACK
+
+
 def get_cd91_series(start: str, end: str | None = None) -> pl.DataFrame:
     """(Date, Rate %) rows covering [start, end]; empty when no source is available."""
     end = end or date.today().isoformat()
     cached = _load_cache()
     api_key = os.getenv("ECOS_API_KEY", "").strip()
-    if api_key:
-        have = sorted(k for k in cached if start <= k <= end)
-        covered = bool(have) and have[0] <= start[:8] + "07" and have[-1] >= end[:8] + "01"
-        if not covered:
-            try:
-                fetched = fetch_ecos_cd91(start, end, api_key)
-                if fetched:
+    if api_key and not _cache_covers(cached, start, end):
+        try:
+            fetched = fetch_ecos_cd91(start, end, api_key)
+            if fetched:
+                with _CACHE_LOCK:
+                    cached = _load_cache()
                     cached.update(fetched)
                     _save_cache(cached)
-            except PAYLOAD_ERRORS:
-                logger.warning("ECOS CD91 fetch failed", exc_info=True)
+        except PAYLOAD_ERRORS as e:
+            # The key is part of the request URL, which request errors quote; never log it
+            # (and no traceback, whose messages would carry the URL too).
+            logger.warning("ECOS CD91 fetch failed: %s: %s", type(e).__name__, str(e).replace(api_key, "***"))
     rows = {k: v for k, v in cached.items() if start <= k <= end}
     if not rows:
         rows = {k: v for k, v in read_cd91_csv().items() if start <= k <= end}

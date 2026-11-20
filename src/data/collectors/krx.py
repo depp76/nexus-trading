@@ -17,6 +17,7 @@ from data.cache import (
     start_date,
     _JP10Y_CACHE,
     _JP10Y_LOCK,
+    _HIST_CACHE_STALE_TTL,
     _MOF_SESSION,
     _pdf_is_stale,
     safe_float,
@@ -181,22 +182,30 @@ def fetch_vkospi_history(start: str, end: str = None, max_workers: int = 3, requ
     return pl.DataFrame(rows).sort("Date")
 
 
-_VKOSPI_PDF_CACHE: dict = {"df": None}
+_VKOSPI_PDF_CACHE: dict = {"df": None, "checked_at": None}
+_VKOSPI_PDF_LOCK = threading.Lock()
 
 
 def _get_vkospi_pdf() -> pd.DataFrame:
-    """pandas/DatetimeIndex wrapper matching the _get_kr3y_df / _get_jp10y_df convention."""
-    cached = _VKOSPI_PDF_CACHE["df"]
-    if cached is not None and not _pdf_is_stale(cached):
-        return cached
-    df = fetch_vkospi_history(start_date())
-    if df.is_empty():
-        return cached
-    pdf = df.to_pandas()
-    pdf["Date"] = pd.to_datetime(pdf["Date"])
-    pdf = pdf.set_index("Date")
-    _VKOSPI_PDF_CACHE["df"] = pdf
-    return pdf
+    """pandas/DatetimeIndex wrapper matching the _get_kr3y_df / _get_jp10y_df convention.
+    A frame whose last bar predates today is checked again at most once per
+    _HIST_CACHE_STALE_TTL: while the KRX API is disabled the series never gets
+    today's bar, and every weekday call used to re-read vkospi_cache.json (L2)."""
+    with _VKOSPI_PDF_LOCK:
+        cached = _VKOSPI_PDF_CACHE["df"]
+        checked_at = _VKOSPI_PDF_CACHE["checked_at"]
+        recently_checked = checked_at is not None and datetime.now() - checked_at < _HIST_CACHE_STALE_TTL
+        if recently_checked or (cached is not None and not _pdf_is_stale(cached)):
+            return cached
+        df = fetch_vkospi_history(start_date())
+        _VKOSPI_PDF_CACHE["checked_at"] = datetime.now()
+        if df.is_empty():
+            return cached
+        pdf = df.to_pandas()
+        pdf["Date"] = pd.to_datetime(pdf["Date"])
+        pdf = pdf.set_index("Date")
+        _VKOSPI_PDF_CACHE["df"] = pdf
+        return pdf
 
 
 _JP10Y_BASE_URL = "https://www.mof.go.jp/english/policy/jgbs/reference/interest_rate/"

@@ -11,7 +11,7 @@ import pandas as pd
 import requests
 from data.cache import fdr   # lazy: imported on first use (data.cache.LazyModule)
 
-from data.cache import safe_float
+from data.cache import KeyedLocks, safe_float
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ def _singleflight_cache(maxsize, provisional=None):
     def decorator(fn):
         cache: OrderedDict[str, tuple] = OrderedDict()  # key -> (date, result, expires_at)
         cache_lock = threading.Lock()
-        key_locks: dict = {}
+        key_locks = KeyedLocks()
 
         def _lookup(key, today):
             hit = cache.get(key)
@@ -71,9 +71,9 @@ def _singleflight_cache(maxsize, provisional=None):
                 cached = _lookup(key, today)
                 if cached is not None:
                     return cached
-                key_lock = key_locks.setdefault(key, threading.Lock())
 
-            with key_lock:
+            # The per-key lock is released and dropped even when fn raises (H5).
+            with key_locks.hold(key):
                 with cache_lock:
                     cached = _lookup(key, today)
                     if cached is not None:
@@ -87,13 +87,12 @@ def _singleflight_cache(maxsize, provisional=None):
                     cache.move_to_end(key)
                     if len(cache) > maxsize:
                         cache.popitem(last=False)
-                    key_locks.pop(key, None)
                 return result
 
         def cache_clear():
             with cache_lock:
                 cache.clear()
-                key_locks.clear()
+            key_locks.clear()
 
         wrapper.cache_clear = cache_clear
         return wrapper

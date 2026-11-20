@@ -1,4 +1,5 @@
 """data/cache.py — In-memory caching, sessions, and timing helpers."""
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from collections import OrderedDict
 import math
@@ -42,6 +43,42 @@ fdr = LazyModule("FinanceDataReader")
 # AttributeError. Inner excepts around such a fetch catch this instead of Exception so
 # a NameError/ImportError/RuntimeError from our own code is not mistaken for "no data".
 PAYLOAD_ERRORS = (requests.RequestException, ValueError, KeyError, IndexError, TypeError, AttributeError)
+
+class KeyedLocks:
+    """One lock per key for single-flight fetches, removed when its last holder or
+    waiter is done. Dropping a key's lock as soon as its first holder finished (the
+    rule until 2026-11-20) let a newcomer take a fresh lock and run alongside a
+    waiter still queued on the old one (review_agy.md H5); the count of threads
+    using an entry keeps it until all of them have left."""
+
+    def __init__(self):
+        self._guard = threading.Lock()
+        self._locks: dict = {}   # key -> [lock, number of threads holding or waiting]
+
+    @contextmanager
+    def hold(self, key):
+        with self._guard:
+            entry = self._locks.get(key)
+            if entry is None:
+                entry = self._locks[key] = [threading.Lock(), 0]
+            entry[1] += 1
+        try:
+            with entry[0]:
+                yield
+        finally:
+            with self._guard:
+                entry[1] -= 1
+                if entry[1] <= 0 and self._locks.get(key) is entry:
+                    del self._locks[key]
+
+    def clear(self) -> None:
+        with self._guard:
+            self._locks.clear()
+
+    def __len__(self) -> int:
+        with self._guard:
+            return len(self._locks)
+
 
 def start_date() -> str:
     """Lookback start (YYYY-MM-DD) for the daily-history fetches: 410 calendar
@@ -89,12 +126,11 @@ _FDR_ONLY_TICKERS = frozenset({
     "KS11", "KQ11",                          # Korean indices without caret
 })
 
-# Module-level USD/KRW rate cache (refreshed once per process run)
-_USD_KRW_CACHE: dict = {"rate": None, "df": None, "fetched_at": None}
-_INDEX_CLOSE_CACHE: dict = {}
+# Module-level USD/KRW rate cache (data/fx.py). "failed_at" stamps the last failed
+# fetch so a fallback rate served without a series is retried (review_agy.md C1).
+_USD_KRW_CACHE: dict = {"rate": None, "df": None, "fetched_at": None, "failed_at": None}
 _JP10Y_CACHE: dict = {"df": None}
 _KR3Y_CACHE: dict = {"df": None}
-_VKOSPI_CACHE: dict = {}
 
 # One lock per low-traffic cache above, serializing its check-then-fetch-then-set
 # cycle so concurrent callers (e.g. fetch_major_indices_as_stocks fanning out one
@@ -107,7 +143,42 @@ _KR3Y_LOCK = threading.Lock()
 
 # Staging cache for yfinance bulk downloads: fetch_us_stock_data_bulk() fills it
 # per chunk and _fetch_historical_uncached() reads it before hitting the network.
+# Up to six chunk threads of one run, and two runs at once (NASDAQ + S&P 500 share
+# about 90 symbols), write it, so every access goes through the helpers below under
+# _YF_BULK_LOCK; _YF_BULK_REFS counts the runs holding each key, and a key is dropped
+# only when the last of them releases it (review_agy.md H2).
 _YF_BULK_CACHE: dict = {}
+_YF_BULK_REFS: dict = {}
+_YF_BULK_LOCK = threading.Lock()
+
+
+def yf_bulk_put(key, df, held: set) -> None:
+    """Stage one bulk-downloaded frame under `key` for the run whose held-key set
+    is `held` (the set is updated here, under the lock)."""
+    with _YF_BULK_LOCK:
+        _YF_BULK_CACHE[key] = df
+        if key not in held:
+            held.add(key)
+            _YF_BULK_REFS[key] = _YF_BULK_REFS.get(key, 0) + 1
+
+
+def yf_bulk_get(key):
+    """The staged frame for `key`, or None."""
+    with _YF_BULK_LOCK:
+        return _YF_BULK_CACHE.get(key)
+
+
+def yf_bulk_release(held: set) -> None:
+    """Release a finished run's keys; a key another run still holds stays."""
+    with _YF_BULK_LOCK:
+        for key in held:
+            refs = _YF_BULK_REFS.get(key, 0) - 1
+            if refs > 0:
+                _YF_BULK_REFS[key] = refs
+            else:
+                _YF_BULK_REFS.pop(key, None)
+                _YF_BULK_CACHE.pop(key, None)
+        held.clear()
 
 # Shared history cache — only non-empty DataFrames are stored,
 # so transient fetch failures (e.g. during parallel startup) are retried.
@@ -128,6 +199,7 @@ _HIST_CACHE_STALE_TTL = timedelta(minutes=30)
 # every importer (data.market, the data_fetcher facade, tests) shares the same
 # object instead of a stale copy of an int (roadmap 6-2a).
 _HIST_CACHE_STATS: dict = {"hits": 0, "misses": 0}
+_HIST_CACHE_STATS_LOCK = threading.Lock()   # the counters are bumped from every fetch thread
 _HIST_CACHE_LOG_INTERVAL = 100  # log the hit/miss ratio every N lookups
 
 
@@ -192,7 +264,9 @@ class YFTlsAdapter(SharedTlsAdapter):
 
 
 _YF_SESSION = requests.Session()
-_YF_SESSION.mount("https://", YFTlsAdapter())
+# Pool size: fetch_us_stock_data_bulk runs up to 6 chunks x 5 symbol workers on this
+# session at once; the default pool of 10 discarded connections under that load (H3).
+_YF_SESSION.mount("https://", YFTlsAdapter(pool_maxsize=32))
 _YF_SESSION.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 })
@@ -224,33 +298,50 @@ _KIS_SESSION = requests.Session()
 _KIS_SESSION.mount("https://", SharedTlsAdapter())
 
 
-def _get_yf_crumb(force_refresh: bool = False):
+def _get_yf_crumb(force_refresh: bool = False, stale_crumb=None):
+    """The cached Yahoo crumb, fetched on first use. `force_refresh` (after a 401)
+    fetches a new one, unless `stale_crumb` -- the crumb the caller was rejected
+    with -- has already been replaced by another thread, so a burst of 401s from
+    parallel chunks triggers one refresh (review_agy.md H3). A failed fetch
+    returns "" and leaves the cache empty, so the next call tries again."""
     global _YF_CRUMB
     with _YF_CRUMB_LOCK:
         if _YF_CRUMB is not None and not force_refresh:
             return _YF_CRUMB
+        if force_refresh and stale_crumb is not None and _YF_CRUMB and _YF_CRUMB != stale_crumb:
+            return _YF_CRUMB
         _YF_CRUMB = None  # reset before re-fetch
         try:
             _YF_SESSION.get("https://fc.yahoo.com", timeout=5)
-            _YF_CRUMB = _YF_SESSION.get("https://query2.finance.yahoo.com/v1/test/getcrumb", timeout=5).text
+            res = _YF_SESSION.get("https://query2.finance.yahoo.com/v1/test/getcrumb", timeout=5)
+            res.raise_for_status()
+            crumb = res.text.strip()
+            # A crumb is a short token; anything else is an error page, not a crumb.
+            if crumb and len(crumb) <= 64 and not any(c.isspace() or c in "<>{}" for c in crumb):
+                _YF_CRUMB = crumb
+            else:
+                logger.warning("Yahoo Finance crumb reply was not a crumb (%d chars)", len(crumb))
         except requests.RequestException:
             logger.warning("Failed to fetch Yahoo Finance crumb, quote batches may fail", exc_info=True)
-            _YF_CRUMB = ""
-        return _YF_CRUMB
+        return _YF_CRUMB or ""
 
 
 def _record_hist_cache_lookup(hit: bool) -> None:
     """Count one _HIST_CACHE lookup and emit the periodic stats line."""
-    _HIST_CACHE_STATS["hits" if hit else "misses"] += 1
-    _log_hist_cache_stats()
+    with _HIST_CACHE_STATS_LOCK:
+        _HIST_CACHE_STATS["hits" if hit else "misses"] += 1
+        hits, misses = _HIST_CACHE_STATS["hits"], _HIST_CACHE_STATS["misses"]
+    _log_hist_cache_stats(hits, misses)
 
 
-def _log_hist_cache_stats() -> None:
+def _log_hist_cache_stats(hits=None, misses=None) -> None:
     """Log _HIST_CACHE's cumulative hit/miss ratio at INFO level every
     _HIST_CACHE_LOG_INTERVAL lookups, so cache effectiveness is visible in app.log
-    without adding per-call noise."""
-    hits = _HIST_CACHE_STATS["hits"]
-    misses = _HIST_CACHE_STATS["misses"]
+    without adding per-call noise. `hits`/`misses` are the counts the caller
+    read under the stats lock (default: the current counters)."""
+    if hits is None or misses is None:
+        hits = _HIST_CACHE_STATS["hits"]
+        misses = _HIST_CACHE_STATS["misses"]
     total = hits + misses
     if total and total % _HIST_CACHE_LOG_INTERVAL == 0:
         hit_rate = hits / total * 100

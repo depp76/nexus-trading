@@ -96,19 +96,8 @@ def _build_kr_stock_res(code, name, market, marcap):
             marcap = mc_nv
 
     naver_prices = fetch_naver_realtime_prices([code])
-    current_price = naver_prices.get(code, 0.0)
-
-    if current_price == 0:
-        try:
-            start = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
-            df_p = get_historical_data(code, start)
-            if not df_p.is_empty():
-                current_price = float(df_p.get_column('Close')[-1])
-        except (pl.exceptions.PolarsError, IndexError, ValueError):
-            logger.debug("Historical price fallback failed for code=%s", code, exc_info=True)
-
-    df_history = None
-    changes = fetch_historical_changes(code, current_price, df_history)
+    current_price = _kr_price_with_fallback(code, naver_prices)
+    changes = fetch_historical_changes(code, current_price)
     _, per_vals = _fetch_naver_per_single(code)
     return {
         "ticker": code,
@@ -137,14 +126,17 @@ def _kr_listing(market, top_n):
 
 
 def _kr_price_with_fallback(ticker, naver_prices):
-    """The Naver quote for `ticker`, or the last close of the past 10 days when it is missing or 0."""
+    """The Naver quote for `ticker`, or the last close in its daily history when it is
+    missing or 0. The history is read with the same start_date() key that
+    fetch_historical_changes uses next, so the fallback costs no extra request (it
+    fetched a separate 10-day window until 2026-11-20, review_agy.md L2)."""
     current_price = naver_prices.get(ticker, 0.0)
     if current_price == 0:
         try:
-            start_dt = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
-            df_p = get_historical_data(ticker, start_dt)
-            if not df_p.is_empty():
-                current_price = float(df_p.get_column('Close')[-1])
+            df_p = get_historical_data(ticker, start_date())
+            closes = df_p.get_column('Close').drop_nulls() if not df_p.is_empty() else []
+            if len(closes) > 0:
+                current_price = float(closes[-1])
         except (pl.exceptions.PolarsError, IndexError, ValueError):
             logger.debug("Historical price fallback failed for ticker=%s", ticker, exc_info=True)
     return current_price
@@ -262,7 +254,7 @@ def _match_krx_rows(ticker, search_term):
         df_krx_norm = _get_listing_with_norm('KRX')
         row_exact = df_krx_norm[df_krx_norm['NameNorm'] == search_term]
         row_krx = row_exact if not row_exact.empty else \
-                  df_krx_norm[df_krx_norm['NameNorm'].str.contains(search_term, na=False)]
+                  df_krx_norm[df_krx_norm['NameNorm'].str.contains(search_term, na=False, regex=False)]
     return row_krx
 
 
@@ -276,7 +268,7 @@ def _search_krx_and_etf(market, ticker):
         df_etf_norm = _get_listing_with_norm('ETF/KR')
         row_etf = df_etf_norm[df_etf_norm['Symbol'] == ticker]
         if row_etf.empty:
-            row_etf = df_etf_norm[df_etf_norm['NameNorm'].str.contains(search_term, na=False)]
+            row_etf = df_etf_norm[df_etf_norm['NameNorm'].str.contains(search_term, na=False, regex=False)]
         if not row_etf.empty:
             target = row_etf.iloc[0]
             code = str(target.get('Symbol', ticker))
@@ -310,7 +302,7 @@ def _fetch_single_kr(market, ticker):
     df_listing = get_stock_listing(market)
     row = df_listing[df_listing['Code'] == ticker]
     if row.empty:
-        row = df_listing[df_listing['Name'].str.upper().str.contains(ticker.upper(), na=False)]
+        row = df_listing[df_listing['Name'].str.upper().str.contains(ticker.upper(), na=False, regex=False)]
     if not row.empty:
         target = row.iloc[0]
         code = str(target.get('Code', ticker)).zfill(6)
@@ -474,9 +466,9 @@ def get_index_close_for_date(ticker: str, date_str: str) -> float:
     df = get_historical_data(ticker, _index_lookback_start(target))
     if df is not None and not df.is_empty():
         try:
-            sub = df.filter(pl.col("Date") <= target)
-            if not sub.is_empty():
-                return float(sub.get_column("Close")[-1])
+            closes = df.filter(pl.col("Date") <= target).get_column("Close").drop_nulls()
+            if len(closes) > 0:
+                return float(closes[-1])
         except (pl.exceptions.PolarsError, IndexError):
             logger.debug("get_index_close_for_date failed for ticker=%s date=%s", ticker, date_str, exc_info=True)
     return 0.0

@@ -5,7 +5,6 @@ yields to their cached pandas series, and everything else to yfinance ->
 yahooquery -> FinanceDataReader. Does not import data.market or
 data.collectors.yahoo, so indicators/yahoo can import it without a cycle."""
 import logging
-import threading
 from datetime import datetime
 import pandas as pd
 import polars as pl
@@ -13,11 +12,12 @@ from data.cache import fdr   # lazy: imported on first use (data.cache.LazyModul
 
 import data.cache as _dc
 from data.cache import (
+    KeyedLocks,
     _FDR_ONLY_TICKERS,
-    _YF_BULK_CACHE,
     _hist_df_is_stale,
     _record_hist_cache_lookup,
     is_kr_code,
+    yf_bulk_get,
 )
 from data.frames import _to_polars
 from data.collectors.naver import _fast_kr_history, _get_kr3y_df
@@ -25,20 +25,21 @@ from data.collectors.naver import _fast_kr_history, _get_kr3y_df
 logger = logging.getLogger(__name__)
 
 # Per-(ticker, start) locks for the single-flight path in get_historical_data,
-# keyed the same as _HIST_CACHE and bookkept under the same _HIST_CACHE_LOCK.
-_HIST_KEY_LOCKS: dict = {}
+# keyed the same as _HIST_CACHE.
+_HIST_KEY_LOCKS = KeyedLocks()
 
 
-def _cached_lookup(cache_key):
-    """Fast-path cache read: the cached df if present and fresh, else None."""
+def _cached_entry(cache_key):
+    """(cached df or None, fresh) for one _HIST_CACHE key; a hit is moved to the
+    LRU end. A stale df is still returned so a failed refresh can fall back to it."""
     with _dc._HIST_CACHE_LOCK:
         cached = _dc._HIST_CACHE.get(cache_key)
         fetched_at = _dc._HIST_CACHE_FETCHED_AT.get(cache_key)
         if cached is not None:
             _dc._HIST_CACHE.move_to_end(cache_key)
-    if cached is not None and not _hist_df_is_stale(cached, fetched_at):
-        return cached
-    return None
+    if cached is None:
+        return None, False
+    return cached, not _hist_df_is_stale(cached, fetched_at)
 
 
 def get_historical_data(ticker: str, start: str) -> pl.DataFrame:
@@ -57,6 +58,9 @@ def get_historical_data(ticker: str, start: str) -> pl.DataFrame:
     The network fetch itself still happens outside _HIST_CACHE_LOCK, so
     concurrent misses on *different* keys still run in parallel.
 
+    A stale entry whose refresh comes back empty is returned as it is
+    rather than an empty frame (review_agy.md H5).
+
     The cache dict/lock/max are read through the `data.cache` module object
     (`_dc`) rather than imported names so tests can rebind e.g.
     `data.cache._HIST_CACHE_MAX` and have it take effect here. Tests patch
@@ -64,41 +68,34 @@ def get_historical_data(ticker: str, start: str) -> pl.DataFrame:
     """
     cache_key = (ticker, start)
 
-    cached = _cached_lookup(cache_key)
-    if cached is not None:
+    cached, fresh = _cached_entry(cache_key)
+    if fresh:
         _record_hist_cache_lookup(hit=True)
         return cached
 
-    with _dc._HIST_CACHE_LOCK:
-        key_lock = _HIST_KEY_LOCKS.setdefault(cache_key, threading.Lock())
+    with _HIST_KEY_LOCKS.hold(cache_key):
+        cached, fresh = _cached_entry(cache_key)
+        if fresh:
+            _record_hist_cache_lookup(hit=True)
+            return cached
 
-    with key_lock:
-        try:
-            cached = _cached_lookup(cache_key)
-            if cached is not None:
-                _record_hist_cache_lookup(hit=True)
-                return cached
+        _record_hist_cache_lookup(hit=False)
 
-            _record_hist_cache_lookup(hit=False)
-
-            df = _fetch_historical_uncached(ticker, start)
-            if not df.is_empty():
-                max_size = _dc._HIST_CACHE_MAX
-                with _dc._HIST_CACHE_LOCK:
-                    if cache_key not in _dc._HIST_CACHE and len(_dc._HIST_CACHE) >= max_size:
-                        try:
-                            evicted_key, _ = _dc._HIST_CACHE.popitem(last=False)
-                            _dc._HIST_CACHE_FETCHED_AT.pop(evicted_key, None)
-                        except KeyError:
-                            logger.debug("LRU cache eviction failed", exc_info=True)
-                    _dc._HIST_CACHE[cache_key] = df
-                    _dc._HIST_CACHE.move_to_end(cache_key)
-                    _dc._HIST_CACHE_FETCHED_AT[cache_key] = datetime.now()
-                return df
+        df = _fetch_historical_uncached(ticker, start)
+        if df.is_empty():
             return cached if cached is not None else df
-        finally:
-            with _dc._HIST_CACHE_LOCK:
-                _HIST_KEY_LOCKS.pop(cache_key, None)
+        max_size = _dc._HIST_CACHE_MAX
+        with _dc._HIST_CACHE_LOCK:
+            if cache_key not in _dc._HIST_CACHE and len(_dc._HIST_CACHE) >= max_size:
+                try:
+                    evicted_key, _ = _dc._HIST_CACHE.popitem(last=False)
+                    _dc._HIST_CACHE_FETCHED_AT.pop(evicted_key, None)
+                except KeyError:
+                    logger.debug("LRU cache eviction failed", exc_info=True)
+            _dc._HIST_CACHE[cache_key] = df
+            _dc._HIST_CACHE.move_to_end(cache_key)
+            _dc._HIST_CACHE_FETCHED_AT[cache_key] = datetime.now()
+        return df
 
 
 def _fetch_historical_uncached(ticker: str, start: str) -> pl.DataFrame:
@@ -131,9 +128,9 @@ def _fetch_historical_uncached(ticker: str, start: str) -> pl.DataFrame:
             df_pd = fdr.DataReader(ticker, start)
             return _to_polars(df_pd)
 
-        bulk_key = f"{ticker}_{start}"
-        if bulk_key in _YF_BULK_CACHE:
-            return _YF_BULK_CACHE[bulk_key]
+        staged = yf_bulk_get(f"{ticker}_{start}")
+        if staged is not None:
+            return staged
 
         import yfinance as yf
         yf_ticker = ticker.replace(".", "-")

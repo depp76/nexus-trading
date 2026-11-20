@@ -6,6 +6,7 @@ import os
 import tempfile
 import threading
 import unittest
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -92,7 +93,7 @@ class TestLocks(unittest.TestCase):
         saved_jp, saved_usd = cache._JP10Y_CACHE["df"], dict(cache._USD_KRW_CACHE)
         cache._JP10Y_CACHE["df"] = None
         _clear_jp10y_disk_cache()
-        cache._USD_KRW_CACHE.update(rate=1400.0, df=None, fetched_at=None)
+        cache._USD_KRW_CACHE.update(rate=1400.0, df=None, fetched_at=None, failed_at=None)
         try:
             with patch.object(krx._MOF_SESSION, "get", side_effect=slow_get):
                 worker = threading.Thread(target=krx._get_jp10y_df)
@@ -234,7 +235,7 @@ class TestKr3yFetch(unittest.TestCase):
 class TestUsdKrwFetch(unittest.TestCase):
     def setUp(self):
         self._saved = dict(cache._USD_KRW_CACHE)
-        cache._USD_KRW_CACHE.update(rate=None, df=None, fetched_at=None)
+        cache._USD_KRW_CACHE.update(rate=None, df=None, fetched_at=None, failed_at=None)
 
     def tearDown(self):
         cache._USD_KRW_CACHE.update(self._saved)
@@ -259,6 +260,8 @@ class TestUsdKrwFetch(unittest.TestCase):
     @patch("data.fx.requests.get")
     def test_network_failure_uses_cached_rate_and_logs_one_line(self, mock_get):
         cache._USD_KRW_CACHE["rate"] = 1390.0
+        # A rate without a series is retried only after an earlier failure (review_agy.md C1).
+        cache._USD_KRW_CACHE["failed_at"] = datetime.now() - fx._USD_KRW_RETRY_AFTER
         mock_get.side_effect = requests.ConnectTimeout("timed out")
         with patch("data.fx._hist_df_is_stale", return_value=True), \
                 self.assertLogs("data.fx", level="WARNING") as logs:
