@@ -901,7 +901,7 @@ class KisAccountThread(QThread):
     (a date), plus the market of every traded ticker from the KRX listing.
 
     finished(result, error): error is "" when the balance came back; result is
-    {"deposit", "holdings", "executions", "markets", "exec_error"} -- a failed
+    {"deposit", "holdings", "holdings_complete", "executions", "markets", "exec_error"} -- a failed
     execution query leaves the deposit usable and says why in exec_error.
     (Replaces AccountDepositThread, which fetched the deposit alone; that REST call
     used to run on the UI thread, roadmap 6-1c.)"""
@@ -920,7 +920,8 @@ class KisAccountThread(QThread):
             logger.warning("KIS account balance fetch failed", exc_info=True)
             self.finished.emit({}, str(e))
             return
-        result = {"deposit": float(bal["deposit"]), "holdings": bal["holdings"], "executions": [],
+        result = {"deposit": float(bal["deposit"]), "holdings": bal["holdings"],
+                  "holdings_complete": bal.get("holdings_complete", True), "executions": [],
                   "markets": {}, "exec_error": ""}
         try:
             result["executions"] = fetch_kis_executions(self._start)

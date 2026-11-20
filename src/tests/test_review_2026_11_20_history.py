@@ -477,3 +477,19 @@ class TestLabels(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestKisAccountThreadCarriesHoldingsComplete(unittest.TestCase):
+    """review_codex #4: the balance collector's paging flag must reach the tab."""
+
+    def test_flag_is_forwarded(self):
+        from threads.fetch_threads import KisAccountThread
+        for complete in (True, False):
+            out = []
+            thread = KisAccountThread(None)
+            thread.finished.connect(lambda r, e: out.append(r))
+            bal = {"deposit": 1000.0, "holdings": [], "holdings_complete": complete}
+            with patch("data_fetcher.fetch_account_balance", return_value=bal), \
+                 patch("data_fetcher.fetch_kis_executions", return_value=[]):
+                thread.run()
+            self.assertIs(out[0]["holdings_complete"], complete)
