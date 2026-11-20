@@ -6,7 +6,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 
 from ui.colors import PROFIT, LOSS, FLAT, QC_PROFIT, QC_LOSS
-from ui.common import create_font, FONT_BODY
+from ui.common import create_font, FONT_BODY, FONT_FAMILY_CSS
 from ui.theme import LINE_GROUP, ACCENT_TEXT, SURFACE, ZEBRA, GRP_BG, TEXT, TEXT_MUTED, TEXT_FAINT, TEXT_EMPTY
 from ui.table_items import ColSpec, NumericItem
 
@@ -154,7 +154,7 @@ def dash():
 
 
 def loading_item():
-    it = QTableWidgetItem(tr("조회 중", "Total"))
+    it = QTableWidgetItem(tr("조회 중", "Loading"))
     it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
     it.setForeground(QColor(TEXT_FAINT))
     return it
@@ -162,7 +162,9 @@ def loading_item():
 
 def _monthly_summary_label(rec: dict) -> QLabel:
     """One rich-text line for a month group-header row (docs/ui.md 3.4):
-    month, trade count, buy amount, realized P/L, win rate. Rendered as a
+    month, trade count, buy amount, P/L, win rate. The P/L is
+    build_monthly_rows' sum of realized P/L and the open lots' unrealized
+    P/L, so it is labelled 손익 / P/L, not 실현 손익 (review_agy M13). Rendered as a
     QLabel spanning the whole row (see fill_table_rows) rather than per-
     column cells, so it's structurally not a data row -- nothing to sort or
     double-click-edit."""
@@ -180,11 +182,11 @@ def _monthly_summary_label(rec: dict) -> QLabel:
         f'<span style="font-weight:600; color:{ACCENT_TEXT};">{month_label}</span>'
         '&nbsp;&nbsp;&nbsp;' + field(tr("거래 수", "Trades"), rec.get("trade_count", 0)) +
         '&nbsp;&nbsp;&nbsp;' + field(tr("매수", "Buy"), f"{rec.get('buy_amount', 0.0):,.0f}") +
-        '&nbsp;&nbsp;&nbsp;' + field(tr("실현 손익", "Realized P/L"), f"{pl:+,.0f}", pl_color) +
+        '&nbsp;&nbsp;&nbsp;' + field(tr("손익", "P/L"), f"{pl:+,.0f}", pl_color) +
         '&nbsp;&nbsp;&nbsp;' + field(tr("승률", "Win rate"), win_text)
     )
     lbl = QLabel(html)
-    lbl.setStyleSheet(f"background: {GRP_BG}; padding-left: 12px; font-size: 9pt;")
+    lbl.setStyleSheet(f"background: {GRP_BG}; padding-left: 12px; {FONT_FAMILY_CSS} font-size: 9pt;")
     return lbl
 
 

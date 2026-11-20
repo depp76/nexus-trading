@@ -27,6 +27,10 @@ _KIS_TOKEN_CACHE: dict = {"token": None, "expires": 0}
 _KIS_APPROVAL_CACHE: dict = {"approval_key": None, "expires": 0}
 _KIS_TOKEN_LOCK = threading.Lock()
 _KIS_APPROVAL_LOCK = threading.Lock()
+# _get_kis_keys runs under either lock above (token and approval key), so the
+# key cache needs its own: two threads could otherwise see "appkey" cached
+# before "appsecret" was stored (review_agy M4).
+_KIS_KEYS_LOCK = threading.Lock()
 
 _KIS_TOKEN_CACHE_PATH = KIS_TOKEN_CACHE_FILE
 
@@ -62,9 +66,17 @@ def _get_kis_keys():
     Trading MCP sibling folder, an external-secrets location shared across
     brokerage-API projects on this machine), using an in-memory cache to avoid
     repeated disk I/O."""
-    if "appkey" in _KIS_KEYS_CACHE:
-        return _KIS_KEYS_CACHE["appkey"], _KIS_KEYS_CACHE["appsecret"]
+    with _KIS_KEYS_LOCK:
+        cached = _KIS_KEYS_CACHE.get("keys")
+        if cached is not None:
+            return cached
+        keys = _read_kis_keys()
+        _KIS_KEYS_CACHE["keys"] = keys
+        return keys
 
+
+def _read_kis_keys():
+    """(appkey, appsecret) from the key files; see _get_kis_keys."""
     key_dir = os.environ.get("KIS_KEY_PATH", r"D:\Source Code\Trading MCP")
     appkey_path = os.path.join(key_dir, "kis_appkey.txt")
     secret_path = os.path.join(key_dir, "kis_secretkey.txt")
@@ -74,9 +86,6 @@ def _get_kis_keys():
         appkey = f.read().strip()
     with open(secret_path, encoding="utf-8") as f:
         appsecret = f.read().strip()
-
-    _KIS_KEYS_CACHE["appkey"] = appkey
-    _KIS_KEYS_CACHE["appsecret"] = appsecret
     return appkey, appsecret
 
 
@@ -231,6 +240,52 @@ def _get_kis_approval_key():
         return approval_key
 
 
+# KIS reply codes for a token the server no longer accepts (EGW00121 invalid,
+# EGW00123 expired). Seen when another process reissued the token or the
+# server expired it before our cached "expires" (review_agy M4).
+_KIS_TOKEN_REJECTED_CODES = frozenset({"EGW00121", "EGW00123"})
+
+
+def _token_rejected(r) -> bool:
+    """True when reply `r` says the access token itself was refused."""
+    if getattr(r, "status_code", None) == 401:
+        return True
+    try:
+        d = r.json()
+    except ValueError:
+        return False
+    return isinstance(d, dict) and str(d.get("msg_cd", "")).strip() in _KIS_TOKEN_REJECTED_CODES
+
+
+def _drop_kis_token(token: str) -> None:
+    """Forget `token` in memory and on disk (only if it is still the cached
+    one), so the next _get_kis_token issues or reloads a fresh token."""
+    with _KIS_TOKEN_LOCK:
+        if _KIS_TOKEN_CACHE["token"] == token:
+            _KIS_TOKEN_CACHE["token"] = None
+            _KIS_TOKEN_CACHE["expires"] = 0
+        if _load_kis_token_cache().get("token") == token:
+            _save_kis_token_cache({})
+
+
+def _kis_get(path: str, tr_id: str, params: dict, timeout: float, tr_cont: str = ""):
+    """GET a KIS REST endpoint with fresh headers. A reply refusing the token
+    (HTTP 401 / EGW00121 / EGW00123) drops the cached token and retries once
+    with a new one. Returns the response unchecked (callers raise_for_status)."""
+    r = None
+    for attempt in range(2):
+        headers = _kis_headers(tr_id)
+        if tr_cont:
+            headers["tr_cont"] = tr_cont
+        r = _KIS_SESSION.get(f"{_KIS_BASE_URL}{path}", headers=headers, params=params, timeout=timeout)
+        if attempt == 0 and _token_rejected(r):
+            logger.warning("[KIS %s] access token refused; reissuing and retrying once", tr_id)
+            _drop_kis_token(str(headers.get("authorization", "")).removeprefix("Bearer "))
+            continue
+        return r
+    return r
+
+
 def _kis_headers(tr_id: str) -> dict:
     token, appkey, appsecret = _get_kis_token()
     return {
@@ -250,13 +305,8 @@ def fetch_kis_stock_info(code: str):
     stock name field, so `name` is always "" here. Not an issue for current
     callers (the app already has ticker->name from get_stock_listing()).
     """
-    headers = _kis_headers("FHKST01010100")
-    r = _KIS_SESSION.get(
-        f"{_KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-price",
-        headers=headers,
-        params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code},
-        timeout=5,
-    )
+    r = _kis_get("/uapi/domestic-stock/v1/quotations/inquire-price", "FHKST01010100",
+                 {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code}, timeout=5)
     r.raise_for_status()
     d = r.json()
     if d.get("rt_cd") != "0":
@@ -282,13 +332,11 @@ def fetch_kis_stock_info(code: str):
 def fetch_kis_daily_ohlcv(code: str, days: int = 30):
     """Fetches recent daily OHLCV via KIS inquire-daily-itemchartprice (FHKST03010100).
     Returns pd.DataFrame."""
-    headers = _kis_headers("FHKST03010100")
     end = datetime.now()
     start = end - timedelta(days=int(days * 1.6) + 10)  # pad for weekends/holidays
-    r = _KIS_SESSION.get(
-        f"{_KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice",
-        headers=headers,
-        params={
+    r = _kis_get(
+        "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice", "FHKST03010100",
+        {
             "FID_COND_MRKT_DIV_CODE": "J",
             "FID_INPUT_ISCD": code,
             "FID_INPUT_DATE_1": start.strftime("%Y%m%d"),
@@ -328,12 +376,8 @@ def fetch_kis_holiday_page(base_date: str) -> list:
     `base_date` (YYYYMMDD), weekends included, each with bass_dt and the opnd_yn open-day flag.
     Page forward by asking again from the day after the last row (data/krx_calendar.py caches
     the result; KIS asks callers to keep this TR to about one use a day)."""
-    r = _KIS_SESSION.get(
-        f"{_KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/chk-holiday",
-        headers=_kis_headers("CTCA0903R"),
-        params={"BASS_DT": base_date, "CTX_AREA_NK": "", "CTX_AREA_FK": ""},
-        timeout=10,
-    )
+    r = _kis_get("/uapi/domestic-stock/v1/quotations/chk-holiday", "CTCA0903R",
+                 {"BASS_DT": base_date, "CTX_AREA_NK": "", "CTX_AREA_FK": ""}, timeout=10)
     r.raise_for_status()
     d = r.json()
     if d.get("rt_cd") != "0":
@@ -348,16 +392,55 @@ def _to_float(s) -> float:
         return 0.0
 
 
+# inquire-balance pages hold up to 50 names each; this many pages is far more
+# than a personal account needs and only stops a server that keeps answering
+# "more data".
+_BALANCE_MAX_PAGES = 20
+
+
+def _to_float_or_none(s) -> float | None:
+    """A numeric KIS field, or None when it is missing or not a number."""
+    if s is None:
+        return None
+    try:
+        text = str(s).replace(",", "").strip()
+        return float(text) if text else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _deposit_of(summary) -> float:
+    """The deposit from an inquire-balance output2 row; NaN when the row has no
+    readable deposit field at all, so the caller can keep the value it has
+    instead of storing a 0 KIS never reported (review_codex.md 2026-11-20 #3).
+    A real "0" is returned as 0.0."""
+    if not isinstance(summary, dict):
+        return float("nan")
+    primary = _to_float_or_none(summary.get("dnca_tot_amt"))
+    secondary = _to_float_or_none(summary.get("prvs_rcdl_excc_amt"))
+    if primary is None and secondary is None:
+        return float("nan")
+    if primary is None:
+        return secondary
+    # Mirrors the old Kiwoom flow's rule: don't trust a "0" in the primary deposit
+    # field when a secondary field shows a real balance.
+    if primary == 0.0 and secondary is not None and secondary > 0.0:
+        return secondary
+    return primary
+
+
 def fetch_account_balance() -> dict:
     """The account's deposit and stock holdings via KIS inquire-balance (TTTC8434R).
 
-    Returns {"deposit": float KRW, "holdings": [{"ticker", "name", "qty", "avg_price"}]}
-    (holdings with a positive quantity; the first page, up to 50 names). Unlike
-    the old Kiwoom flow, KIS balance inquiry needs no account password/OTP.
-    Raises a KIS_ERRORS member on failure."""
+    Returns {"deposit": float KRW, "holdings": [{"ticker", "name", "qty", "avg_price"}],
+    "holdings_complete": bool}: holdings with a positive quantity from every page
+    (continuation via tr_cont / ctx_area_*; review_codex.md 2026-11-20 #4), and
+    holdings_complete False when paging stopped at _BALANCE_MAX_PAGES. The
+    deposit is NaN when the reply carries no readable deposit field (an empty
+    output2), never a made-up 0. Unlike the old Kiwoom flow, KIS balance
+    inquiry needs no account password/OTP. Raises a KIS_ERRORS member on failure."""
     cano, acnt_prdt_cd = _get_kis_account()
-    headers = _kis_headers("TTTC8434R")
-    params = {
+    base = {
         "CANO": cano,
         "ACNT_PRDT_CD": acnt_prdt_cd,
         "AFHR_FLPR_YN": "N",
@@ -367,35 +450,37 @@ def fetch_account_balance() -> dict:
         "FUND_STTL_ICLD_YN": "N",
         "FNCG_AMT_AUTO_RDPT_YN": "N",
         "PRCS_DVSN": "01",
-        "CTX_AREA_FK100": "",
-        "CTX_AREA_NK100": "",
     }
-    r = _KIS_SESSION.get(
-        f"{_KIS_BASE_URL}/uapi/domestic-stock/v1/trading/inquire-balance",
-        headers=headers, params=params, timeout=5,
-    )
-    r.raise_for_status()
-    d = r.json()
-    if d.get("rt_cd") != "0":
-        raise RuntimeError(f"[inquire-balance] KIS API error: {d.get('msg1', d)}")
-    holdings = []
-    for row in d.get("output1") or []:
-        qty = _to_float(row.get("hldg_qty"))
-        if qty > 0:
-            holdings.append({"ticker": str(row.get("pdno", "")).strip(), "name": str(row.get("prdt_name", "")).strip(),
-                             "qty": qty, "avg_price": _to_float(row.get("pchs_avg_pric"))})
-    output2 = d.get("output2") or []
-    if not output2:
-        return {"deposit": 0.0, "holdings": holdings}
-    row = output2[0]
-    primary = _to_float(row.get("dnca_tot_amt", "0"))
-    secondary = _to_float(row.get("prvs_rcdl_excc_amt", "0"))
-    # Mirrors the old Kiwoom flow's rule: don't trust a "0" in the primary deposit
-    # field when a secondary field shows a real balance — a plain truthy-OR chain
-    # would never even look at the secondary field here, since the string "0" is
-    # truthy in Python even though it's numerically zero.
-    deposit = secondary if primary == 0.0 and secondary > 0.0 else primary
-    return {"deposit": deposit, "holdings": holdings}
+    holdings: list = []
+    summary = None
+    complete = False
+    fk = nk = ""
+    for _page in range(_BALANCE_MAX_PAGES):
+        params = dict(base, CTX_AREA_FK100=fk, CTX_AREA_NK100=nk)
+        r = _kis_get("/uapi/domestic-stock/v1/trading/inquire-balance", "TTTC8434R", params, timeout=5,
+                     tr_cont="N" if (fk or nk) else "")
+        r.raise_for_status()
+        d = r.json()
+        if d.get("rt_cd") != "0":
+            raise RuntimeError(f"[inquire-balance] KIS API error: {d.get('msg1', d)}")
+        for row in d.get("output1") or []:
+            qty = _to_float(row.get("hldg_qty"))
+            if qty > 0:
+                holdings.append({"ticker": str(row.get("pdno", "")).strip(),
+                                 "name": str(row.get("prdt_name", "")).strip(),
+                                 "qty": qty, "avg_price": _to_float(row.get("pchs_avg_pric"))})
+        if summary is None:
+            output2 = d.get("output2") or []
+            if output2:
+                summary = output2[0]
+        if r.headers.get("tr_cont") not in ("M", "F"):
+            complete = True
+            break
+        fk, nk = d.get("ctx_area_fk100", ""), d.get("ctx_area_nk100", "")
+        time.sleep(0.1)           # KIS allows ~20 calls a second; stay well under
+    if not complete:
+        logger.warning("[inquire-balance] stopped after %d pages; holdings may be incomplete", _BALANCE_MAX_PAGES)
+    return {"deposit": _deposit_of(summary), "holdings": holdings, "holdings_complete": complete}
 
 
 def fetch_account_deposit() -> float:
@@ -416,9 +501,6 @@ def _fetch_ccld_range(tr_id: str, cano: str, prdt: str, start, end) -> list:
     rows: list = []
     fk = nk = ""
     for _page in range(_CCLD_MAX_PAGES):
-        headers = _kis_headers(tr_id)
-        if fk or nk:
-            headers["tr_cont"] = "N"
         params = {
             "CANO": cano, "ACNT_PRDT_CD": prdt,
             "INQR_STRT_DT": start.strftime("%Y%m%d"), "INQR_END_DT": end.strftime("%Y%m%d"),
@@ -429,8 +511,8 @@ def _fetch_ccld_range(tr_id: str, cano: str, prdt: str, start, end) -> list:
             "CTX_AREA_FK100": fk, "CTX_AREA_NK100": nk,
             "EXCG_ID_DVSN_CD": "ALL",     # KRX and NXT
         }
-        r = _KIS_SESSION.get(f"{_KIS_BASE_URL}/uapi/domestic-stock/v1/trading/inquire-daily-ccld",
-                             headers=headers, params=params, timeout=10)
+        r = _kis_get("/uapi/domestic-stock/v1/trading/inquire-daily-ccld", tr_id, params, timeout=10,
+                     tr_cont="N" if (fk or nk) else "")
         r.raise_for_status()
         d = r.json()
         if d.get("rt_cd") != "0":
@@ -507,13 +589,8 @@ def fetch_investor_trend(ticker: str, days: int = 60) -> list:
         return _fetch_index_investor_trend(market_str, days)
 
     try:
-        headers = _kis_headers("FHKST01010900")
-        r = _KIS_SESSION.get(
-            f"{_KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-investor",
-            headers=headers,
-            params={"FID_INPUT_ISCD": ticker, "FID_COND_MRKT_DIV_CODE": "J"},
-            timeout=8,
-        )
+        r = _kis_get("/uapi/domestic-stock/v1/quotations/inquire-investor", "FHKST01010900",
+                     {"FID_INPUT_ISCD": ticker, "FID_COND_MRKT_DIV_CODE": "J"}, timeout=8)
         r.raise_for_status()
         d = r.json()
         if d.get("rt_cd") != "0":
@@ -617,7 +694,9 @@ def _kis_ws_collect_ticks(ws, websocket, approval_key, tickers: list, timeout: f
         except (websocket.WebSocketException, OSError):
             break
 
-        if isinstance(frame, str) and frame.startswith("{"):
+        if not isinstance(frame, str):
+            continue          # a binary frame is never an H0STCNT0 tick (review_agy M4)
+        if frame.startswith("{"):
             _kis_ws_answer_control(ws, websocket, frame)
             continue
 

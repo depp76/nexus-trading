@@ -24,6 +24,7 @@ from ui.common import (
     _normalize_date_str,
     _validate_positive_number,
     _mk_field_validator,
+    _set_field_error,
 )
 from ui.history_calc import trade_conflict
 from threads.fetch_threads import TickerValidateThread
@@ -38,7 +39,18 @@ _DIALOG_MIN_W = 400
 # Field-validator tooltips (red border + this text on bad input).
 _MSG_DATE = tr("날짜 형식이 올바르지 않습니다 (YYYY-MM-DD)", "Invalid date format (YYYY-MM-DD)")
 _MSG_POSITIVE = tr("0보다 큰 숫자를 입력하세요", "Enter a number greater than 0")
-_MSG_SELL_REQUIRED = tr("매도일을 입력하면 0보다 큰 숫자가 필요합니다", "A number greater than 0 is required when a sell date is entered")
+_MSG_SELL_REQUIRED = tr("매도를 기록하려면 0보다 큰 숫자가 필요합니다", "A number greater than 0 is required to record a sell")
+_MSG_SELL_DATE_REQUIRED = tr("매도 값을 입력하면 매도일(YYYY-MM-DD)이 필요합니다",
+                             "A sell date (YYYY-MM-DD) is required once a sell value is entered")
+_MSG_AMOUNT = tr("비워 두거나 0보다 큰 숫자를 입력하세요", "Leave empty or enter a number greater than 0")
+
+
+def _validate_optional_amount(text: str) -> bool:
+    """An amount field: empty (auto-calculated) or a positive finite number;
+    "inf" used to pass and fail only at the DB save (review_agy M12-6)."""
+    if not text.replace(",", "").strip():
+        return True
+    return _validate_positive_number(text)
 
 
 def _form_layout(dialog: QDialog) -> QFormLayout:
@@ -101,13 +113,17 @@ class BuyEditDialog(QDialog):
             self.buy_price_edit, _validate_positive_number, _MSG_POSITIVE)
         self._val_qty = _mk_field_validator(
             self.buy_qty_edit, _validate_positive_number, _MSG_POSITIVE)
+        self._val_amount = _mk_field_validator(
+            self.buy_amount_edit, _validate_optional_amount, _MSG_AMOUNT)
         self.buy_date_edit.textChanged.connect(self._val_date)
         self.buy_price_edit.textChanged.connect(self._val_price)
         self.buy_qty_edit.textChanged.connect(self._val_qty)
+        self.buy_amount_edit.textChanged.connect(self._val_amount)
         # Validate pre-filled values immediately so existing bad data is flagged on open.
         self._val_date()
         self._val_price()
         self._val_qty()
+        self._val_amount()
 
         layout.addRow(btn_box)
 
@@ -115,7 +131,8 @@ class BuyEditDialog(QDialog):
         date_ok = self._val_date()
         price_ok = self._val_price()
         qty_ok = self._val_qty()
-        if not (date_ok and price_ok and qty_ok):
+        amount_ok = self._val_amount()
+        if not (date_ok and price_ok and qty_ok and amount_ok):
             QMessageBox.warning(self, _TITLE, tr("빨간 테두리로 표시된 칸을 확인하세요.", "Please check the highlighted fields (shown with a red border)."))
             return
 
@@ -192,41 +209,53 @@ class SellEditDialog(QDialog):
             lambda t: _fmt_num_edit(self.sell_amount_edit, t, decimal=True))
 
         # ---Real-time validation (roadmap 2-5) ---
-        # sell_date may be left empty (position stays open); price/qty are only
-        # required once a sell_date is actually entered.
-        def _validate_sell_date(text: str) -> bool:
-            text = text.strip()
-            return True if not text else _validate_date_str(text)
-
+        # All sell fields empty keeps (or puts back) the position open. Once
+        # any of them is filled, the sell date, price and quantity are all
+        # required: a sell price alone used to save a closed trade with no
+        # date and sell_qty 0 (review_agy H18).
         def _validate_sell_amount_field(text: str) -> bool:
             text = text.replace(",", "").replace("%", "").strip()
-            required = bool(self.sell_date_edit.text().strip())
             if not text:
-                return not required
+                return not self._sell_entered()
             return _validate_positive_number(text)
 
-        self._val_sell_date = _mk_field_validator(
-            self.sell_date_edit, _validate_sell_date, _MSG_DATE)
         self._val_sell_price = _mk_field_validator(
             self.sell_price_edit, _validate_sell_amount_field, _MSG_SELL_REQUIRED)
         self._val_sell_qty = _mk_field_validator(
             self.sell_qty_edit, _validate_sell_amount_field, _MSG_SELL_REQUIRED)
-        self.sell_date_edit.textChanged.connect(self._val_sell_date)
-        self.sell_date_edit.textChanged.connect(self._val_sell_price)
-        self.sell_date_edit.textChanged.connect(self._val_sell_qty)
-        self.sell_price_edit.textChanged.connect(self._val_sell_price)
-        self.sell_qty_edit.textChanged.connect(self._val_sell_qty)
+        self._val_sell_amount = _mk_field_validator(
+            self.sell_amount_edit, _validate_optional_amount, _MSG_AMOUNT)
+        for edit in (self.sell_date_edit, self.sell_price_edit, self.sell_qty_edit, self.sell_amount_edit):
+            for check in (self._val_sell_date, self._val_sell_price, self._val_sell_qty, self._val_sell_amount):
+                edit.textChanged.connect(check)
         self._val_sell_date()
         self._val_sell_price()
         self._val_sell_qty()
+        self._val_sell_amount()
 
         layout.addRow(btn_box)
+
+    def _sell_entered(self) -> bool:
+        """True when any sell field has text (the dialog then records a sell)."""
+        return any(e.text().replace(",", "").strip()
+                   for e in (self.sell_date_edit, self.sell_price_edit, self.sell_qty_edit, self.sell_amount_edit))
+
+    def _val_sell_date(self, _ignored=None) -> bool:
+        """Empty only while no other sell field is filled; else a valid date."""
+        text = self.sell_date_edit.text().strip()
+        if text:
+            ok, msg = _validate_date_str(text), _MSG_DATE
+        else:
+            ok, msg = not self._sell_entered(), _MSG_SELL_DATE_REQUIRED
+        _set_field_error(self.sell_date_edit, "" if ok else msg)
+        return ok
 
     def on_save(self):
         date_ok = self._val_sell_date()
         price_ok = self._val_sell_price()
         qty_ok = self._val_sell_qty()
-        if not (date_ok and price_ok and qty_ok):
+        amount_ok = self._val_sell_amount()
+        if not (date_ok and price_ok and qty_ok and amount_ok):
             QMessageBox.warning(self, _TITLE, tr("빨간 테두리로 표시된 칸을 확인하세요.", "Please check the highlighted fields (shown with a red border)."))
             return
 
@@ -310,12 +339,16 @@ class TradeEntryDialog(QDialog):
             self.buy_price_edit, _validate_positive_number, _MSG_POSITIVE)
         self._val_qty = _mk_field_validator(
             self.qty_edit, _validate_positive_number, _MSG_POSITIVE)
+        self._val_amount = _mk_field_validator(
+            self.buy_amount_edit, _validate_optional_amount, _MSG_AMOUNT)
         self.buy_date_edit.textChanged.connect(self._val_date)
         self.buy_price_edit.textChanged.connect(self._val_price)
         self.qty_edit.textChanged.connect(self._val_qty)
+        self.buy_amount_edit.textChanged.connect(self._val_amount)
         self._val_date()
         self._val_price()
         self._val_qty()
+        self._val_amount()
 
         # 취소 → 저장, right-aligned; no default button (docs/ui.md 8.17).
         self.save_btn = make_button(tr("저장", "Save"), "primary", self.on_save)
@@ -334,7 +367,8 @@ class TradeEntryDialog(QDialog):
         date_ok = self._val_date()
         price_ok = self._val_price()
         qty_ok = self._val_qty()
-        if not (date_ok and price_ok and qty_ok):
+        amount_ok = self._val_amount()
+        if not (date_ok and price_ok and qty_ok and amount_ok):
             QMessageBox.warning(self, _TITLE, tr("빨간 테두리로 표시된 칸을 확인하세요.", "Please check the highlighted fields (shown with a red border)."))
             return
 
@@ -372,6 +406,13 @@ class TradeEntryDialog(QDialog):
         thread = TickerValidateThread(market, ticker)
         thread.finished.connect(self._on_ticker_validated)
         self._validate_thread = thread
+        # The reply is emitted from inside run(): accept() can return exec()
+        # and drop this dialog while run() has not returned yet. The owning
+        # tab keeps the thread referenced until it has finished and stops it
+        # at shutdown (review_agy C2).
+        owner = self.parent()
+        if owner is not None and hasattr(owner, "_track_thread"):
+            owner._track_thread(thread)
         thread.start()
 
     def _set_inputs_enabled(self, enabled: bool) -> None:
@@ -403,10 +444,22 @@ class TradeEntryDialog(QDialog):
         }
         self.accept()
 
+    def _validating(self) -> bool:
+        return self._pending is not None or (
+            self._validate_thread is not None and self._validate_thread.isRunning())
+
     def closeEvent(self, event):
         """Block window-close (title-bar X, Alt+F4, ...) while a validation
         thread is still running -- see the comment in on_save()."""
-        if self._validate_thread is not None and self._validate_thread.isRunning():
+        if self._validating():
             event.ignore()
             return
         super().closeEvent(event)
+
+    def reject(self):
+        """Esc goes straight to reject(), not closeEvent(): ignored while the
+        ticker check runs too, so the dialog is not dropped under a running
+        thread and the wait cursor is always restored (review_agy C2)."""
+        if self._validating():
+            return
+        super().reject()
