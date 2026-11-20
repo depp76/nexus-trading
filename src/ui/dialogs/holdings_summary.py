@@ -83,19 +83,23 @@ def _build_summary_table(rows: list, buy_map: dict, eval_map: dict) -> QTableWid
         return it
 
     tbl.setSortingEnabled(False)
-    for r, (comp, pl) in enumerate(rows):
-        cost    = buy_map.get(comp, 0.0)
-        eval_v  = eval_map.get(comp, 0.0)
-        pct     = (pl / cost * 100) if cost > 0 else 0.0
-        pl_col  = QC_PROFIT if pl > 0 else (QC_LOSS if pl < 0 else QC_FLAT)
+    tbl.setUpdatesEnabled(False)
+    try:
+        for r, (comp, pl) in enumerate(rows):
+            cost    = buy_map.get(comp, 0.0)
+            eval_v  = eval_map.get(comp, 0.0)
+            pct     = (pl / cost * 100) if cost > 0 else 0.0
+            pl_col  = QC_PROFIT if pl > 0 else (QC_LOSS if pl < 0 else QC_FLAT)
 
-        comp_it = QTableWidgetItem(comp)
-        comp_it.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        tbl.setItem(r, 0, comp_it)
-        tbl.setItem(r, 1, _ri(f"{cost:,.0f}", cost))
-        tbl.setItem(r, 2, _ri(f"{eval_v:,.0f}", eval_v))
-        tbl.setItem(r, 3, _ri(f"{pl:+,.0f}", pl, pl_col))
-        tbl.setItem(r, 4, _ri(f"{pct:+.1f}%", pct, pl_col))
+            comp_it = QTableWidgetItem(comp)
+            comp_it.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            tbl.setItem(r, 0, comp_it)
+            tbl.setItem(r, 1, _ri(f"{cost:,.0f}", cost))
+            tbl.setItem(r, 2, _ri(f"{eval_v:,.0f}", eval_v))
+            tbl.setItem(r, 3, _ri(f"{pl:+,.0f}", pl, pl_col))
+            tbl.setItem(r, 4, _ri(f"{pct:+.1f}%", pct, pl_col))
+    finally:
+        tbl.setUpdatesEnabled(True)
     # Indicator first, then enable: setSortingEnabled(True) sorts by whatever
     # the header shows at that moment (same rule as the Total Assets table).
     tbl.horizontalHeader().setSortIndicator(3, Qt.SortOrder.DescendingOrder)

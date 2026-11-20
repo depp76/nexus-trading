@@ -56,7 +56,7 @@ from ui.dialogs.trend_conditions import TrendConditions, TrendConditionsDialog
 from ui.common import (
     create_font, make_button, setup_table, make_footer_label, install_table_keys, ThreadOwnerMixin,
     TAB_MARGINS, TAB_SPACING, FONT_BODY, BTN_H, remember_splitter,
-    fix_toolbar_widths, register_toolbar_labels,
+    fix_toolbar_widths, register_toolbar_labels, stale_sender,
 )
 from ui.colors import LOSS, WARN, SERIES_BENCH, SERIES_TARGET, DRAWDOWN_ALPHA, SERIES_PALETTE
 from ui.theme import TEXT, TEXT_MUTED, TEXT_FAINT, TEXT_EMPTY, LINE
@@ -800,6 +800,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             "start": self.start_edit.date().toPyDate(), "end": self.end_edit.date().toPyDate(),
             "result": self._result, "target_sharpe": self.target_sharpe,
             "mult": self._mult, "sel_ids": list(self._sel_ids), "sel_id": self._sel_id,
+            "show_all": self.show_all_cb.isChecked(), "result_tab": self.result_tabs.currentIndex(),
         }
 
     def import_state(self, state: dict) -> None:
@@ -828,6 +829,9 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             self._update_basis()
             self._update_pending()
             self._show_warnings(result)
+            self.show_all_cb.setChecked(bool(state.get("show_all", self.show_all_cb.isChecked())))
+            if state.get("result_tab") is not None:
+                self.result_tabs.setCurrentIndex(state["result_tab"])
         self._update_run_state()
 
     def set_conditions(self, conditions: TrendConditions) -> None:
@@ -888,11 +892,15 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
             self.status_lbl.setText(tr("현재 단계가 끝나면 중지합니다...", "Stopping after the current step..."))
 
     def _on_progress(self, text: str):
+        if stale_sender(self, "_research_thread"):
+            return
         self.status_lbl.setText(text)
 
     def _on_research_finished(self, result, error: str):
         """A failed or stopped run keeps the last successful result (and its
         Save); Run is re-enabled from the current form's check (proposal 4)."""
+        if stale_sender(self, "_research_thread"):
+            return      # a run replaced since (review_agy H6)
         self._running = False
         self.stop_btn.setEnabled(False)
         self._update_run_state()
@@ -1212,7 +1220,7 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         pick = self.trades_view._row_trade(row) if row is not None and 0 <= row < self.trades_table.rowCount() else None
         info = self._result.dataset_info
         dlg = StrategyTradesDialog(
-            tr(f"{run.id} · 비용 {run.cost_mult:g}x · {run_label(run)}", f"{run.id} · cost {run.cost_mult:g}x · {run.label}"), trades, info.get("names"), info.get("ticker_markets"),
+            tr(f"{run.id} · 비용 {run.cost_mult:g}x · {run_label(run)}", f"{run.id} · cost {run.cost_mult:g}x · {run_label(run)}"), trades, info.get("names"), info.get("ticker_markets"),
             select_ticker=pick.ticker if pick else None, select_exit=pick.exit_date if pick else None, parent=self)
         dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         dlg.show()

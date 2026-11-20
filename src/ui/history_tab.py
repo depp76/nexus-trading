@@ -6,6 +6,7 @@ Contains:
 """
 from i18n import tr
 import logging
+import math
 import sqlite3
 import datetime as _dt
 
@@ -42,7 +43,7 @@ from ui.common import (
     _fmt_num_edit, ThreadOwnerMixin, SearchLineEdit,
     BTN_H, make_button, setup_table, make_footer_label, TAB_MARGINS, TAB_SPACING,
     KpiStrip, install_table_keys, clear_selection_on_outside_click,
-    fix_toolbar_widths, register_toolbar_labels,
+    fix_toolbar_widths, register_toolbar_labels, retire_thread,
 )
 from ui.colors import PROFIT, LOSS
 from ui.theme import ACCENT, LINE_STRONG
@@ -370,6 +371,9 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
     # the new language and carries this state over. Plain values only (the
     # ui classes themselves are re-imported).
     def export_state(self) -> dict:
+        # The rebuilt tab reads principal/deposit/withdrawal from QSettings, so
+        # an edit still inside the 400 ms debounce is written first (review_agy H17).
+        self.flush_pending_settings()
         return {"period": self._period_filter, "by_month": self._sort_by_date,
                 "hide_stale": self._hide_stale_closed, "search": self._search_edit.text()}
 
@@ -527,6 +531,9 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         """Load all trade data from SQLite DB (portfolio.db)."
         This is the primary data source, replacing the old JSON files."""
         all_trades = trade_db.load_all_trades()
+        # A 60 s quote started before this reload must not overwrite the
+        # fresh prices the full fetch below brings (review_agy M7).
+        retire_thread(self, "_rt_price_thread")
         self._closed_data = []
         self._open_data   = []
         for rec in all_trades:
@@ -631,15 +638,26 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             return
             
         self._track_thread(RealtimePriceThread(list(kr_tickers), list(us_tickers)), '_rt_price_thread')
-        self._rt_price_thread.failed.connect(self.price_refresh_failed)
+        self._rt_price_thread.failed.connect(self._on_realtime_failed)
         self._rt_price_thread.prices_fetched.connect(self._on_realtime_prices_fetched)
         self._rt_price_thread.status_message.connect(self.status_message.emit)
         self._rt_price_thread.start()
 
+    def _from_retired_rt_thread(self) -> bool:
+        """True inside a slot run for a RealtimePriceThread that was retired
+        after its signal was queued (review_agy H6); direct calls pass."""
+        sender = self.sender()
+        return sender is not None and sender is not self._rt_price_thread
+
+    def _on_realtime_failed(self, message: str):
+        if self._from_retired_rt_thread():
+            return
+        self.price_refresh_failed.emit(message)
+
     def _on_realtime_prices_fetched(self, prices_dict, complete: bool = True):
         """RealtimePriceThread.prices_fetched. Partial quotes are applied, but
         only a complete answer clears the failure indicator (review_codex.md C12)."""
-        if not prices_dict:
+        if not prices_dict or self._from_retired_rt_thread():
             return
         if complete:
             self.price_refresh_ok.emit()
@@ -793,6 +811,15 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._settings.setValue("trading_history/deposit",    self._deposit_edit.text())
         self._settings.setValue("trading_history/withdrawal", self._withdrawal_edit.text())
 
+    def flush_pending_settings(self) -> None:
+        """Write a debounced principal/deposit/withdrawal edit now (language
+        switch, app close: MainWindow.closeEvent); nothing when none is waiting."""
+        if not self._settings_save_timer.isActive():
+            return
+        self._settings_save_timer.stop()
+        self._flush_settings()
+        self._settings.sync()
+
     def _on_deposit_changed(self, *args, **kwargs):
         """Recompute summary whenever the user edits input fields."""
         try:
@@ -825,14 +852,19 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
 
     def _kis_query_start(self) -> _dt.date:
         """First day to ask KIS for executions: the last imported order's day (an
-        order may have filled more since; kis_imports keeps only the difference),
-        else _KIS_FIRST_LOOKBACK_DAYS back."""
-        last = trade_db.last_kis_import_date()
-        if last:
+        order may have filled more since; kis_imports keeps only the difference)
+        or the earliest skipped sell still pending, whichever is earlier
+        (review_codex.md 2026-11-20 #1), else _KIS_FIRST_LOOKBACK_DAYS back."""
+        days = []
+        for raw in (trade_db.last_kis_import_date(), trade_db.earliest_kis_pending_date()):
+            if not raw:
+                continue
             try:
-                return _dt.datetime.strptime(last, "%Y-%m-%d").date()
+                days.append(_dt.datetime.strptime(raw, "%Y-%m-%d").date())
             except ValueError:
-                logger.warning("kis_imports: bad order date %r", last)
+                logger.warning("kis_imports/kis_pending: bad order date %r", raw)
+        if days:
+            return min(days)
         return _dt.date.today() - _dt.timedelta(days=_KIS_FIRST_LOOKBACK_DAYS)
 
     def _fetch_kis_account(self):
@@ -846,6 +878,10 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._deposit_thread.start()
 
     def _on_kis_account_fetched(self, result: dict, err: str):
+        # A reply queued by a thread retired since (review_agy H6) is dropped.
+        sender = self.sender()
+        if sender is not None and sender is not self._deposit_thread:
+            return
         self._fetch_dep_btn.setEnabled(True)
         if err:
             self.status_message.emit(tr("KIS 조회 실패", "KIS fetch failed"))
@@ -853,16 +889,23 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
                                                   f"Failed to query the KIS account:\n{err}"))
             return
         val = result["deposit"]
-        self._deposit_edit.setText(f"{int(val):,}")
-        self._on_deposit_changed()
         # Results on the status bar (docs/ui.md 8.4), not a modal.
-        deposit_msg = tr(f"계좌 예수금: {int(val):,} KRW (추정) -- 예수금에 입력했습니다",
-                         f"Account deposit: {int(val):,} KRW (estimate) -- filled into Deposit")
+        if isinstance(val, (int, float)) and math.isfinite(val):
+            self._deposit_edit.setText(f"{int(val):,}")
+            self._on_deposit_changed()
+            deposit_msg = tr(f"계좌 예수금: {int(val):,} KRW (추정) -- 예수금에 입력했습니다",
+                             f"Account deposit: {int(val):,} KRW (estimate) -- filled into Deposit")
+        else:
+            # KIS sent no readable deposit: keep what the field holds instead of
+            # saving a 0 nobody reported (review_codex.md 2026-11-20 #3).
+            val = float("nan")
+            deposit_msg = tr("계좌 예수금을 읽지 못해 예수금 칸은 그대로 두었습니다",
+                             "The account deposit was unreadable; Deposit was left as it was")
         if result.get("exec_error"):
             self.status_message.emit(deposit_msg)
             QMessageBox.warning(self, _TITLE, tr(
-                f"예수금은 입력했지만 체결 내역을 조회하지 못했습니다:\n{result['exec_error']}",
-                f"The deposit was filled in, but the executions could not be fetched:\n{result['exec_error']}"))
+                f"체결 내역을 조회하지 못했습니다:\n{result['exec_error']}",
+                f"The executions could not be fetched:\n{result['exec_error']}"))
             return
         try:
             imported = trade_db.load_kis_imports()
@@ -870,8 +913,11 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             logger.error("kis_imports read failed", exc_info=True)
             QMessageBox.critical(self, _TITLE, tr(f"DB를 읽지 못했습니다:\n{e}", f"Could not read the DB:\n{e}"))
             return
+        # holdings_complete: False when the balance paging was cut off
+        # (data.collectors.kis.fetch_account_balance); a result without the
+        # key counts as complete.
         plan = plan_kis_import(result["executions"], imported, self._open_data, result.get("markets"),
-                               result.get("holdings"))
+                               result.get("holdings"), result.get("holdings_complete", True))
         if not plan.rows and not plan.warnings:
             self.status_message.emit(deposit_msg + tr(" · 새 체결 없음", " · no new executions"))
             return
@@ -881,7 +927,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             self.status_message.emit(deposit_msg)
             return
         try:
-            trade_db.apply_kis_import(plan.records, plan.imports)
+            trade_db.apply_kis_import(plan.records, plan.imports, plan.skipped)
         except (sqlite3.Error, ValueError) as e:
             logger.error("KIS import save failed", exc_info=True)
             QMessageBox.critical(self, _TITLE, tr(f"체결 내역을 저장하지 못했습니다:\n{e}",
@@ -960,7 +1006,9 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             qty = float(rec.get("qty", 0.0))
             buy_amt = float(rec.get("buy_amount", 0.0))
             eval_amt = curr_price * qty
-            pl = eval_amt - buy_amt
+            # No quote yet: no P/L, as the lot's own row shows (its curr_pl is
+            # 0 until a price lands); -buy_amt used to reach the Total row.
+            pl = eval_amt - buy_amt if curr_price > 0 else 0.0
             rec.update(sell_date="Open", sell_price=curr_price, sell_qty=qty, sell_amount=eval_amt,
                        pl=pl, pl_pct=(pl / buy_amt * 100) if buy_amt > 0 else 0.0)
             matches.append(rec)
@@ -1172,7 +1220,10 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
 
             is_now_closed = bool(edited.get("sell_date") or edited.get("sell_price"))
             remainder = None
-            if kind == "open" and is_now_closed and 0 < sell_qty < orig_qty:
+            # A closed lot whose sell quantity is cut below its quantity is
+            # split the same way (review_agy M12-7): the unsold rest used to
+            # stay on the closed row and count as sold.
+            if is_now_closed and 0 < sell_qty < orig_qty:
                 remainder = self._split_partial_sell(edited, orig_qty, orig_buy_amount, sell_qty)
 
             # The closed sub-lot UPDATE and the remainder INSERT go through

@@ -12,13 +12,14 @@ import logging
 
 from data.cache import (
     PAYLOAD_ERRORS,
-    _YF_BULK_CACHE,
     _YF_SESSION,
     _NAVER_SESSION,
     _get_yf_crumb,
     start_date,
     safe_float,
     per_from_eps,
+    yf_bulk_put,
+    yf_bulk_release,
 )
 from data.frames import _to_polars
 from data.indicators import fetch_historical_changes
@@ -57,8 +58,11 @@ def yf_quote_batch(symbols: list, timeout: int = 15, chunk_size: int = 50, max_r
                 )
                 # 401 -> crumb expired: refresh and retry immediately
                 if resp.status_code == 401:
-                    crumb = _get_yf_crumb(force_refresh=True)
-                    params["crumb"] = crumb
+                    crumb = _get_yf_crumb(force_refresh=True, stale_crumb=params.get("crumb", ""))
+                    if crumb:
+                        params["crumb"] = crumb
+                    else:
+                        params.pop("crumb", None)
                     resp = _YF_SESSION.get(
                         "https://query2.finance.yahoo.com/v7/finance/quote",
                         params=params,
@@ -175,6 +179,9 @@ class _UsBulkRun:
     naver_mcaps: dict
     lock: object
     yf_semaphore: object
+    # The lookback start, fixed once per run: the bulk download, the staging key and
+    # the per-symbol get_historical_data call must agree even across midnight (H2).
+    start: str = field(default_factory=start_date)
     yf_bulk_keys_added: set = field(default_factory=set)
     done_count: int = 0
 
@@ -231,22 +238,19 @@ def _prefetch_naver_us_market_caps(market_name: str, total: int) -> dict:
 
 
 def _store_bulk_history(orig_sym: str, single_df, run: _UsBulkRun) -> None:
-    """Put one symbol's bulk-downloaded history into _YF_BULK_CACHE (skipped when empty)."""
+    """Stage one symbol's bulk-downloaded history (data.cache.yf_bulk_put; skipped when empty)."""
     if not single_df.empty:
-        pl_df = _to_polars(single_df)
-        key = f"{orig_sym}_{start_date()}"
-        _YF_BULK_CACHE[key] = pl_df
-        run.yf_bulk_keys_added.add(key)
+        yf_bulk_put(f"{orig_sym}_{run.start}", _to_polars(single_df), run.yf_bulk_keys_added)
 
 
 def _prefetch_chunk_history(yf_symbols: list, run: _UsBulkRun) -> None:
-    """Step 0: bulk pre-fetch one chunk's history via yfinance into _YF_BULK_CACHE."""
+    """Step 0: bulk pre-fetch one chunk's history via yfinance into the staging cache."""
     try:
         import yfinance as yf
         with run.yf_semaphore:
             bulk_df = yf.download(
                 yf_symbols,
-                start=start_date(),
+                start=run.start,
                 progress=False,
                 timeout=15,
                 auto_adjust=True,
@@ -374,7 +378,7 @@ def _process_us_symbol(symbol: str, name: str, meta: _UsChunkMeta, run: _UsBulkR
     """One symbol's result row (prices in KRW via run.fx_rate), or None when it has no price."""
     yf_symbol = symbol.replace(".", "-")
     try:
-        df_history = get_historical_data(symbol, start_date())
+        df_history = get_historical_data(symbol, run.start)
         usd_price = 0.0
         if not df_history.is_empty() and "Close" in df_history.columns:
             close_valid = df_history.get_column('Close').drop_nulls()
@@ -451,15 +455,14 @@ def fetch_us_stock_data_bulk(symbols_with_names, market_name, fx_rate, progress_
     )
 
     results = []
-    with ThreadPoolExecutor(max_workers=min(num_chunks, 6)) as executor:
-        for rs in executor.map(lambda c: _process_us_chunk(c, run), chunks):
-            results.extend(rs)
-
-    # Remove only the entries this call added, so an overlapping concurrent
-    # call to fetch_us_stock_data_bulk (e.g. NASDAQ 100 + S&P 500 refreshes
-    # overlapping) doesn't wipe the other call's still-in-use bulk cache entries.
-    for _k in run.yf_bulk_keys_added:
-        _YF_BULK_CACHE.pop(_k, None)
+    try:
+        with ThreadPoolExecutor(max_workers=min(num_chunks, 6)) as executor:
+            for rs in executor.map(lambda c: _process_us_chunk(c, run), chunks):
+                results.extend(rs)
+    finally:
+        # Release this run's staged frames even when a chunk raised; a key an
+        # overlapping run (NASDAQ + S&P 500) still holds stays until it finishes.
+        yf_bulk_release(run.yf_bulk_keys_added)
     return results
 
 

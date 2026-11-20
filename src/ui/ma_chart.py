@@ -20,6 +20,17 @@ class StockMaLauncherMixin:
         """Hook for tabs that surface progress text (Universe emits it to
         the footer); no-op by default."""
 
+    def close_chart_dialogs(self) -> None:
+        """Close every MA chart this tab opened (a language switch replaces
+        the tab; a chart left open would keep running its "전략 점검" work
+        for the old tab, review_agy H9). Closing stops their workers."""
+        for d in getattr(self, "_open_dialogs", []):
+            try:
+                d.close()
+            except RuntimeError:
+                continue  # already deleted (WA_DeleteOnClose)
+        self._open_dialogs = []
+
     def _show_stock_ma(self, ticker: str, name: str, market: str, change_mode: str = "pct"):
         if not ticker:
             return

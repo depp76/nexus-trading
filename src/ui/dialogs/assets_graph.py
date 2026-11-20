@@ -58,6 +58,17 @@ def _mpl(text: str) -> str:
     return text.replace("$", r"\$")
 
 
+def _finite(v) -> bool:
+    """A plottable value: the USD series is NaN on a week without a USD/KRW
+    rate (TradingRecordTab._show_graph), drawn as a gap."""
+    return v is not None and bool(np.isfinite(v))
+
+
+def _usd_text(pct: float, amount: float) -> str:
+    """"+1.2% · $123" of a Total Assets ($) value; "-" for a week without a rate."""
+    return f"{pct:+.1f}% · ${amount:,.0f}" if _finite(pct) and _finite(amount) else "-"
+
+
 def spread_labels(values: list[float], min_gap: float) -> list[float]:
     """Label positions for `values` (any order) at least `min_gap` apart, each
     as close to its value as that allows: sorted, pushed up past the one
@@ -186,7 +197,7 @@ class TotalAssetsGraphDialog(QDialog):
         return [
             (tr(f"{_LBL_ASSETS} {self._asset[-1]:+.1f}% · {fmt_krw(self._totals[-1])}",
                 f"{_LBL_ASSETS} {self._asset[-1]:+.1f}% · {fmt_krw(self._totals[-1])}"), self._asset[-1], TEXT),
-            (f"{_LBL_ASSETS_USD} {self._usd[-1]:+.1f}% · ${self._usd_totals[-1]:,.0f}", self._usd[-1], ACCENT),
+            (f"{_LBL_ASSETS_USD} {_usd_text(self._usd[-1], self._usd_totals[-1])}", self._usd[-1], ACCENT),
             (f"{_LBL_KOSPI} {self._kospi[-1]:+.1f}%", self._kospi[-1], TEXT_MUTED),
         ]
 
@@ -194,9 +205,10 @@ class TotalAssetsGraphDialog(QDialog):
         """The latest value of each series right of its last point, pushed
         apart when they would overlap."""
         ax, x = self.ax, self._x
-        labels = self.end_label_texts()
-        lo = min(min(self._asset), min(self._usd), min(self._kospi), 0.0)
-        hi = max(max(self._asset), max(self._usd), max(self._kospi), 0.0)
+        # A series whose last week has no value (USD without a rate) gets no end label.
+        labels = [lbl for lbl in self.end_label_texts() if _finite(lbl[1])]
+        values = [v for v in (*self._asset, *self._usd, *self._kospi, 0.0) if _finite(v)]
+        lo, hi = min(values), max(values)
         gap = max(hi - lo, 1.0) * _MIN_LABEL_GAP
         ys = spread_labels([v for _, v, _ in labels], gap)
         span = (x[-1] - x[0]) or 7.0
@@ -229,6 +241,7 @@ class TotalAssetsGraphDialog(QDialog):
         for s_idx, (_name, values, _c, _f) in enumerate(self._series()):
             pts = self.ax.transData.transform(np.column_stack([self._x, np.asarray(values, float)]))
             d = np.hypot(pts[:, 0] - px, pts[:, 1] - py)
+            d = np.where(np.isfinite(d), d, np.inf)     # a NaN week (USD gap) is no marker
             i = int(np.argmin(d))
             if d[i] < best_d - 1e-9:
                 best, best_d = (s_idx, i), d[i]
@@ -244,7 +257,7 @@ class TotalAssetsGraphDialog(QDialog):
         return [
             (self._dates[i], TEXT_MUTED),
             (f"{_LBL_ASSETS}  {self._asset[i]:+.1f}% · {fmt_krw(self._totals[i])}", TEXT),
-            (f"{_LBL_ASSETS_USD}  {self._usd[i]:+.1f}% · ${self._usd_totals[i]:,.0f}", ACCENT),
+            (f"{_LBL_ASSETS_USD}  {_usd_text(self._usd[i], self._usd_totals[i])}", ACCENT),
             (kospi, TEXT_MUTED),
         ]
 

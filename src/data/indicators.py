@@ -37,7 +37,11 @@ def _compute_indicators(df: pl.DataFrame, windows=(10, 20, 60)) -> pl.DataFrame:
     loss      = pl.when(delta < 0).then(-delta).otherwise(0)
     avg_gain  = gain.ewm_mean(com=13, adjust=False)
     avg_loss  = loss.ewm_mean(com=13, adjust=False)
-    rsi14     = 100 - (100 / (1 + (avg_gain / avg_loss).fill_nan(1e9)))
+    # No movement at all (avg gain and avg loss both 0: a flat or suspended stretch,
+    # and the first bar) is the neutral 50, not 100: 0/0 used to be filled with 1e9
+    # (review_agy.md M5). Gains with no losses still give 100 (x/0 = inf).
+    rsi14     = (pl.when((avg_gain == 0) & (avg_loss == 0)).then(pl.lit(50.0))
+                 .otherwise(100 - (100 / (1 + avg_gain / avg_loss))))
 
     # MA60 is always computed: the long divergence ratio uses it (MA50 until 2026-11-18;
     # changed with the strategy's trend line, spec v07 10-13). A 60 in `windows` is not repeated.
@@ -187,7 +191,9 @@ def fetch_historical_changes(ticker, current_price, df_pd=None, mode='pct'):
         _fill_52w(changes, df, current_price, mode, today)
 
         # Period changes (single numpy array pass)
-        hist = df.filter(pl.col("Close").is_not_null()).sort("Date")
+        # NaN closes too: one NaN in the last 20/60 made the MA ratios NaN, then 0 (M5).
+        close_f = pl.col("Close").cast(pl.Float64)
+        hist = df.filter(close_f.is_not_null() & close_f.is_not_nan()).sort("Date")
         closes = hist.get_column("Close").to_numpy()
         n = len(closes)
         if n == 0:

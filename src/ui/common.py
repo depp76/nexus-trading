@@ -15,7 +15,7 @@ import datetime as _dt
 from typing import Any, Literal
 from collections.abc import Callable
 
-from PyQt6.QtCore import QObject, QEvent, Qt, QRect, QSize, QPoint, pyqtSignal, QTimer
+from PyQt6.QtCore import QObject, QEvent, Qt, QRect, QSize, QPoint, pyqtSignal, QTimer, QThread
 from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QTableWidget, QHeaderView, QLabel, QFrame, QHBoxLayout, QVBoxLayout,
     QWidget, QApplication, QGridLayout, QLayout, QSizePolicy, QTabBar,
@@ -964,12 +964,33 @@ def retire_thread(owner, attr_name: str) -> None:
         if thread.isRunning():
             thread.blockSignals(True)
             cancel_thread(thread)   # cooperative: stop the work, not just its signals
-            zombies = [t for t in getattr(owner, "_zombie_threads", []) if t.isRunning()]
+            # _thread_running, not t.isRunning(): one dead zombie must not raise
+            # here and drop the running `thread` (review_agy C3).
+            zombies = [t for t in getattr(owner, "_zombie_threads", []) if _thread_running(t)]
             zombies.append(thread)
             owner._zombie_threads = zombies
     except RuntimeError:
         pass  # underlying C++ object already deleted
     setattr(owner, attr_name, None)
+
+
+def stale_sender(owner, *attr_names: str) -> bool:
+    """True when the slot running on `owner` was invoked by a worker QThread
+    that is no longer the one stored at any of ``owner.<attr_names>``.
+
+    retire_thread() blocks a replaced worker's signals, but an emission that
+    was already queued for the UI thread is still delivered (review_agy H6),
+    so single-worker slots start with ``if stale_sender(self, "_x_thread"):
+    return``. Only a QThread sender counts: a direct call (sender() is None)
+    or a call made from inside another widget's signal handler is never
+    stale."""
+    try:
+        sender = owner.sender()
+    except RuntimeError:
+        return False
+    if not isinstance(sender, QThread):
+        return False
+    return all(sender is not getattr(owner, a, None) for a in attr_names)
 
 
 class ThreadOwnerMixin:

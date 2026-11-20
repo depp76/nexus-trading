@@ -44,8 +44,14 @@ from strategy import signal_api
 from threads.strategy_threads import CANCELLED_MESSAGE, SignalPicksThread, StrategyCheckThread
 from ui.colors import LOSS, PROFIT
 from ui.common import (
-    FONT_BODY, FONT_CAPTION, FONT_HEADING, FONT_KPI, KpiCard, create_font, make_badge, make_button,
+    FONT_BODY, FONT_CAPTION, FONT_HEADING, FONT_KPI, KpiCard, _thread_running, cancel_thread, create_font,
+    make_badge, make_button,
 )
+
+# Workers of closed dialogs that were still running: kept referenced until
+# they end, so a QThread is never destroyed while it runs (review_agy H9).
+# Pruned on every shutdown().
+_DETACHED: list = []
 
 
 @dataclass
@@ -79,6 +85,8 @@ class StrategyCheckSection(QWidget):
         self._checks: dict[str, object] = {}     # variant id -> StockCheck (this dialog's per-stock runs)
         self._errors: dict[str, str] = {}
         self._running: set[str] = set()          # variants with a universe run in flight from here
+        self._stock_running: set[str] = set()    # variants with a per-stock check in flight
+        self._closed = False                     # shutdown() ran: start nothing more
         self._threads: list = []                 # workers kept referenced while they run
         self.check = None                        # the StockCheck on screen
         self.calc_btn = None
@@ -185,8 +193,31 @@ class StrategyCheckSection(QWidget):
 
     def _track(self, thread) -> None:
         if self._ctx.track is not None:
-            self._ctx.track(thread)
-        self._threads = [t for t in self._threads if t.isRunning()] + [thread]
+            try:
+                self._ctx.track(thread)
+            except RuntimeError:
+                # The opener is gone (a language switch rebuilt the window);
+                # this section still keeps the thread referenced below.
+                self._ctx.track = None
+        self._threads = [t for t in self._threads if _thread_running(t)] + [thread]
+
+    def shutdown(self) -> None:
+        """The dialog is closing: cancel this section's workers, block their
+        late signals and keep the running ones referenced (_DETACHED) until
+        they end, so neither a closed window's work keeps going nor a running
+        QThread is destroyed with the dialog (review_agy H9)."""
+        self._closed = True
+        running = [t for t in self._threads if _thread_running(t)]
+        for t in running:
+            try:
+                t.blockSignals(True)
+                cancel_thread(t)
+            except RuntimeError:
+                continue
+        _DETACHED[:] = [t for t in _DETACHED if _thread_running(t)] + running
+        self._threads = []
+        self._running.clear()
+        self._stock_running.clear()
 
     @staticmethod
     def _new_body_box(w: QWidget) -> QVBoxLayout:
@@ -381,12 +412,18 @@ class StrategyCheckSection(QWidget):
 
     # ------------------------------------------------------------------ runs
     def _run_stock(self, vid: str) -> None:
+        # One check per variant at a time: picking A, B, then A again while
+        # A's check still runs waits for that one (review_agy H9).
+        if self._closed or vid in self._stock_running:
+            return
+        self._stock_running.add(vid)
         thread = StrategyCheckThread(self._item, vid, self._ctx.cache.get(vid))
         thread.finished.connect(self._on_check_done)
         self._track(thread)
         thread.start()
 
     def _on_check_done(self, check, error: str, vid: str) -> None:
+        self._stock_running.discard(vid)
         if check is None:
             self._errors[vid] = "" if error == CANCELLED_MESSAGE else tr(f"계산 실패: {error}", f"Failed: {error}")
         else:
@@ -396,7 +433,7 @@ class StrategyCheckSection(QWidget):
 
     def _on_calc_clicked(self) -> None:
         vid = self.variant()
-        if not signal_api.universe_rows(self._ctx.items, vid) or vid in self._running:
+        if self._closed or not signal_api.universe_rows(self._ctx.items, vid) or vid in self._running:
             return
         self._running.add(vid)
         self._errors.pop(vid, None)
@@ -409,6 +446,9 @@ class StrategyCheckSection(QWidget):
         thread.start()
 
     def _on_universe_progress(self, text: str) -> None:
+        # Only the run of the variant on screen writes its progress there.
+        if getattr(self.sender(), "variant_id", self.variant()) != self.variant():
+            return
         if self.status_lbl is not None and self.calc_btn is not None:
             try:
                 self.status_lbl.setText(text)

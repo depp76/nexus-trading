@@ -58,7 +58,7 @@ class _AssetsTable(QTableWidget):
 from ui.common import (
     FONT_BODY,
     create_font, ThreadOwnerMixin, make_button, setup_table, TAB_MARGINS, TAB_SPACING,
-    install_table_keys, fix_toolbar_widths, register_toolbar_labels,
+    install_table_keys, fix_toolbar_widths, register_toolbar_labels, retire_thread, stale_sender,
 )
 
 
@@ -471,12 +471,20 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
             self._records = []
         self._refresh_table()
 
-    def _save_records(self):
+    def _save_records(self, records: list | None = None) -> bool:
+        """Save `records` (default: the current list) and make them the
+        tab's records only once the save succeeded, so a failed save leaves
+        the screen showing what the DB holds (review_agy M12-5)."""
+        records = self._records if records is None else records
         try:
-            trade_db.save_asset_records(self._records)
+            trade_db.save_asset_records(records)
         except Exception as e:
+            # boundary: any DB failure is reported to the user and nothing changes.
             logger.error("[TradingRecord] Save error: %s", e, exc_info=True)
             QMessageBox.warning(self, _TITLE, tr(f"총자산 기록을 저장하지 못했습니다:\n{e}", f"Failed to save asset records:\n{e}"))
+            return False
+        self._records = records
+        return True
 
     # ---Background metrics warm-up (roadmap 2026-09-18, review.md 1-2) ---
     def _start_metrics_preload(self):
@@ -491,6 +499,12 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         thread.start()
 
     def _on_metrics_preloaded(self, snapshot: dict, rate: float):
+        if stale_sender(self, "_metrics_thread"):
+            return
+        # This run is over even if its QThread has not returned from run()
+        # yet: forget it first, so the refresh below can start the next one
+        # for dates added meanwhile instead of seeing it "running" (review_agy M6).
+        self._metrics_thread = None
         self._date_metrics_cache.update(snapshot)
         self._live_usd_krw = rate
         self._metrics_fetched_at = datetime.now()
@@ -521,17 +535,11 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
     def _save_record(self, date_str: str, total: float, is_manual: bool):
         """Add the week's record or replace it. `is_manual`: the value was
         typed rather than auto-filled from the live total (docs/ui.md 4.5)."""
-        for r in self._records:
-            if r["date"] == date_str:
-                r["total"] = total
-                r["manual"] = is_manual
-                break
-        else:
-            self._records.append({"date": date_str, "total": total, "manual": is_manual})
-
-        self._records.sort(key=lambda r: r["date"])
-        self._save_records()
-        self._refresh_table()
+        new = {"date": date_str, "total": total, "manual": is_manual}
+        records = [r for r in self._records if r["date"] != date_str] + [new]
+        records.sort(key=lambda r: r["date"])
+        if self._save_records(records):
+            self._refresh_table()
 
     def _delete_selected(self):
         # Same visual-row-vs-self._records mismatch as
@@ -554,9 +562,8 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
-        self._records[:] = [r for r in self._records if r.get("date") not in dates_to_delete]
-        self._save_records()
-        self._refresh_table()
+        if self._save_records([r for r in self._records if r.get("date") not in dates_to_delete]):
+            self._refresh_table()
 
     def _rate_kospi_for_date(self, date_str: str) -> tuple:
         """USD/KRW rate + KOSPI close for a date from the snapshot
@@ -601,13 +608,16 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
 
             usd_rate, kospi = self._rate_kospi_for_date(date_str)
 
-            usd_val = total / usd_rate if usd_rate > 0 else 0
-            
+            # A week without a USD/KRW rate is a gap in the USD line (NaN), not
+            # a $0 week drawn as a -100% drop (review_agy M12-3).
+            usd_val = total / usd_rate if usd_rate > 0 else math.nan
+
             if first_total is None:
                 first_total = total
                 first_kospi = kospi
+            if first_usd_total is None and math.isfinite(usd_val):
                 first_usd_total = usd_val
-                
+
             dates.append(date_str)
             
             # KOSPI return
@@ -620,7 +630,12 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
             asset_returns.append(a_pct)
             
             # USD Asset return
-            u_pct = ((usd_val - first_usd_total) / first_usd_total * 100) if first_usd_total and first_usd_total > 0 else 0.0
+            if not math.isfinite(usd_val):
+                u_pct = math.nan
+            elif first_usd_total and first_usd_total > 0:
+                u_pct = (usd_val - first_usd_total) / first_usd_total * 100
+            else:
+                u_pct = 0.0
             usd_asset_returns.append(u_pct)
             
             totals.append(total)
@@ -633,6 +648,9 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
             dlg.exec()
         finally:
             self._graph_dlg = None
+            # The report belongs to the closed graph: stop it rather than pop
+            # its dialog up over another tab later (review_agy M6).
+            retire_thread(self, "_report_thread")
 
     # ---Early/mid-month report (graph dialog's "Report" button) ---
     # Trading History keeps Principal/Deposit/Withdrawal in this QSettings
@@ -662,6 +680,9 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         thread.start()
 
     def _on_report_fetched(self, trades: list, closes: dict, kospi: list, usd_krw: dict, error: str):
+        if stale_sender(self, "_report_thread"):
+            return      # its graph dialog was closed (review_agy M6)
+        self._report_thread = None
         parent = self._graph_dlg or self
         if self._graph_dlg is not None:
             self._graph_dlg.report_btn.setEnabled(True)
@@ -703,14 +724,14 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
                     val = float(text.replace(',', '').strip())
                     if not math.isfinite(val):
                         raise ValueError(val)
-                    rec["total"] = val
-                    # A direct table edit is as "manual" as typing over the
-                    # auto-filled input (docs/ui.md 4.5).
-                    rec["manual"] = True
-                    self._save_records()
-                    self._refresh_table()
                 except ValueError:
                     QMessageBox.warning(self, _TITLE, tr("숫자 형식이 올바르지 않습니다.", "Invalid number format."))
+                    return
+                # A direct table edit is as "manual" as typing over the
+                # auto-filled input (docs/ui.md 4.5).
+                edited = dict(rec, total=val, manual=True)
+                if self._save_records([edited if r is rec else r for r in self._records]):
+                    self._refresh_table()
 
     # ---Table rendering ---
     # docs/ui.md issue #9 (mockup): "정렬이 꺼져 있다" -- sorting is enabled

@@ -155,7 +155,7 @@ def _mark_open_positions(open_data: list) -> tuple[float, float, float, float]:
     """Set `curr_pl` / `curr_pl_pct` on every open record and return the
     (kr_cost, kr_eval, us_cost, us_eval) totals; a record without a quote is
     carried at cost."""
-    from data.cache import is_us_market
+    from data_fetcher import is_us_market
 
     kr_cost = kr_eval = us_cost = us_eval = 0.0
     for r in open_data:

@@ -18,13 +18,22 @@ Rules:
   the closed row, the rest stays open as its own row.
 - A sell larger than the open quantity is skipped whole and reported, and its
   orders are not marked as imported, so it comes back on the next run (add the
-  missing buy first).
+  missing buy first). Its order keys go to `ImportPlan.skipped`; the tab saves
+  them as pending (trade_db `kis_pending`) so the next query starts no later
+  than the skipped day even when later orders of the same run were imported
+  (review_codex.md 2026-11-20 #1).
+- KIS can list one order on several rows; each order counts once, with its
+  largest cumulative fill (review_agy M12-1).
+- Lots are matched first in, first out at every sell: a buy imported in the
+  same run that is older than a lot already in the table is closed first
+  (review_codex.md 2026-11-20 #2).
 - Amounts are price x quantity before fees and taxes, as in a manual entry.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from data_fetcher import is_kr_code, is_us_market
 from i18n import tr
 
 _EPS = 1e-9
@@ -49,6 +58,7 @@ class ImportPlan:
     imports: list = field(default_factory=list)    # (order_key, cumulative qty, cumulative amount)
     rows: list = field(default_factory=list)       # PreviewRow, in date order
     warnings: list = field(default_factory=list)
+    skipped: list = field(default_factory=list)    # (order_key, order date) of skipped sells
 
     @property
     def applicable(self) -> bool:
@@ -59,10 +69,22 @@ def order_key(execution: dict) -> str:
     return f"{execution['date']}:{execution['order_no']}"
 
 
+def _dedupe_orders(executions: list) -> list:
+    """One row per order key, the one with the largest cumulative fill, in the
+    order the keys first appear. Without this a duplicated row was subtracted
+    from `imported` twice and imported twice."""
+    best: dict = {}
+    for e in executions:
+        key = order_key(e)
+        if key not in best or e["qty"] > best[key]["qty"]:
+            best[key] = e
+    return list(best.values())
+
+
 def _new_deltas(executions: list, imported: dict) -> list:
     """Each order's fill not yet in the table: (execution, delta qty, delta amount, key)."""
     out = []
-    for e in executions:
+    for e in _dedupe_orders(executions):
         key = order_key(e)
         done_qty, done_amt = imported.get(key, (0.0, 0.0))
         dq = e["qty"] - done_qty
@@ -98,13 +120,20 @@ def _fmt_qty(q: float) -> str:
     return f"{q:,.0f}" if abs(q - round(q)) < _EPS else f"{q:,.4f}"
 
 
+def _is_domestic_lot(lot: dict) -> bool:
+    """A lot the KIS domestic balance should list (KR code, not a US market)."""
+    return is_kr_code(lot.get("ticker", "")) and not is_us_market(lot.get("market", ""))
+
+
 def plan_kis_import(executions: list, imported: dict, open_lots: list, markets: dict | None = None,
-                    holdings: list | None = None) -> ImportPlan:
+                    holdings: list | None = None, holdings_complete: bool = True) -> ImportPlan:
     """The plan for `executions` (data.collectors.kis.parse_execution dicts) against
     the table's open lots. `imported`: order_key -> (qty, amount) already saved;
     `markets`: ticker -> market for new lots; `holdings`: KIS holdings
-    ({"ticker", "name", "qty"}) to cross-check the open quantity after the plan.
-    Never changes its inputs."""
+    ({"ticker", "name", "qty"}) to cross-check the open quantity after the plan,
+    every domestic ticker the table will hold included; `holdings_complete`
+    False (balance paging cut off) withholds the verdict for tickers missing
+    from `holdings`. Never changes its inputs."""
     markets = markets or {}
     plan = ImportPlan()
     # Working copies of the open lots, per ticker, oldest buy first (stable for ties).
@@ -130,13 +159,17 @@ def plan_kis_import(executions: list, imported: dict, open_lots: list, markets: 
             continue
 
         # Sell: only open lots bought on or before the sell date.
-        avail = [lot for lot in lots.get(g["ticker"], [])
-                 if not lot.get("sell_date") and lot.get("buy_date", "") <= g["date"]]
+        # Sorted here, not once up front: a buy of this run may be older than
+        # a lot already in the table (stable, so ties keep table order).
+        avail = sorted((lot for lot in lots.get(g["ticker"], [])
+                        if not lot.get("sell_date") and lot.get("buy_date", "") <= g["date"]),
+                       key=lambda r: r.get("buy_date", ""))
         held = sum(lot.get("qty", 0.0) for lot in avail)
         if held + _EPS < qty:
             msg = tr(f"건너뜀: 보유 {_fmt_qty(held)}주보다 많은 매도",
                      f"Skipped: sells more than the {_fmt_qty(held)} held")
             plan.rows.append(PreviewRow(g["date"], "sell", g["ticker"], g["name"], qty, price, amount, msg, False))
+            plan.skipped.extend((key, g["date"]) for key, _q, _a in g["imports"])
             plan.warnings.append(tr(
                 f"{g['date']} {g['name']}({g['ticker']}) 매도 {_fmt_qty(qty)}주: Trading History의 보유는 {_fmt_qty(held)}주라 "
                 "건너뛰었습니다. 빠진 매수를 먼저 추가한 뒤 다시 조회하세요.",
@@ -176,8 +209,17 @@ def plan_kis_import(executions: list, imported: dict, open_lots: list, markets: 
         after = {t: sum(lot.get("qty", 0.0) for lot in lst if not lot.get("sell_date")) for t, lst in lots.items()}
         kis_qty = {h["ticker"]: h["qty"] for h in holdings}
         names = {h["ticker"]: h.get("name", "") for h in holdings}
+        # Domestic tickers the table will hold, so a stock only the ledger has
+        # is checked too (review_codex.md 2026-11-20 #4); US lots are not in
+        # the KIS domestic balance.
+        ledger = {t for t, lst in lots.items()
+                  if any(not lot.get("sell_date") and _is_domestic_lot(lot) for lot in lst)}
+        for t in ledger:
+            names.setdefault(t, next((lot.get("company", "") for lot in lots[t]), ""))
         names.update({r.ticker: r.name for r in plan.rows})
-        for t in sorted(set(kis_qty) | {r.ticker for r in plan.rows}):
+        for t in sorted(set(kis_qty) | {r.ticker for r in plan.rows} | ledger):
+            if t not in kis_qty and not holdings_complete:
+                continue          # it may be on a balance page that was never read
             have, want = after.get(t, 0.0), kis_qty.get(t, 0.0)
             if abs(have - want) > _EPS:
                 plan.warnings.append(tr(

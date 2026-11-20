@@ -14,7 +14,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 
 from i18n import tr
-from ui.common import create_font, BTN_H, FONT_BODY, FONT_CAPTION, make_button
+from ui.common import create_font, BTN_H, FONT_BODY, FONT_CAPTION, FONT_FAMILY_CSS, make_button
 from ui.universe_views import RANGE_FIELDS, describe_ranges
 from ui.theme import LINE_GROUP, SURFACE
 
@@ -171,7 +171,8 @@ class SignalScanPopup(QFrame):
                                    tooltip=tr("신호 추가: 범위 조건 입력 창을 엽니다",
                                               "Add a signal: opens the range-condition form"))
         self.add_btn.setFixedHeight(round(BTN_H * ADD_BTN_SCALE))
-        self.add_btn.setStyleSheet(f"font-size: {FONT_BODY * ADD_BTN_SCALE:g}pt; padding: 4px 9px; min-height: 12px;")
+        self.add_btn.setStyleSheet(f"{FONT_FAMILY_CSS} font-size: {FONT_BODY * ADD_BTN_SCALE:g}pt; "
+                                   "padding: 4px 9px; min-height: 12px;")
         head.addWidget(title)
         head.addStretch()
         head.addWidget(self.add_btn)

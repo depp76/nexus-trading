@@ -29,35 +29,47 @@ class RealtimePriceThread(QThread):
         self.kr_tickers = kr_tickers
         self.us_tickers = us_tickers
 
+    def _fetch_kr(self) -> dict:
+        self.status_message.emit(tr(f"국내 시세 받는 중... (KIS, {len(self.kr_tickers)}종목)",
+                                    f"Fetching KR quotes... (KIS, {len(self.kr_tickers)} tickers)"))
+        from data_fetcher import fetch_kis_realtime_prices
+        return fetch_kis_realtime_prices(self.kr_tickers)
+
+    def _fetch_us(self) -> dict:
+        """US quotes converted to KRW."""
+        self.status_message.emit(tr("Yahoo Finance 응답 기다리는 중...", "Waiting for Yahoo Finance response..."))
+        from data_fetcher import fetch_us_realtime_prices, get_usd_krw_rate
+        fx_rate = get_usd_krw_rate()
+        us_prices = fetch_us_realtime_prices(self.us_tickers)
+        return {ticker: price * fx_rate for ticker, price in us_prices.items()}
+
     def run(self):
         prices = {}
-        error = ""
-        try:
-            kr_prices = us_prices = {}
-            if self.kr_tickers:
-                self.status_message.emit(tr(f"국내 시세 받는 중... (KIS, {len(self.kr_tickers)}종목)",
-                                             f"Fetching KR quotes... (KIS, {len(self.kr_tickers)} tickers)"))
-                from data_fetcher import fetch_kis_realtime_prices
-                kr_prices = fetch_kis_realtime_prices(self.kr_tickers)
-                prices.update(kr_prices)
-            if self.us_tickers:
-                self.status_message.emit(tr("Yahoo Finance 응답 기다리는 중...", "Waiting for Yahoo Finance response..."))
-                from data_fetcher import fetch_us_realtime_prices, get_usd_krw_rate
-                fx_rate = get_usd_krw_rate()
-                us_prices = fetch_us_realtime_prices(self.us_tickers)
-                for ticker, price in us_prices.items():
-                    prices[ticker] = price * fx_rate
-            if (self.kr_tickers or self.us_tickers) and not prices:
-                error = tr("시세를 받지 못함 (KIS/Yahoo)", "no quotes received (KIS/Yahoo)")
-            elif self.kr_tickers and not kr_prices:
-                error = tr("국내 시세를 받지 못함 (KIS)", "no KR quotes received (KIS)")
-            elif self.us_tickers and not us_prices:
-                error = tr("미국 시세를 받지 못함 (Yahoo)", "no US quotes received (Yahoo)")
-        except Exception as e:
-            # boundary: the thread must reach the error report below instead of dying silently.
-            # Before this, an exception here ended the thread silently.
-            logger.warning("RealtimePriceThread failed: %s", e, exc_info=True)
-            error = str(e) or type(e).__name__
+        raised = []          # exception texts, shown as they are
+        empty = []           # markets that answered with no quote
+        # KR and US are fetched independently: a KIS failure used to skip the
+        # Yahoo call altogether (review_agy M7).
+        for tickers, fetch, empty_msg in (
+                (self.kr_tickers, self._fetch_kr, tr("국내 시세를 받지 못함 (KIS)", "no KR quotes received (KIS)")),
+                (self.us_tickers, self._fetch_us, tr("미국 시세를 받지 못함 (Yahoo)", "no US quotes received (Yahoo)"))):
+            if not tickers:
+                continue
+            try:
+                got = fetch()
+            except Exception as e:
+                # boundary: one market's failure must not lose the other's quotes or the error report.
+                logger.warning("RealtimePriceThread failed: %s", e, exc_info=True)
+                raised.append(str(e) or type(e).__name__)
+                continue
+            prices.update(got)
+            if not got:
+                empty.append(empty_msg)
+        if raised:
+            error = "; ".join(raised)
+        elif empty and not prices:
+            error = tr("시세를 받지 못함 (KIS/Yahoo)", "no quotes received (KIS/Yahoo)")
+        else:
+            error = "; ".join(empty)
         if error:
             self.failed.emit(error)
         self.prices_fetched.emit(prices, not error)

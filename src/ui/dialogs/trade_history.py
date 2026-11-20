@@ -149,7 +149,11 @@ class StockTradeHistoryDialog(QDialog):
         layout = QVBoxLayout(self)
 
         tbl = self._new_table(len(matches), is_open_position)
-        self._fill_data_rows(tbl, matches, is_open_position)
+        tbl.setUpdatesEnabled(False)
+        try:
+            self._fill_data_rows(tbl, matches, is_open_position)
+        finally:
+            tbl.setUpdatesEnabled(True)
 
         # ---Total row (always present for both open and closed) ---
         total_row = len(matches)

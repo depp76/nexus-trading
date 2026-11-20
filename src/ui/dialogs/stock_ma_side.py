@@ -129,11 +129,15 @@ def _fit_side_table(table: QTableWidget, equal_cols=()) -> None:
 def _build_futures_table(rows: list) -> QTableWidget:
     right = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
     table = _new_side_table([tr("종목명", "Name"), tr("코드", "Code"), tr("가격", "Price")])
-    table.setRowCount(len(rows))
-    for i, row in enumerate(rows):
-        table.setItem(i, 0, _cell(row['Contract']))
-        table.setItem(i, 1, _cell(row['Symbol']))
-        table.setItem(i, 2, _cell(f"${row.get('Close', 0):,.2f}", right))
+    table.setUpdatesEnabled(False)
+    try:
+        table.setRowCount(len(rows))
+        for i, row in enumerate(rows):
+            table.setItem(i, 0, _cell(row['Contract']))
+            table.setItem(i, 1, _cell(row['Symbol']))
+            table.setItem(i, 2, _cell(f"${row.get('Close', 0):,.2f}", right))
+    finally:
+        table.setUpdatesEnabled(True)
     _fit_side_table(table)
     return table
 
@@ -149,14 +153,18 @@ def _build_investor_table(rows: list) -> QTableWidget:
         keys.extend(["InvestmentTrust", "PrivateEquity"])
 
     table = _new_side_table(headers)
-    table.setRowCount(len(rows))
-    for i, row in enumerate(rows):
-        table.setItem(i, 0, _cell(row['Date']))
-        table.setItem(i, 1, _cell(f"{row.get('Close', 0):,}", right))
-        for j, key in enumerate(keys, start=2):
-            val = row.get(key, 0)
-            color = PROFIT if val > 0 else (LOSS if val < 0 else None)
-            table.setItem(i, j, _cell(f"{val:,}", right, color))
+    table.setUpdatesEnabled(False)
+    try:
+        table.setRowCount(len(rows))
+        for i, row in enumerate(rows):
+            table.setItem(i, 0, _cell(row['Date']))
+            table.setItem(i, 1, _cell(f"{row.get('Close', 0):,}", right))
+            for j, key in enumerate(keys, start=2):
+                val = row.get(key, 0)
+                color = PROFIT if val > 0 else (LOSS if val < 0 else None)
+                table.setItem(i, j, _cell(f"{val:,}", right, color))
+    finally:
+        table.setUpdatesEnabled(True)
     # Foreigner / Institution / Retail (and the detail groups) one width,
     # so the groups read as equals (2026-11-15).
     _fit_side_table(table, equal_cols=range(2, 2 + len(keys)))
