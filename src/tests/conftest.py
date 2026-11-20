@@ -28,3 +28,25 @@ def _isolated_holdout_ledger(tmp_path, monkeypatch):
     # Same for the Universe cache (2026-11-18: a Universe test's table render saved its one
     # fixture row over the real universe_cache.json).
     monkeypatch.setattr(paths, "UNIVERSE_CACHE_FILE", str(tmp_path / "universe_cache.json"))
+
+
+# Close and delete the top-level widgets a test module leaves open (2026-11-20). Many UI tests
+# show() a table or dialog and never close it; ~280 windows had piled up by the end of the
+# suite, and the offscreen platform then crashed (access violation in QPainter.drawText while
+# painting one of them during a later test's processEvents). Module scope keeps widgets a
+# module shares between its tests alive until that module is done.
+@pytest.fixture(autouse=True, scope="module")
+def _close_leftover_windows():
+    yield
+    from PyQt6.QtCore import QCoreApplication, QEvent
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if app is None:
+        return
+    for w in QApplication.topLevelWidgets():
+        try:
+            w.close()
+            w.deleteLater()
+        except RuntimeError:        # already deleted on the C++ side
+            pass
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)

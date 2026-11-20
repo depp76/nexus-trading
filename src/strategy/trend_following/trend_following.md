@@ -1376,6 +1376,10 @@ v07 계획의 30회를 **실행할 수 있게만** 했다. 백테스트(실데�
   `with_check_weekday` = `compute_features`, 특성이 `score_*`/`gate_*` 필드를 읽지 않음, 팩터 IC 상관행렬 = 쌍별 계산),
   `tests/strategy/trend_following/test_review_agy_2026_11_20.py`(스냅샷 가장자리, 스냅샷 개봉 기록, 저유동성 청산 목록, `regime_on=None`, 문구,
   수급 시작일, 수치 방어, 이전 루프와 `affordable_qty` 300회 무작위 비교).
+- **수급 수집기(같은 리뷰 H1, 데이터 계층)**: 9장의 수급 소스 결정("`data/flows.py`는 변경 없음")은 당시 기록이다. 2026-11-20부터
+  `data/collectors/naver.py::fetch_investor_trend_paged`가 `(행, 완료 여부)`를 돌려주고, `data/flows.py`는 끝까지 받은 경우에만
+  `covers_from`을 기록하며 저장 직전 캐시를 다시 읽어 병합한다. 중간 실패로 과거 수급이 영구히 빠지던 문제의 수정이며, 완료된 수집의
+  값은 같아 스냅샷 기반 기준선에는 영향이 없다.
 
 ### 10-16. 코드 리뷰 2026-11-20: 결과에 영향을 주는 미반영 항목
 

@@ -487,7 +487,7 @@ class TestKisAccountThreadCarriesHoldingsComplete(unittest.TestCase):
         for complete in (True, False):
             out = []
             thread = KisAccountThread(None)
-            thread.finished.connect(lambda r, e: out.append(r))
+            thread.finished.connect(lambda r, e, sink=out: sink.append(r))
             bal = {"deposit": 1000.0, "holdings": [], "holdings_complete": complete}
             with patch("data_fetcher.fetch_account_balance", return_value=bal), \
                  patch("data_fetcher.fetch_kis_executions", return_value=[]):
