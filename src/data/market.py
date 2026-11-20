@@ -607,7 +607,7 @@ def _load_with_warmup(ticker: str, display_start: date, end: date = None,
     return df
 
 
-def fetch_stock_ma_multi(ticker, market, windows=(10, 20, 60), days=1825, target_year=None):
+def fetch_stock_ma_multi(ticker, market, windows=(10, 20, 60), days=3650, target_year=None):
     """Fetches OHLCV for a single stock and computes MA/RSI using Polars.
 
     target_year=None: the trailing `days` calendar days (at least 3x the

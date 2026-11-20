@@ -220,7 +220,7 @@ class TestStockChartMenu(unittest.TestCase):
     def test_period_change_keeps_the_values(self):
         d = StockMaDialog("005930", "Samsung", "KOSPI", self.df)
         before = d._lines["MA200"].get_ydata().copy()
-        for p in ("1M", "All", "3Y"):
+        for p in ("1M", "All", "3Y", "5Y"):
             d._apply_period(p)
             self.assertTrue(np.allclose(d._lines["MA200"].get_ydata(), before, equal_nan=True), p)
         d.close()
