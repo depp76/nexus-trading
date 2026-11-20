@@ -14,6 +14,7 @@ from data.cache import (
     start_date,
     _YF_SESSION,
     safe_float,
+    per_from_eps,
     is_kr_code,
 )
 from data.frames import _to_polars
@@ -108,7 +109,7 @@ def _build_kr_stock_res(code, name, market, marcap):
 
     df_history = None
     changes = fetch_historical_changes(code, current_price, df_history)
-    _, tper, fper = _fetch_naver_per_single(code)
+    _, per_vals = _fetch_naver_per_single(code)
     return {
         "ticker": code,
         "name": name,
@@ -117,8 +118,7 @@ def _build_kr_stock_res(code, name, market, marcap):
         "market_cap": int(marcap),
         "currency": "₩",
         "changes": changes,
-        "trailing_per": tper,
-        "forward_per": fper,
+        **_kr_per_fields(per_vals, current_price),
     }
 
 
@@ -182,7 +182,23 @@ def _fetch_kr_rows(results_list, naver_prices, progress_callback):
     return hist_data
 
 
-def _assemble_kr_results(results_list, hist_data, market, trailing_per_dict, forward_per_dict):
+def _kr_per_fields(vals, price) -> dict:
+    """A KR row's PER/EPS fields from fetch_naver_per_batch's values: Naver's PERs,
+    a trailing PER Naver left empty (negative EPS, "N/A") computed as price / EPS,
+    and the EPS themselves for data.cache.refresh_row_per on the 60 s update."""
+    vals = vals or {}
+    tper = vals.get("tper")
+    if tper is None:
+        tper = per_from_eps(price, vals.get("eps"))
+    return {
+        "trailing_per": tper,
+        "forward_per": vals.get("fper"),
+        "eps_trailing": vals.get("eps"),
+        "eps_forward": vals.get("feps"),
+    }
+
+
+def _assemble_kr_results(results_list, hist_data, market, per_by_code):
     """Universe rows in listing order; rows without fetched data are dropped."""
     results = []
     for item in results_list:
@@ -198,8 +214,7 @@ def _assemble_kr_results(results_list, hist_data, market, trailing_per_dict, for
             "market_cap": marcap,
             "currency": "₩",
             "changes": changes,
-            "trailing_per": trailing_per_dict.get(ticker),
-            "forward_per": forward_per_dict.get(ticker),
+            **_kr_per_fields(per_by_code.get(ticker), current_price),
         })
     return results
 
@@ -218,11 +233,11 @@ def fetch_kr_market_data(market="KOSPI", top_n=200, progress_callback=None):
             _f_per    = _bg_exe.submit(fetch_naver_per_batch, all_codes)
             naver_prices = _f_prices.result()
             hist_data = _fetch_kr_rows(results_list, naver_prices, progress_callback)
-            trailing_per_dict, forward_per_dict = _f_per.result()
+            per_by_code = _f_per.result()
         finally:
             _bg_exe.shutdown(wait=False)
 
-        return _assemble_kr_results(results_list, hist_data, market, trailing_per_dict, forward_per_dict)
+        return _assemble_kr_results(results_list, hist_data, market, per_by_code)
     except Exception:
         # boundary: contract is [] on any failure; one market's build must not take the refresh down.
         logger.error("fetch_kr_market_data failed for market=%s", market, exc_info=True)
@@ -372,9 +387,23 @@ def _per_from_info(inf, ticker):
             trailing_per = round(float(tpe), 1)
         if fpe is not None and isinstance(fpe, (int, float)) and fpe == fpe:
             forward_per = round(float(fpe), 1)
+        if trailing_per is None and isinstance(inf, dict):
+            # No trailingPE for a negative trailing EPS: show the negative PER.
+            trailing_per = per_from_eps(inf.get('currentPrice') or inf.get('regularMarketPrice'),
+                                        inf.get('trailingEps'))
     except (TypeError, ValueError):
         logger.debug("PER extraction failed for %s", ticker, exc_info=True)
     return trailing_per, forward_per
+
+
+def _eps_from_info(inf) -> dict:
+    """The row's EPS fields (USD) from a yfinance info dict, for data.cache.refresh_row_per;
+    None for a missing or NaN value."""
+    out = {}
+    for key, src in (("eps_trailing", "trailingEps"), ("eps_forward", "forwardEps")):
+        v = inf.get(src) if isinstance(inf, dict) else None
+        out[key] = float(v) if isinstance(v, (int, float)) and v == v else None
+    return out
 
 
 def _fetch_single_us(market, ticker):
@@ -406,6 +435,7 @@ def _fetch_single_us(market, ticker):
         "changes": changes,
         "trailing_per": trailing_per,
         "forward_per": forward_per,
+        **_eps_from_info(inf),
     }, None
 
 

@@ -516,6 +516,7 @@ class UniverseLightweightFetchThread(QThread):
             fetch_naver_realtime_index_prices,
             fetch_us_realtime_prices,
             fetch_historical_changes,
+            refresh_row_per,
         )
 
         error = ""
@@ -558,14 +559,25 @@ class UniverseLightweightFetchThread(QThread):
                     continue
 
                 new_price = prices_dict[ticker]
-                if item.get("price", 0.0) != new_price:
-                    item["price"] = new_price
+                # A US equity row keeps its quote in usd_price (what the Price
+                # cell shows) and price in KRW; Yahoo's quote is in USD.
+                usd_row = item.get("currency") == "$" and not item.get("is_index", False)
+                if (item.get("usd_price") if usd_row else item.get("price", 0.0)) != new_price:
+                    if usd_row:
+                        old_price, old_usd = item.get("price") or 0.0, item.get("usd_price") or 0.0
+                        # Same KRW rate as the full refresh used (the row's own ratio).
+                        item["price"] = new_price * (old_price / old_usd) if old_price > 0 and old_usd > 0 else new_price
+                        item["usd_price"] = new_price
+                    else:
+                        item["price"] = new_price
                     try:
                         chg_mode = item.get("change_mode", "pct")
                         chg = fetch_historical_changes(ticker, new_price, mode=chg_mode)
                         item["changes"] = chg
                         if item.get("is_index", False):
                             item["usd_price"] = new_price
+                        # PER follows the price (2026-11-20): price / the stored EPS.
+                        refresh_row_per(item)
                         updated_count += 1
                     except Exception:
                         # boundary: one ticker's change-rate failure must not stop the price update of the rest.

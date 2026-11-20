@@ -316,3 +316,31 @@ def safe_float(value, default=0.0):
         return default if math.isnan(f) else f
     except (ValueError, TypeError):
         return default
+
+
+def per_from_eps(price, eps):
+    """price / EPS rounded to 0.1 -- negative for a loss-making company -- or None
+    when either is missing, NaN or zero. Fills the trailing PER that Naver
+    ("N/A") and Yahoo (no trailingPE) leave empty when trailing EPS is negative."""
+    p = safe_float(price, 0.0)
+    e = safe_float(eps, 0.0)
+    if p <= 0 or e == 0:
+        return None
+    return round(p / e, 1)
+
+
+def refresh_row_per(item: dict) -> None:
+    """Recompute a Universe row's tPER / fPER from its current price and the
+    EPS the full refresh stored (`eps_trailing` / `eps_forward`, in the quote
+    currency), so the 60 s price update keeps PER in step with the price.
+    Both sources define PER as price / EPS (Naver: 4-quarter and consensus EPS;
+    Yahoo: epsTrailingTwelveMonths and epsForward). A row without the EPS
+    (cached before 2026-11-20, or no EPS published) keeps its PER as is."""
+    price = item.get("usd_price") if item.get("currency") == "$" else item.get("price")
+    for per_key, eps_key in (("trailing_per", "eps_trailing"), ("forward_per", "eps_forward")):
+        eps = item.get(eps_key)
+        if eps is None:
+            continue
+        per = per_from_eps(price, eps)
+        if per is not None:
+            item[per_key] = per

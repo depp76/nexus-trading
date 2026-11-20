@@ -147,63 +147,71 @@ def fetch_naver_realtime_index_prices(symbols=("KOSPI", "KOSDAQ")) -> dict:
     return results
 
 
-def _fetch_naver_per_single(code: str) -> tuple:
-    """Fetch trailing and forward PER for a single stock via Naver mobile integration API.
+_NAVER_NUMBER = re.compile(r'-?[\d,]*\.?\d+')
+# totalInfos entry -> our field. Matched on the stable `code` first; the Korean
+# `key` labels are the fallback for an entry without one.
+_NAVER_PER_FIELDS = {"per": "tper", "cnsPer": "fper", "eps": "eps", "cnsEps": "feps"}
+_NAVER_PER_KEYS = {"PER": "tper", "추정PER": "fper", "EPS": "eps", "추정EPS": "feps"}
 
-    Returns (code, trailing_per, forward_per).
+
+def _naver_signed_number(val) -> float | None:
+    """Signed number from a Naver display value ("-9.82배", "-1,469원", "5.76배");
+    None for "N/A", "-" or no digits. The sign is kept: a loss-making company's
+    PER/EPS is negative."""
+    if not val or not isinstance(val, str):
+        return None
+    m = _NAVER_NUMBER.search(val)
+    if not m:
+        return None
+    try:
+        return float(m.group().replace(',', ''))
+    except ValueError:
+        return None
+
+
+def _fetch_naver_per_single(code: str) -> tuple:
+    """Fetch PER and EPS for a single stock via the Naver mobile integration API.
+
+    Returns (code, {"tper", "fper", "eps", "feps"}), each None when missing:
+    trailing PER, consensus (추정) PER, trailing EPS and consensus EPS. Naver's
+    PER is the live price over that EPS (trailing: the latest four quarters);
+    it reads "N/A" when the trailing EPS is negative, so tper is None there and
+    callers fill it from the EPS (data.cache.per_from_eps). Signs are kept.
     """
+    out = {"tper": None, "fper": None, "eps": None, "feps": None}
     try:
         url = f"https://m.stock.naver.com/api/stock/{code}/integration"
         r = _NAVER_SESSION.get(url, timeout=5)
         if r.status_code == 200:
             data = r.json()
-            tper = None
-            fper = None
             for item in data.get('totalInfos', []):
-                key = item.get('key', '')
-                val = item.get('value', '')
-                if not val or val == '-':
+                field = _NAVER_PER_FIELDS.get(item.get('code')) or _NAVER_PER_KEYS.get(item.get('key', ''))
+                if field is None:
                     continue
-                num_str = re.sub(r'[^\d.]', '', val)
-                if not num_str:
-                    continue
-                try:
-                    fval = round(float(num_str), 1)
-                except ValueError:
-                    continue
-
-                if key == 'PER':
-                    tper = fval
-                elif key == '추정PER':
-                    fper = fval
-            return code, tper, fper
+                num = _naver_signed_number(item.get('value'))
+                if num is not None:
+                    out[field] = round(num, 1) if field in ("tper", "fper") else num
     except PAYLOAD_ERRORS:
         logger.debug("_fetch_naver_per_single failed for code=%s", code, exc_info=True)
-    return code, None, None
+    return code, out
 
 
-def fetch_naver_per_batch(codes: list, max_workers: int = 30) -> tuple:
-    """Concurrently fetch trailing and forward PER for a list of Korean stock codes.
-
-    Returns (trailing_per_dict, forward_per_dict).
-    """
+def fetch_naver_per_batch(codes: list, max_workers: int = 30) -> dict:
+    """Concurrently fetch PER and EPS for a list of Korean stock codes:
+    {code: {"tper", "fper", "eps", "feps"}} (see _fetch_naver_per_single)."""
+    result = {}
     if not codes:
-        return {}, {}
-    tper_map = {}
-    fper_map = {}
+        return result
     with ThreadPoolExecutor(max_workers=max_workers) as exe:
         futures = {exe.submit(_fetch_naver_per_single, c): c for c in codes}
         for fut in as_completed(futures):
             try:
-                code, tper, fper = fut.result()
-                if tper is not None:
-                    tper_map[code] = tper
-                if fper is not None:
-                    fper_map[code] = fper
+                code, vals = fut.result()
+                result[code] = vals
             except Exception:
                 # boundary: one future must not lose the whole batch; the worker catches fetch errors itself, so only bugs land here.
                 logger.warning("Naver PER fetch failed for %s", futures[fut], exc_info=True)
-    return tper_map, fper_map
+    return result
 
 
 def _parse_marcap_krw(text: str) -> int:

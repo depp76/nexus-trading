@@ -253,6 +253,44 @@ class TestRowStatusButton(unittest.TestCase):
         self.assertEqual(seen, ["000001", "000002"])
         table.close()
 
+    def test_button_click_leaves_focus_selection_and_current_cell_alone(self):
+        """User report 2026-11-20: the click moved focus to the table and the
+        swallowed press left a stale drag-select origin for the move/release."""
+        from PyQt6.QtCore import QPoint, QRect, Qt
+        from PyQt6.QtTest import QTest
+        from PyQt6.QtWidgets import QApplication, QLineEdit, QVBoxLayout, QWidget
+        from ui.delegates import IdentityDelegate
+        from ui.widgets import COL_IDENTITY, StockTable
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        edit = QLineEdit()
+        lay.addWidget(edit)
+        table = StockTable()
+        lay.addWidget(table)
+        host.resize(900, 300)
+        host.show()
+        rows = [{"name": n, "ticker": t, "market": "KOSPI", "market_cap": 1e11, "trailing_per": 10.0,
+                 "forward_per": 9.0, "price": 100.0, "currency": "", "change_mode": "pct", "changes": {}}
+                for t, n in (("000001", "A"), ("000002", "B"), ("000003", "C"))]
+        table.load_data(rows, highlights={})
+        QTest.mouseClick(table.viewport(), Qt.MouseButton.LeftButton,
+                         pos=QPoint(table.columnViewportPosition(1) + 5, table.rowViewportPosition(0) + 5))
+        edit.setFocus()
+        QApplication.processEvents()
+        before = (table.currentIndex().row(), table.currentIndex().column(),
+                  sorted({i.row() for i in table.selectedIndexes()}))
+        cell = QRect(0, table.rowViewportPosition(2), table.columnWidth(COL_IDENTITY), table.rowHeight(2))
+        c = IdentityDelegate.status_button_rect(cell).center()
+        QTest.mousePress(table.viewport(), Qt.MouseButton.LeftButton, pos=c)
+        QTest.mouseMove(table.viewport(), c + QPoint(2, 1))
+        QTest.mouseRelease(table.viewport(), Qt.MouseButton.LeftButton, pos=c + QPoint(2, 1))
+        QApplication.processEvents()
+        after = (table.currentIndex().row(), table.currentIndex().column(),
+                 sorted({i.row() for i in table.selectedIndexes()}))
+        self.assertEqual(after, before)
+        self.assertIs(QApplication.focusWidget(), edit)
+        host.close()
+
     def test_button_rect_is_the_same_size_in_every_state(self):
         from PyQt6.QtCore import QRect
         from ui.delegates import IdentityDelegate, STATUS_BUTTON
