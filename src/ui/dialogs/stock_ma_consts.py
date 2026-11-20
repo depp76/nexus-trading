@@ -21,10 +21,11 @@ _TICK_PT = FONT_BODY          # issue #12: nothing on the chart below 9pt
 # takes the theme's QPushButton:checked accent.
 _SEG_H = BTN_H
 
-_PERIODS = [("1M", 1), ("3M", 3), ("6M", 6), ("1Y", 12), ("3Y", 36), ("All", None)]
+_PERIODS = [("1M", 1), ("3M", 3), ("6M", 6), ("1Y", 12), ("3Y", 36), ("5Y", 60), ("All", None)]
 # Visible period-button labels (docs/ui.md 8.11); the keys above stay internal.
 _PERIOD_LABELS = {"1M": tr("1개월", "1M"), "3M": tr("3개월", "3M"), "6M": tr("6개월", "6M"),
-                  "1Y": tr("1년", "1Y"), "3Y": tr("3년", "3Y"), "All": tr("전체", "All")}
+                  "1Y": tr("1년", "1Y"), "3Y": tr("3년", "3Y"), "5Y": tr("5년", "5Y"),
+                  "All": tr("전체", "All")}
 _DEFAULT_PERIOD = "1Y"
 # Figure margins before the first measurement (fractions, the old fixed
 # values); _fit_margins then sizes them in pixels from the labels.
