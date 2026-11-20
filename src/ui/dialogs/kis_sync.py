@@ -8,11 +8,13 @@ deposit read in the same call. 추가 saves the plan; 취소 saves nothing (the 
 KIS 조회 brings the same fills back)."""
 from __future__ import annotations
 
+import math
+
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLabel, QTableWidget, QTableWidgetItem, QVBoxLayout, QHeaderView
+from PyQt6.QtWidgets import QDialog, QLabel, QTableWidget, QTableWidgetItem, QVBoxLayout, QHeaderView
 
 from i18n import tr
-from ui.common import make_button, setup_table
+from ui.common import button_row, fit_to_screen, make_button, setup_table
 from ui.table_items import NumericItem
 
 _LEFT = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
@@ -46,22 +48,29 @@ class KisSyncDialog(QDialog):
         root = QVBoxLayout(self)
 
         n_new = sum(1 for r in plan.rows if r.applied)
-        head = QLabel(tr(f"예수금 {deposit:,.0f}원 · 새 체결 {n_new}건을 Trading History에 반영합니다.",
-                         f"Deposit {deposit:,.0f} KRW · {n_new} new fill(s) to apply to Trading History."))
+        # NaN: KIS sent no readable deposit (data.collectors.kis._deposit_of).
+        dep = (tr(f"예수금 {deposit:,.0f}원", f"Deposit {deposit:,.0f} KRW") if math.isfinite(deposit)
+               else tr("예수금 조회 불가", "Deposit unavailable"))
+        head = QLabel(tr(f"{dep} · 새 체결 {n_new}건을 Trading History에 반영합니다.",
+                         f"{dep} · {n_new} new fill(s) to apply to Trading History."))
         root.addWidget(head)
 
         self.table = setup_table(QTableWidget(len(plan.rows), len(COLUMNS)),
                                  empty_text=tr("새 체결이 없습니다", "No new fills"))
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setHorizontalHeaderLabels(COLUMNS)
-        for i, r in enumerate(plan.rows):
-            cells = [_item(r.date, _CENTER), _item(SIDE_LABELS.get(r.side, r.side), _CENTER), _item(r.name),
-                     _item(r.ticker, _CENTER), _num(r.qty), _num(r.price), _num(r.amount), _item(r.note)]
-            cells[-1].setToolTip(r.note)
-            for c, it in enumerate(cells):
-                if not r.applied:
-                    it.setForeground(self.palette().placeholderText())
-                self.table.setItem(i, c, it)
+        self.table.setUpdatesEnabled(False)
+        try:
+            for i, r in enumerate(plan.rows):
+                cells = [_item(r.date, _CENTER), _item(SIDE_LABELS.get(r.side, r.side), _CENTER), _item(r.name),
+                         _item(r.ticker, _CENTER), _num(r.qty), _num(r.price), _num(r.amount), _item(r.note)]
+                cells[-1].setToolTip(r.note)
+                for c, it in enumerate(cells):
+                    if not r.applied:
+                        it.setForeground(self.palette().placeholderText())
+                    self.table.setItem(i, c, it)
+        finally:
+            self.table.setUpdatesEnabled(True)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setStretchLastSection(True)
@@ -80,14 +89,12 @@ class KisSyncDialog(QDialog):
         note.setWordWrap(True)
         root.addWidget(note)
 
-        btns = QHBoxLayout()
-        btns.addStretch()
+        # 취소 → 추가, right-aligned, like every edit dialog (docs/ui.md 8.17).
         if plan.applicable:
             self.apply_btn = make_button(tr("추가", "Apply"), "primary", self.accept)
-            btns.addWidget(self.apply_btn)
-            btns.addWidget(make_button(tr("취소", "Cancel"), on_click=self.reject))
+            btns = button_row(make_button(tr("취소", "Cancel"), on_click=self.reject), self.apply_btn)
         else:
             self.apply_btn = None
-            btns.addWidget(make_button(tr("닫기", "Close"), on_click=self.reject))
+            btns = button_row(make_button(tr("닫기", "Close"), on_click=self.reject))
         root.addLayout(btns)
-        self.resize(900, 460)
+        fit_to_screen(self, 900, 460)

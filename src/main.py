@@ -482,6 +482,9 @@ class MainWindow(QMainWindow):
         if self._retired:
             event.accept()
             return
+        # A principal/deposit/withdrawal edit still in its 400 ms debounce
+        # (the process ends with os._exit; review_agy H17).
+        self.trading_history_tab.flush_pending_settings()
         self.stop_background_work()
         # Windows a language switch replaced that still wait for a worker.
         for w in list(getattr(QApplication.instance(), "_nexus_retiring", [])):

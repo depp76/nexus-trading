@@ -36,6 +36,11 @@ kis_imports  (KIS executed orders already in trades, ui/kis_sync.py; 2026-11-18)
   qty / amount REAL               – the order's cumulative fill already imported
   imported_at  TEXT
 
+kis_pending  (KIS sells a KIS 조회 skipped for lack of open quantity; 2026-11-20)
+  order_key    TEXT     PRIMARY KEY – as in kis_imports
+  order_date   TEXT               – YYYY-MM-DD, keeps the next query from starting later
+  noted_at     TEXT
+
 migrations  (one row per completed one-time JSON import)
   name         TEXT     PRIMARY KEY – "asset_records_json"
   done_at      TEXT
@@ -61,10 +66,10 @@ _ASSET_JSON     = TRADING_RECORD_FILE
 # ── Connection helper ──────────────────────────────────────────────────────────
 
 def _connect() -> sqlite3.Connection:
-    """Return a connection with row_factory and WAL mode enabled."""
+    """Return a connection with row_factory set. WAL mode is a persistent
+    property of the database file, set once by init_db() (review_agy M2)."""
     conn = sqlite3.connect(_DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 
@@ -74,6 +79,7 @@ def init_db() -> None:
     """Create the trades table if it doesn't exist, then run all migrations."""
     conn = _connect()
     try:
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS trades (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -126,6 +132,17 @@ def init_db() -> None:
                 imported_at TEXT DEFAULT (datetime('now','localtime'))
             )
         """)
+        # KIS sells an import skipped (not enough open quantity): they stay
+        # out of kis_imports, and this keeps the next query from starting
+        # after their day (review_codex.md 2026-11-20 #1). A row is removed
+        # when its order is imported.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS kis_pending (
+                order_key   TEXT PRIMARY KEY,
+                order_date  TEXT NOT NULL,
+                noted_at    TEXT DEFAULT (datetime('now','localtime'))
+            )
+        """)
         conn.commit()
         # Total Assets snapshots (trading_record.json), once
         _migrate_asset_records_json(conn)
@@ -169,8 +186,20 @@ def _migrate_asset_records_json(conn: sqlite3.Connection) -> None:
         return
     if not isinstance(records, list):
         return
-    rows = [(r["date"], float(r["total"]), 1 if r.get("manual", True) else 0)
-            for r in records if isinstance(r, dict) and r.get("date") is not None and r.get("total") is not None]
+    rows = []
+    for r in records:
+        if not isinstance(r, dict) or r.get("date") is None or r.get("total") is None:
+            continue
+        # One bad row is skipped, not allowed to stop the app's start (review_agy M2).
+        try:
+            total = float(r["total"])
+        except (TypeError, ValueError):
+            total = float("nan")
+        if not math.isfinite(total):
+            logger.warning("[trade_db] Skipped asset snapshot %r: total %r is not a finite number",
+                           r.get("date"), r.get("total"))
+            continue
+        rows.append((r["date"], total, 1 if r.get("manual", True) else 0))
     conn.executemany("INSERT OR IGNORE INTO asset_records (date, total, manual) VALUES (?, ?, ?)", rows)
     _mark_migration_done(conn, _ASSET_MIGRATION)
     conn.commit()
@@ -350,11 +379,25 @@ def upsert_trade(record: dict) -> str:
         conn.close()
 
 
-def upsert_trades(records: list[dict], kis_imports: list | None = None) -> list[str]:
+def _kis_import_rows(kis_imports: list, now: str) -> list:
+    """(order_key, qty, amount, now) rows, every number finite (review_agy M2);
+    raises ValueError like _values_tail."""
+    rows = []
+    for k, q, a in kis_imports:
+        q, a = float(q), float(a)
+        if not (math.isfinite(q) and math.isfinite(a)):
+            raise ValueError(f"kis_imports {k!r}: qty/amount must be finite numbers, got {q!r}/{a!r}")
+        rows.append((k, q, a, now))
+    return rows
+
+
+def upsert_trades(records: list[dict], kis_imports: list | None = None,
+                  kis_skipped: list | None = None) -> list[str]:
     """Insert or update many trades in a single connection/transaction.
     Returns the list of orig_keys that were saved, in input order.
     `kis_imports` ((order_key, qty, amount) rows) are recorded in the same
-    transaction (apply_kis_import).
+    transaction (apply_kis_import), and clear those orders' kis_pending rows;
+    `kis_skipped` ((order_key, order date) rows) are added to kis_pending.
 
     Rows with an explicit orig_key are batched through one executemany upsert (no
     collision possible — the caller already identified the row). Rows needing a
@@ -362,10 +405,11 @@ def upsert_trades(records: list[dict], kis_imports: list | None = None) -> list[
     collision retries against the DB itself instead of an in-memory snapshot that
     could go stale against a concurrent writer (see upsert_trade's TOCTOU note).
     """
-    if not records and not kis_imports:
+    if not records and not kis_imports and not kis_skipped:
         return []
 
     now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    import_rows = _kis_import_rows(kis_imports or [], now)
     keys: list[str] = [None] * len(records)
     keyed_rows = []
     unkeyed_indices = []
@@ -390,12 +434,17 @@ def upsert_trades(records: list[dict], kis_imports: list | None = None) -> list[
                 conn.executemany(_UPSERT_SQL, keyed_rows)
             for i, _record, co, buy_date, qty, values_tail in unkeyed_indices:
                 keys[i] = _insert_with_generated_key(conn, f"{co}_{buy_date}_{qty}", values_tail)
-            if kis_imports:
+            if import_rows:
                 conn.executemany(
                     "INSERT INTO kis_imports (order_key, qty, amount, imported_at) VALUES (?,?,?,?) "
                     "ON CONFLICT(order_key) DO UPDATE SET qty = excluded.qty, amount = excluded.amount, "
                     "imported_at = excluded.imported_at",
-                    [(k, float(q), float(a), now) for k, q, a in kis_imports])
+                    import_rows)
+                conn.executemany("DELETE FROM kis_pending WHERE order_key = ?", [(r[0],) for r in import_rows])
+            if kis_skipped:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO kis_pending (order_key, order_date, noted_at) VALUES (?,?,?)",
+                    [(k, d, now) for k, d in kis_skipped])
         for i, record, *_ in unkeyed_indices:
             record["orig_key"] = keys[i]
         return keys
@@ -403,10 +452,11 @@ def upsert_trades(records: list[dict], kis_imports: list | None = None) -> list[
         conn.close()
 
 
-def apply_kis_import(records: list[dict], kis_imports: list) -> list[str]:
-    """Save an import plan (ui/kis_sync.py): the trades and the imported-order
-    marks together, so a failure leaves neither."""
-    return upsert_trades(records, kis_imports)
+def apply_kis_import(records: list[dict], kis_imports: list, skipped: list | None = None) -> list[str]:
+    """Save an import plan (ui/kis_sync.py): the trades, the imported-order
+    marks and the skipped sells (ImportPlan.skipped) together, so a failure
+    leaves none of them."""
+    return upsert_trades(records, kis_imports, skipped)
 
 
 def load_kis_imports() -> dict:
@@ -424,6 +474,17 @@ def last_kis_import_date() -> str | None:
     conn = _connect()
     try:
         row = conn.execute("SELECT MAX(substr(order_key, 1, 10)) AS d FROM kis_imports").fetchone()
+        return row["d"] if row and row["d"] else None
+    finally:
+        conn.close()
+
+
+def earliest_kis_pending_date() -> str | None:
+    """The earliest order date (YYYY-MM-DD) of a skipped KIS sell still waiting
+    to be imported (kis_pending), or None."""
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT MIN(order_date) AS d FROM kis_pending").fetchone()
         return row["d"] if row and row["d"] else None
     finally:
         conn.close()
