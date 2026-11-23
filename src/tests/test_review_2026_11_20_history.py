@@ -126,6 +126,18 @@ class TestDepositUnreadable(_TabMixin, unittest.TestCase):
         self.assertEqual(self._balance([{"dnca_tot_amt": "0"}])["deposit"], 0.0)
         self.assertEqual(self._balance([{"dnca_tot_amt": "0", "prvs_rcdl_excc_amt": "1,500"}])["deposit"], 1500.0)
 
+    def test_collector_prefers_the_settled_deposit(self):
+        """D+2 (prvs_rcdl_excc_amt) over D+0 (dnca_tot_amt): a buy of the last
+        two days is already a held lot, so its cash must be gone from the
+        deposit (review 2026-11-23 #1)."""
+        # 1,000,000 cash, 300,000 bought yesterday (unsettled): D+0 still 1,000,000.
+        self.assertEqual(self._balance([{"dnca_tot_amt": "1,000,000",
+                                         "prvs_rcdl_excc_amt": "700,000"}])["deposit"], 700000.0)
+        self.assertEqual(self._balance([{"dnca_tot_amt": "1,000,000",
+                                         "prvs_rcdl_excc_amt": "0"}])["deposit"], 0.0)
+        self.assertEqual(self._balance([{"dnca_tot_amt": "1,000,000",
+                                         "prvs_rcdl_excc_amt": ""}])["deposit"], 1000000.0)
+
     def test_tab_keeps_the_existing_deposit(self):
         tab = self._tab()
         tab._deposit_edit.setText("500,000")

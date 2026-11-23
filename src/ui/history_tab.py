@@ -122,6 +122,10 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         # (review_codex.md C10; see _on_prices_ready).
         self._price_req_id = 0
         self._price_req: list = []
+        # True while the price fetch for freshly loaded open lots is running:
+        # until it answers the lots are valued at cost, so total_asset_updated
+        # is held back (review 2026-11-23 #2; see _refresh_summary).
+        self._valuation_pending = False
         self._deposit_thread = None
         self._kis_dialog = None          # the last KIS 조회 preview (tests drive it)
         self._row_data: list = []   # (kind, rec) per visible table row
@@ -542,6 +546,8 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
                 self._closed_data.append(rec)
             else:
                 self._open_data.append(rec)
+        # The fresh records carry no quotes yet (_start_price_fetch below).
+        self._valuation_pending = bool(self._open_data)
         self._refresh_summary()
         self._apply_filter()
         self._start_price_fetch()
@@ -669,10 +675,11 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             ticker = r.get("ticker", "")
             if ticker in prices_dict:
                 new_price = prices_dict[ticker]
-                if r.get("curr_price", 0.0) != new_price:
+                # A 0 is no quote; keep the last one (review 2026-11-23 #2).
+                if new_price and new_price > 0 and r.get("curr_price", 0.0) != new_price:
                     r["curr_price"] = new_price
                     updated = True
-                    
+
         # Update recently closed positions
         for r in self._closed_data:
             if r.get("curr_days", 999) <= 30:
@@ -746,6 +753,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
             names, tickers, markets, buy_prices, qtys, buy_amts, is_open, skip_fetch,
             request_id=self._price_req_id,
         ), '_price_thread')
+        self._valuation_pending = bool(self._open_data)
         thread.prices_ready.connect(self._on_prices_ready)
         thread.status_message.connect(self.status_message.emit)
         self._path_label.setText(tr("현재가 불러오는 중...", "Loading current prices..."))
@@ -788,7 +796,10 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
                 rec["company"] = res.get("name")
             curr_price = res.get("curr_price", 0.0)
             # Open: curr_price only, P/L is calculated in _refresh_summary.
-            rec["curr_price"] = curr_price
+            # A failed quote (0) keeps the price the record already has
+            # instead of dropping the lot back to cost (review 2026-11-23 #2).
+            if curr_price > 0:
+                rec["curr_price"] = curr_price
             if is_closed and curr_price > 0:
                 # col 17 "Position P/L(%)" = change of the current price vs the
                 # sell price (opportunity cost after selling)
@@ -800,9 +811,15 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
                     rec[key] = res[key]
             updated = True
 
+        # This run answered (even an empty, failed one): the summary may send
+        # the total on, a lot still without a quote at cost as before.
+        released = self._valuation_pending
+        self._valuation_pending = False
         if updated:
             self._refresh_summary()
             self._apply_filter()
+        elif released:
+            self._refresh_summary()
 
     # ---Input handler ---
     def _flush_settings(self):
@@ -955,7 +972,11 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         # weekly-record autofill, which track the account's value as if
         # nothing had been withdrawn, so a withdrawal is not a weekly loss.
         # (2026-09-20 to 2026-10-25 this sent live NAV without withdrawals.)
-        self.total_asset_updated.emit(cumulative_asset)
+        # Not while the open lots still wait for their first quotes: that
+        # figure is at cost and would be auto-filled into a weekly record
+        # (review 2026-11-23 #2); Total Assets keeps the last real one.
+        if not self._valuation_pending:
+            self.total_asset_updated.emit(cumulative_asset)
 
         def _pos_color(v): return LOSS if v < 0 else PROFIT
 

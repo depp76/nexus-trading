@@ -413,20 +413,21 @@ def _deposit_of(summary) -> float:
     """The deposit from an inquire-balance output2 row; NaN when the row has no
     readable deposit field at all, so the caller can keep the value it has
     instead of storing a 0 KIS never reported (review_codex.md 2026-11-20 #3).
-    A real "0" is returned as 0.0."""
+    A real "0" is returned as 0.0.
+
+    The D+2 deposit (prvs_rcdl_excc_amt) comes first, dnca_tot_amt (D+0) only
+    when it is missing: KR trades settle two business days later, so the D+0
+    figure still holds the cash of a buy from the last two days (and lacks a
+    sell's proceeds) while Trading History already lists the lot as held /
+    sold -- the total assets counted a recent buy twice and dropped a recent
+    sell (review 2026-11-23 #1)."""
     if not isinstance(summary, dict):
         return float("nan")
-    primary = _to_float_or_none(summary.get("dnca_tot_amt"))
-    secondary = _to_float_or_none(summary.get("prvs_rcdl_excc_amt"))
-    if primary is None and secondary is None:
-        return float("nan")
-    if primary is None:
-        return secondary
-    # Mirrors the old Kiwoom flow's rule: don't trust a "0" in the primary deposit
-    # field when a secondary field shows a real balance.
-    if primary == 0.0 and secondary is not None and secondary > 0.0:
-        return secondary
-    return primary
+    settled = _to_float_or_none(summary.get("prvs_rcdl_excc_amt"))
+    if settled is not None:
+        return settled
+    current = _to_float_or_none(summary.get("dnca_tot_amt"))
+    return current if current is not None else float("nan")
 
 
 def fetch_account_balance() -> dict:
