@@ -550,6 +550,61 @@ def parse_execution(row: dict) -> dict | None:
     }
 
 
+_TRADE_PROFIT_MAX_PAGES = 50
+
+
+def parse_trade_cost(row: dict) -> dict | None:
+    """One inquire-period-trade-profit output1 row -> {"date", "ticker", "buy_amount",
+    "sell_amount", "fee", "tax"} (the trade amounts before costs, the commission and
+    the taxes the account was charged); None for a row with no date, ticker or trade."""
+    trad_dt = str(row.get("trad_dt", "")).strip()
+    ticker = str(row.get("pdno", "")).strip()
+    buy, sell = _to_float(row.get("buy_amt")), _to_float(row.get("sll_amt"))
+    if len(trad_dt) != 8 or not ticker or (buy <= 0 and sell <= 0):
+        return None
+    return {"date": f"{trad_dt[:4]}-{trad_dt[4:6]}-{trad_dt[6:]}", "ticker": ticker,
+            "buy_amount": buy, "sell_amount": sell,
+            "fee": _to_float(row.get("fee")), "tax": _to_float(row.get("tl_tax"))}
+
+
+def fetch_kis_trade_costs(start, end=None, today=None) -> list:
+    """The commission and taxes KIS charged per trade day and stock between
+    `start` and `end` (dates, inclusive; end defaults to today), from
+    기간별매매손익현황조회 (inquire-period-trade-profit, TTTC8715R), each row parsed
+    by parse_trade_cost. inquire-daily-ccld carries no fee or tax, so Trading
+    History's KIS import takes them from here (docs/ui.md 8.28). Raises a
+    KIS_ERRORS member on failure."""
+    today = today or datetime.now(_KST).date()
+    end = min(end or today, today)
+    if start > end:
+        return []
+    cano, prdt = _get_kis_account()
+    rows: list = []
+    fk = nk = ""
+    for _page in range(_TRADE_PROFIT_MAX_PAGES):
+        params = {
+            "CANO": cano, "ACNT_PRDT_CD": prdt,
+            "SORT_DVSN": "01",            # oldest first
+            "INQR_STRT_DT": start.strftime("%Y%m%d"), "INQR_END_DT": end.strftime("%Y%m%d"),
+            "CBLC_DVSN": "00", "PDNO": "",
+            "CTX_AREA_FK100": fk, "CTX_AREA_NK100": nk,
+        }
+        r = _kis_get("/uapi/domestic-stock/v1/trading/inquire-period-trade-profit", "TTTC8715R", params,
+                     timeout=10, tr_cont="N" if (fk or nk) else "")
+        r.raise_for_status()
+        d = r.json()
+        if d.get("rt_cd") != "0":
+            raise RuntimeError(f"[inquire-period-trade-profit] KIS API error: {d.get('msg1', d)}")
+        rows.extend(d.get("output1") or [])
+        if r.headers.get("tr_cont") not in ("M", "F"):
+            break
+        fk, nk = d.get("ctx_area_fk100", ""), d.get("ctx_area_nk100", "")
+        time.sleep(0.1)
+    else:
+        logger.warning("[inquire-period-trade-profit] stopped after %d pages", _TRADE_PROFIT_MAX_PAGES)
+    return [c for c in (parse_trade_cost(r) for r in rows) if c is not None]
+
+
 def fetch_kis_executions(start, end=None, today=None) -> list:
     """The account's executed orders between `start` and `end` (dates, inclusive;
     end defaults to today), oldest first, each parsed by parse_execution. Splits

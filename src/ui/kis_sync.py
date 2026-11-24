@@ -10,8 +10,10 @@ Rules:
   across days). `imported` holds how much of each order is already in the
   table (cumulative qty and amount), so a re-run, or an order that filled more
   after the last run, only brings in the difference.
-- Fills are summed per (date, ticker, side): several orders, or one order filled
-  in pieces, on one day become one row at the volume-weighted price.
+- Fills are summed per (date, ticker, side, price): orders at the same price on
+  one day become one row, a different price is its own row (user direction
+  2026-11-24: every trade is recorded on its own, never averaged; one order
+  filled at several prices comes as one row at KIS's average for that order).
 - A buy is a new open lot. A sell closes open lots of that ticker first in, first
   out (oldest buy date first); a lot sold only in part is split like a manual
   partial sell (`TradingHistoryTab._split_partial_sell`): the sold part becomes
@@ -27,7 +29,17 @@ Rules:
 - Lots are matched first in, first out at every sell: a buy imported in the
   same run that is older than a lot already in the table is closed first
   (review_codex.md 2026-11-20 #2).
-- Amounts are price x quantity before fees and taxes, as in a manual entry.
+- Amounts include the real fees and taxes (user direction 2026-11-24), as the
+  manual records always had: buy amount = price x qty + fee + tax, sell amount =
+  price x qty - fee - tax; the prices stay the execution prices. The costs come
+  from KIS's trade-profit query (`costs`, data.collectors.kis.parse_trade_cost
+  rows), summed per (date, ticker, side) and shared over that day's rows by
+  trade amount (a row holding both sides splits its fee by amount and gives its
+  tax to the sell). A (date, ticker, side) whose costs KIS has not reported yet,
+  or reports for less than the executed amount, is held back like a skipped
+  sell (not marked imported, kept pending) together with every later fill of
+  that ticker in the run, so the lots stay in order; a later run brings it in.
+  `costs=None` imports without costs (only callers that have none, e.g. tests).
 """
 from __future__ import annotations
 
@@ -98,16 +110,48 @@ def _new_deltas(executions: list, imported: dict) -> list:
 
 
 def _group_fills(deltas: list) -> list:
-    """Sum the deltas per (date, ticker, side); buys before sells on a day."""
+    """Sum the deltas per (date, ticker, side, price); buys before sells on a
+    day, then by ticker and price."""
     groups: dict = {}
     for e, dq, da, key in deltas:
-        g = groups.setdefault((e["date"], e["ticker"], e["side"]),
+        px = round(float(e["price"]), 4)
+        g = groups.setdefault((e["date"], e["ticker"], e["side"], px),
                               {"date": e["date"], "ticker": e["ticker"], "side": e["side"], "name": e["name"],
-                               "qty": 0.0, "amount": 0.0, "imports": []})
+                               "px": px, "qty": 0.0, "amount": 0.0, "imports": []})
         g["qty"] += dq
         g["amount"] += da
         g["imports"].append((key, e["qty"], e["amount"]))
-    return sorted(groups.values(), key=lambda g: (g["date"], 0 if g["side"] == "buy" else 1, g["ticker"]))
+    return sorted(groups.values(),
+                  key=lambda g: (g["date"], 0 if g["side"] == "buy" else 1, g["ticker"], g["px"]))
+
+
+def _side_costs(costs: list) -> dict:
+    """(date, ticker, side) -> [trade amount, fee, tax] summed over KIS cost rows."""
+    out: dict = {}
+    for c in costs:
+        buy, sell = c.get("buy_amount", 0.0), c.get("sell_amount", 0.0)
+        total = buy + sell
+        if total <= 0:
+            continue
+        for side, amt in (("buy", buy), ("sell", sell)):
+            if amt <= 0:
+                continue
+            acc = out.setdefault((c["date"], c["ticker"], side), [0.0, 0.0, 0.0])
+            acc[0] += amt
+            acc[1] += c.get("fee", 0.0) * amt / total
+            if side == "sell" or sell <= 0:          # taxes belong to the sell
+                acc[2] += c.get("tax", 0.0)
+    return out
+
+
+def _executed_totals(executions: list) -> dict:
+    """(date, ticker, side) -> the whole day's executed amount (every order's
+    cumulative fill, imported before or not), to compare with KIS's costs."""
+    out: dict = {}
+    for e in _dedupe_orders(executions):
+        k = (e["date"], e["ticker"], e["side"])
+        out[k] = out.get(k, 0.0) + e["amount"]
+    return out
 
 
 def _blank_lot(company: str, market: str, ticker: str, date: str, price: float, qty: float, amount: float) -> dict:
@@ -126,14 +170,16 @@ def _is_domestic_lot(lot: dict) -> bool:
 
 
 def plan_kis_import(executions: list, imported: dict, open_lots: list, markets: dict | None = None,
-                    holdings: list | None = None, holdings_complete: bool = True) -> ImportPlan:
+                    holdings: list | None = None, holdings_complete: bool = True,
+                    costs: list | None = None) -> ImportPlan:
     """The plan for `executions` (data.collectors.kis.parse_execution dicts) against
     the table's open lots. `imported`: order_key -> (qty, amount) already saved;
     `markets`: ticker -> market for new lots; `holdings`: KIS holdings
     ({"ticker", "name", "qty"}) to cross-check the open quantity after the plan,
     every domestic ticker the table will hold included; `holdings_complete`
     False (balance paging cut off) withholds the verdict for tickers missing
-    from `holdings`. Never changes its inputs."""
+    from `holdings`; `costs`: KIS fee/tax rows (see the module rules; None =
+    amounts without costs). Never changes its inputs."""
     markets = markets or {}
     plan = ImportPlan()
     # Working copies of the open lots, per ticker, oldest buy first (stable for ties).
@@ -145,9 +191,26 @@ def plan_kis_import(executions: list, imported: dict, open_lots: list, markets: 
     touched: dict = {}          # id(working lot) -> working lot, to save
     new_lots: list = []
 
+    side_costs = _side_costs(costs) if costs is not None else None
+    executed = _executed_totals(executions) if costs is not None else {}
+    held_back: set = set()      # tickers with a fill waiting for its costs in this run
+
     for g in _group_fills(_new_deltas(executions, imported)):
-        qty, amount = g["qty"], g["amount"]
-        price = amount / qty
+        qty, gross = g["qty"], g["amount"]
+        price = gross / qty
+        amount = gross
+        if side_costs is not None:
+            k3 = (g["date"], g["ticker"], g["side"])
+            sc = side_costs.get(k3)
+            if g["ticker"] in held_back or sc is None or sc[0] + 0.5 < executed.get(k3, 0.0):
+                held_back.add(g["ticker"])
+                plan.rows.append(PreviewRow(g["date"], g["side"], g["ticker"], g["name"], qty, price, gross,
+                                            tr("보류: KIS 수수료·세금 정산 전", "Held: KIS fees/taxes not settled yet"),
+                                            False))
+                plan.skipped.extend((key, g["date"]) for key, _q, _a in g["imports"])
+                continue
+            cost = (sc[1] + sc[2]) * gross / sc[0]
+            amount = gross + cost if g["side"] == "buy" else gross - cost
         if g["side"] == "buy":
             lot = _blank_lot(g["name"], markets.get(g["ticker"], ""), g["ticker"], g["date"], price, qty, amount)
             lots.setdefault(g["ticker"], []).append(lot)
@@ -194,7 +257,7 @@ def plan_kis_import(executions: list, imported: dict, open_lots: list, markets: 
                 lst.insert(at + 1, rest)
                 touched[id(rest)] = rest
                 lot["qty"], lot["buy_amount"] = take, sold_cost
-            lot.update(sell_date=g["date"], sell_price=price, sell_qty=take, sell_amount=price * take)
+            lot.update(sell_date=g["date"], sell_price=price, sell_qty=take, sell_amount=amount * take / qty)
             touched[id(lot)] = lot
             closed_parts.append(tr(f"{lot.get('buy_date', '')} 매수분 {_fmt_qty(take)}주",
                                    f"{_fmt_qty(take)} bought {lot.get('buy_date', '')}"))

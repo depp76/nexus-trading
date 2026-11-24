@@ -500,6 +500,8 @@ class MainWindow(QMainWindow):
 
     def _on_global_auto_timer(self):
         self.universe_tab.auto_update_tick()
+        # Unattended KIS execution import (rate-limited inside; docs/ui.md 8.28).
+        self.trading_history_tab.auto_kis_sync_tick()
 
     def _on_thread_status_message(self, msg: str):
         """Show a short-lived progress message from a background fetch thread

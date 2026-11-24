@@ -81,9 +81,11 @@ class KisSyncDialog(QDialog):
         self.warn_lbl.setVisible(bool(plan.warnings))
         root.addWidget(self.warn_lbl)
 
-        note = QLabel(tr("금액은 가격×수량(수수료·세금 제외). 매도는 같은 종목의 먼저 산 보유분부터 청산합니다. "
+        note = QLabel(tr("금액은 KIS가 정산한 수수료·세금 포함(매수는 더하고 매도는 뺌), 같은 날도 가격이 다르면 따로 적습니다. "
+                         "매도는 같은 종목의 먼저 산 보유분부터 청산합니다. "
                          "취소하면 아무것도 저장하지 않고, 다음 KIS 조회에서 다시 보입니다.",
-                         "Amounts are price x qty (before fees and taxes). A sell closes the oldest open lots "
+                         "Amounts include the fees and taxes KIS charged (added to buys, taken off sells); "
+                         "a different price is its own row even on the same day. A sell closes the oldest open lots "
                          "of that stock first. Cancel saves nothing; the fills show again on the next fetch."))
         note.setObjectName("faint")
         note.setWordWrap(True)

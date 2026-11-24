@@ -8,6 +8,7 @@ from i18n import tr
 import logging
 import math
 import sqlite3
+import time
 import datetime as _dt
 
 from PyQt6.QtWidgets import (
@@ -82,6 +83,9 @@ def _toolbar_hbox() -> QHBoxLayout:
 _TITLE = "Trading History"
 # KIS 조회 with nothing imported yet: how far back to ask for executions (the recent TR covers ~3 months).
 _KIS_FIRST_LOOKBACK_DAYS = 89
+# Unattended KIS sync (user direction 2026-11-24, docs/ui.md 8.28): at most this
+# often, on the global auto-update tick, executions are imported without the preview.
+_KIS_AUTO_INTERVAL_S = 30 * 60
 # Toolbar cycle buttons (user direction 2026-11-16, like the Universe
 # 종목(전체) button): (value, label) in click order, the first is the default
 # and shows unchecked. The values stay what the filter code compares.
@@ -128,6 +132,8 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._valuation_pending = False
         self._deposit_thread = None
         self._kis_dialog = None          # the last KIS 조회 preview (tests drive it)
+        self._kis_preview_open = False   # a manual preview is waiting: the auto sync stays out
+        self._kis_auto_last = None       # time.monotonic() of the last unattended sync start
         self._row_data: list = []   # (kind, rec) per visible table row
         self._settings = QSettings("PortfolioManagement", "PortfolioManagement")
         self._settings_save_timer = QTimer(self)
@@ -894,12 +900,80 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._deposit_thread.finished.connect(self._on_kis_account_fetched)
         self._deposit_thread.start()
 
+    def auto_kis_sync_tick(self):
+        """Global auto-update tick (MainWindow): import new KIS executions without
+        the preview, at most every _KIS_AUTO_INTERVAL_S (user direction
+        2026-11-24, docs/ui.md 8.28). Never while a KIS query runs or a manual
+        preview is open; the Deposit field is left alone (KIS 조회 fills it)."""
+        if self._kis_preview_open:
+            return
+        if self._deposit_thread is not None and self._deposit_thread.isRunning():
+            return
+        now = time.monotonic()
+        if self._kis_auto_last is not None and now - self._kis_auto_last < _KIS_AUTO_INTERVAL_S:
+            return
+        self._kis_auto_last = now
+        self._fetch_dep_btn.setEnabled(False)
+        self._track_thread(KisAccountThread(self._kis_query_start(), auto=True), '_deposit_thread')
+        self._deposit_thread.finished.connect(self._on_kis_account_fetched)
+        self._deposit_thread.start()
+
+    def _plan_from_result(self, result: dict):
+        """The import plan for a KisAccountThread result; raises sqlite3.Error."""
+        imported = trade_db.load_kis_imports()
+        # holdings_complete: False when the balance paging was cut off
+        # (data.collectors.kis.fetch_account_balance); a result without the
+        # key counts as complete.
+        return plan_kis_import(result["executions"], imported, self._open_data, result.get("markets"),
+                               result.get("holdings"), result.get("holdings_complete", True),
+                               costs=result.get("costs"))     # KisAccountThread always sends it
+
+    def _on_kis_auto_fetched(self, result: dict, err: str):
+        """The unattended sync's reply: save the plan straight away, report on the
+        status bar and in the log (no modal: nobody may be watching)."""
+        if err or result.get("exec_error"):
+            logger.warning("KIS auto sync failed: %s", err or result.get("exec_error"))
+            self.status_message.emit(tr("KIS 자동 반영 실패 (다음 주기에 다시 시도)",
+                                        "KIS auto sync failed (retrying next cycle)"))
+            return
+        try:
+            plan = self._plan_from_result(result)
+        except sqlite3.Error:
+            logger.error("KIS auto sync: kis_imports read failed", exc_info=True)
+            return
+        for w in plan.warnings:
+            logger.warning("KIS auto sync: %s", w)
+        held = sum(1 for r in plan.rows if not r.applied)
+        if not plan.applicable:
+            if held:
+                self.status_message.emit(tr(f"KIS 자동 반영: 보류 {held}건 (다음 주기에 다시 확인)",
+                                            f"KIS auto sync: {held} held (checked again next cycle)"))
+            return
+        try:
+            trade_db.apply_kis_import(plan.records, plan.imports, plan.skipped)
+        except (sqlite3.Error, ValueError):
+            logger.error("KIS auto sync save failed", exc_info=True)
+            self.status_message.emit(tr("KIS 자동 반영: 저장 실패", "KIS auto sync: save failed"))
+            return
+        n = sum(1 for r in plan.rows if r.applied)
+        logger.info("KIS auto sync: %d execution row(s) applied, %d held", n, held)
+        self.load_from_db()
+        msg = tr(f"KIS 자동 반영: 체결 {n}건", f"KIS auto sync: {n} execution(s) applied")
+        if held:
+            msg += tr(f" · 보류 {held}건", f" · {held} held")
+        if plan.warnings:
+            msg += tr(f" · 경고 {len(plan.warnings)}건 (app.log)", f" · {len(plan.warnings)} warning(s) (app.log)")
+        self.status_message.emit(msg)
+
     def _on_kis_account_fetched(self, result: dict, err: str):
         # A reply queued by a thread retired since (review_agy H6) is dropped.
         sender = self.sender()
         if sender is not None and sender is not self._deposit_thread:
             return
         self._fetch_dep_btn.setEnabled(True)
+        if result.get("auto"):
+            self._on_kis_auto_fetched(result, err)
+            return
         if err:
             self.status_message.emit(tr("KIS 조회 실패", "KIS fetch failed"))
             QMessageBox.critical(self, _TITLE, tr(f"KIS 계좌를 조회하지 못했습니다:\n{err}",
@@ -925,22 +999,22 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
                 f"The executions could not be fetched:\n{result['exec_error']}"))
             return
         try:
-            imported = trade_db.load_kis_imports()
+            plan = self._plan_from_result(result)
         except sqlite3.Error as e:
             logger.error("kis_imports read failed", exc_info=True)
             QMessageBox.critical(self, _TITLE, tr(f"DB를 읽지 못했습니다:\n{e}", f"Could not read the DB:\n{e}"))
             return
-        # holdings_complete: False when the balance paging was cut off
-        # (data.collectors.kis.fetch_account_balance); a result without the
-        # key counts as complete.
-        plan = plan_kis_import(result["executions"], imported, self._open_data, result.get("markets"),
-                               result.get("holdings"), result.get("holdings_complete", True))
         if not plan.rows and not plan.warnings:
             self.status_message.emit(deposit_msg + tr(" · 새 체결 없음", " · no new executions"))
             return
         dlg = KisSyncDialog(plan, val, self)
         self._kis_dialog = dlg               # tests drive it
-        if dlg.exec() != QDialog.DialogCode.Accepted or not plan.applicable:
+        self._kis_preview_open = True        # the auto sync must not import the same orders meanwhile
+        try:
+            accepted = dlg.exec() == QDialog.DialogCode.Accepted
+        finally:
+            self._kis_preview_open = False
+        if not accepted or not plan.applicable:
             self.status_message.emit(deposit_msg)
             return
         try:

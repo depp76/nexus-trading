@@ -901,30 +901,36 @@ class KisAccountThread(QThread):
     (a date), plus the market of every traded ticker from the KRX listing.
 
     finished(result, error): error is "" when the balance came back; result is
-    {"deposit", "holdings", "holdings_complete", "executions", "markets", "exec_error"} -- a failed
-    execution query leaves the deposit usable and says why in exec_error.
+    {"deposit", "holdings", "holdings_complete", "executions", "costs", "markets", "exec_error", "auto"}
+    -- a failed execution or trade-cost query leaves the deposit usable and says
+    why in exec_error; `costs` are the fees and taxes KIS charged
+    (data.collectors.kis.fetch_kis_trade_costs); `auto` echoes the constructor
+    flag (the tab's unattended sync, docs/ui.md 8.28).
     (Replaces AccountDepositThread, which fetched the deposit alone; that REST call
     used to run on the UI thread, roadmap 6-1c.)"""
     finished = pyqtSignal(object, str)
 
-    def __init__(self, start, parent=None):
+    def __init__(self, start, parent=None, auto: bool = False):
         super().__init__(parent)
         self._start = start
+        self._auto = auto
 
     def run(self):
-        from data_fetcher import fetch_account_balance, fetch_kis_executions
+        from data_fetcher import fetch_account_balance, fetch_kis_executions, fetch_kis_trade_costs
         try:
             bal = fetch_account_balance()
         except Exception as e:
             # boundary: the thread must always emit finished; the error text is shown to the user.
             logger.warning("KIS account balance fetch failed", exc_info=True)
-            self.finished.emit({}, str(e))
+            self.finished.emit({"auto": self._auto}, str(e))
             return
         result = {"deposit": float(bal["deposit"]), "holdings": bal["holdings"],
                   "holdings_complete": bal.get("holdings_complete", True), "executions": [],
-                  "markets": {}, "exec_error": ""}
+                  "costs": [], "markets": {}, "exec_error": "", "auto": self._auto}
         try:
             result["executions"] = fetch_kis_executions(self._start)
+            if result["executions"]:
+                result["costs"] = fetch_kis_trade_costs(self._start)
         except Exception as e:
             # boundary: the deposit is still worth showing when the execution query fails.
             logger.warning("KIS executions fetch failed", exc_info=True)
