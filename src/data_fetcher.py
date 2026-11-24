@@ -42,6 +42,7 @@ from data.collectors.yahoo import (
 from data.collectors.kis import (
     fetch_account_balance,
     fetch_kis_executions,
+    fetch_kis_trade_costs,
     fetch_investor_trend,
     fetch_kis_realtime_prices,
 )

@@ -31,18 +31,19 @@ def lot(key, ticker, buy_date, qty, price, name=None):
 
 class TestPlan(unittest.TestCase):
 
-    def test_buy_becomes_an_open_lot_with_the_weighted_price(self):
+    def test_same_day_buys_at_one_price_share_a_row_other_prices_get_their_own(self):
+        # User direction 2026-11-24: every trade on its own, never averaged.
         plan = plan_kis_import([ex("2026-11-20", "1", "005930", "buy", 10, 100.0),
-                                ex("2026-11-20", "2", "005930", "buy", 30, 104.0)], {}, [], {"005930": "KOSPI"})
-        self.assertEqual(len(plan.records), 1)                     # one row per day / stock / side
-        r = plan.records[0]
+                                ex("2026-11-20", "2", "005930", "buy", 30, 104.0),
+                                ex("2026-11-20", "3", "005930", "buy", 5, 100.0)], {}, [], {"005930": "KOSPI"})
+        rows = sorted(plan.records, key=lambda r: r["buy_price"])
+        self.assertEqual([(r["buy_price"], r["qty"], r["buy_amount"]) for r in rows],
+                         [(100.0, 15.0, 1500.0), (104.0, 30.0, 3120.0)])
+        r = rows[0]
         self.assertIsNone(r["orig_key"])
-        self.assertEqual((r["ticker"], r["market"], r["buy_date"], r["qty"], r["buy_amount"]),
-                         ("005930", "KOSPI", "2026-11-20", 40.0, 10 * 100.0 + 30 * 104.0))
-        self.assertAlmostEqual(r["buy_price"], 103.0)
-        self.assertEqual(r["sell_date"], "")
-        self.assertEqual(sorted(k for k, _q, _a in plan.imports), ["2026-11-20:1", "2026-11-20:2"])
-        self.assertEqual([(row.side, row.qty) for row in plan.rows], [("buy", 40.0)])
+        self.assertEqual((r["ticker"], r["market"], r["buy_date"], r["sell_date"]), ("005930", "KOSPI", "2026-11-20", ""))
+        self.assertEqual(sorted(k for k, _q, _a in plan.imports), ["2026-11-20:1", "2026-11-20:2", "2026-11-20:3"])
+        self.assertEqual([(row.side, row.qty) for row in plan.rows], [("buy", 15.0), ("buy", 30.0)])
 
     def test_sell_closes_the_oldest_lots_first_and_splits_the_last(self):
         lots = [lot("b", "000660", "2026-10-02", 5, 200.0), lot("a", "000660", "2026-10-01", 10, 100.0)]
@@ -87,6 +88,53 @@ class TestPlan(unittest.TestCase):
         self.assertEqual((delta.records[0]["qty"], delta.records[0]["buy_amount"]), (5.0, 550.0))
         self.assertEqual(delta.imports, [(order_key(grown[0]), 15.0, 1550.0)])
 
+    def test_costs_go_into_the_amounts_like_the_kiwoom_records(self):
+        # Kiwoom 2026-02-09 Samsung sells (verified against the statement on
+        # 2026-11-24): 171 @167,600 and 269 @167,700 close five lots first in,
+        # first out; one fee (10,690) and tax (147,539) for the day.
+        lots = [lot("a", "005930", "2025-10-13", 55, 91600.0), lot("b", "005930", "2025-11-11", 50, 104600.0),
+                lot("c", "005930", "2025-12-09", 85, 108700.0), lot("d", "005930", "2025-12-30", 250, 118900.0)]
+        execs = [ex("2026-02-09", "1", "005930", "sell", 171, 167600.0),
+                 ex("2026-02-09", "2", "005930", "sell", 269, 167700.0)]
+        costs = [{"date": "2026-02-09", "ticker": "005930", "buy_amount": 0.0,
+                  "sell_amount": 171 * 167600.0 + 269 * 167700.0, "fee": 10690.0, "tax": 147539.0}]
+        plan = plan_kis_import(execs, {}, lots, costs=costs)
+        closed = [r for r in plan.records if r["sell_date"]]
+        self.assertAlmostEqual(sum(r["sell_amount"] for r in closed), 73_612_671.0, places=4)
+        self.assertEqual(sorted((r["buy_date"], r["sell_price"], r["sell_qty"]) for r in closed),
+                         [("2025-10-13", 167600.0, 55.0), ("2025-11-11", 167600.0, 50.0),
+                          ("2025-12-09", 167600.0, 66.0), ("2025-12-09", 167700.0, 19.0),
+                          ("2025-12-30", 167700.0, 250.0)])
+        self.assertEqual([(row.price, row.applied) for row in plan.rows], [(167600.0, True), (167700.0, True)])
+
+    def test_a_buy_gets_its_fee_added_and_a_shared_row_splits_by_amount(self):
+        execs = [ex("2026-11-20", "1", "005930", "buy", 10, 1000.0), ex("2026-11-20", "2", "005930", "sell", 10, 1000.0)]
+        costs = [{"date": "2026-11-20", "ticker": "005930", "buy_amount": 10000.0, "sell_amount": 10000.0,
+                  "fee": 4.0, "tax": 20.0}]
+        r = plan_kis_import(execs, {}, [], costs=costs).records[0]
+        self.assertEqual((r["buy_amount"], r["sell_amount"]), (10002.0, 10000.0 - 2.0 - 20.0))
+        self.assertEqual((r["buy_price"], r["sell_price"]), (1000.0, 1000.0))
+
+    def test_fills_without_costs_yet_are_held_with_the_later_fills_of_that_stock(self):
+        execs = [ex("2026-11-20", "1", "005930", "buy", 10, 100.0), ex("2026-11-21", "2", "005930", "sell", 10, 110.0),
+                 ex("2026-11-20", "3", "000660", "buy", 1, 500.0)]
+        costs = [{"date": "2026-11-21", "ticker": "005930", "buy_amount": 0.0, "sell_amount": 1100.0, "fee": 1.0, "tax": 2.0},
+                 {"date": "2026-11-20", "ticker": "000660", "buy_amount": 500.0, "sell_amount": 0.0, "fee": 1.0, "tax": 0.0}]
+        plan = plan_kis_import(execs, {}, [], costs=costs)
+        self.assertEqual([(r["ticker"], r["buy_amount"]) for r in plan.records], [("000660", 501.0)])
+        self.assertEqual([k for k, _q, _a in plan.imports], ["2026-11-20:3"])
+        self.assertEqual(sorted(k for k, _d in plan.skipped), ["2026-11-20:1", "2026-11-21:2"])
+        held = [row for row in plan.rows if not row.applied]
+        self.assertEqual(len(held), 2)
+        self.assertTrue(all(row.note.startswith("보류") for row in held))
+
+    def test_costs_reported_for_less_than_the_fills_are_held(self):
+        execs = [ex("2026-11-20", "1", "005930", "buy", 10, 100.0)]
+        partial = [{"date": "2026-11-20", "ticker": "005930", "buy_amount": 600.0, "sell_amount": 0.0, "fee": 1.0, "tax": 0.0}]
+        self.assertFalse(plan_kis_import(execs, {}, [], costs=partial).applicable)
+        full = [dict(partial[0], buy_amount=1000.0)]
+        self.assertEqual(plan_kis_import(execs, {}, [], costs=full).records[0]["buy_amount"], 1001.0)
+
     def test_holdings_mismatch_is_reported(self):
         plan = plan_kis_import([ex("2026-11-20", "1", "005930", "buy", 10, 100.0)], {}, [],
                                holdings=[{"ticker": "005930", "name": "삼성전자", "qty": 12.0}])
@@ -108,6 +156,15 @@ class TestKisCollector(unittest.TestCase):
         self.assertEqual(kis.parse_execution(dict(row, sll_buy_dvsn_cd="01"))["side"], "sell")
         self.assertIsNone(kis.parse_execution(dict(row, tot_ccld_qty="0")))       # unfilled / cancelled
         self.assertIsNone(kis.parse_execution(dict(row, sll_buy_dvsn_cd="")))
+
+    def test_parse_trade_cost(self):
+        row = {"trad_dt": "20261120", "pdno": "005930", "buy_amt": "0", "sll_amt": "1,000,000",
+               "fee": "145", "tl_tax": "2000"}
+        self.assertEqual(kis.parse_trade_cost(row),
+                         {"date": "2026-11-20", "ticker": "005930", "buy_amount": 0.0, "sell_amount": 1_000_000.0,
+                          "fee": 145.0, "tax": 2000.0})
+        self.assertIsNone(kis.parse_trade_cost(dict(row, sll_amt="0")))
+        self.assertIsNone(kis.parse_trade_cost(dict(row, trad_dt="")))
 
     def test_range_split_over_the_two_trs(self):
         today = dt.date(2026, 11, 18)
@@ -191,6 +248,39 @@ class TestSaveAndTab(TempDBMixin, unittest.TestCase):
             tab._on_kis_account_fetched(dict(self._result([], deposit=5.0), exec_error="boom"), "")
         self.assertEqual(tab._deposit_edit.text(), "5")
         self.assertIn("boom", warn.call_args.args[2])
+
+    def test_auto_sync_saves_without_the_preview_and_leaves_the_deposit(self):
+        tab = self._tab()
+        tab._deposit_edit.setText("7")
+        msgs = []
+        tab.status_message.connect(msgs.append)
+        execs = [ex("2026-11-20", "1", "005930", "buy", 3, 100.0, name="삼성전자")]
+        costs = [{"date": "2026-11-20", "ticker": "005930", "buy_amount": 300.0, "sell_amount": 0.0, "fee": 1.0, "tax": 0.0}]
+        with patch("ui.history_tab.KisSyncDialog.exec") as dlg_exec:
+            tab._on_kis_account_fetched(dict(self._result(execs), costs=costs, auto=True), "")
+        dlg_exec.assert_not_called()
+        self.assertEqual(tab._deposit_edit.text(), "7")
+        self.assertEqual([(r["company"], r["buy_amount"]) for r in tab._open_data], [("삼성전자", 301.0)])
+        self.assertIn("KIS 자동 반영: 체결 1건", msgs[-1])
+
+    def test_auto_sync_tick_is_rate_limited_and_stays_out_of_an_open_preview(self):
+        tab = self._tab()
+        started = []
+        with patch("ui.history_tab.KisAccountThread") as thread_cls:
+            thread_cls.return_value.isRunning.return_value = True
+            thread_cls.side_effect = lambda *a, **k: started.append(k) or thread_cls.return_value
+            tab._kis_preview_open = True
+            tab.auto_kis_sync_tick()
+            self.assertEqual(started, [])
+            tab._kis_preview_open = False
+            tab.auto_kis_sync_tick()
+            self.assertEqual(started, [{"auto": True}])
+            thread_cls.return_value.isRunning.return_value = False
+            tab.auto_kis_sync_tick()                         # within the interval
+            self.assertEqual(len(started), 1)
+            tab._kis_auto_last -= 31 * 60
+            tab.auto_kis_sync_tick()
+            self.assertEqual(len(started), 2)
 
     def test_button_label(self):
         tab = self._tab()
