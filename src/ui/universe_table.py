@@ -10,13 +10,13 @@ painters in ui/delegates.py. ui.widgets still re-exports StockTable.
 from PyQt6.QtWidgets import (
     QFrame, QTableWidget, QTableWidgetItem, QHeaderView, QMenu, QApplication, QAbstractItemView,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QRect, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QRect, QTimer, QEvent, QItemSelectionModel
 from PyQt6.QtGui import QColor, QFont, QPainter, QKeySequence
 from PyQt6 import sip
 
 from i18n import tr
 from ui.common import create_font, FONT_BODY, _EmptyHint
-from ui.delegates import IdentityDelegate, RangeBarDelegate, TrendDelegate
+from ui.delegates import IdentityDelegate, NoFocusDelegate, RangeBarDelegate, TrendDelegate
 from ui.universe_views import matches as view_matches
 from ui.colors import fg_for, heatmap_bg, PROFIT, LOSS, FLAT, OK, WARN
 from ui.theme import TEXT, TEXT_EMPTY, LINE_GROUP
@@ -155,6 +155,10 @@ class StockTable(QTableWidget):
         self.setStyleSheet("QTableWidget { border-right: none; }")
         self._empty_hint = _EmptyHint(self, tr("아직 불러온 종목이 없습니다 -- 새로고침으로 유니버스를 받습니다",
                                                   "No stocks loaded yet -- Refresh fetches the universe"))
+        # Default delegate for the plain text columns: no focus frame on the
+        # clicked cell (2026-11-25); the columns below override it.
+        self._plain_delegate = NoFocusDelegate(self)
+        self.setItemDelegate(self._plain_delegate)
         self._identity_delegate = IdentityDelegate(self)
         self._range_delegate = RangeBarDelegate(self)
         self._trend_delegate = TrendDelegate(self)
@@ -388,6 +392,17 @@ class StockTable(QTableWidget):
         if parent.focusPolicy() == Qt.FocusPolicy.NoFocus:
             parent.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         parent.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def selectionCommand(self, index, event=None):
+        """Mouse clicks never select a row, so a single click on a cell
+        (market cap, price ...) leaves the row's color unchanged (user report
+        2026-11-25). Keyboard selection (arrows, Shift+arrows, Ctrl+A) still
+        works, and Ctrl+C copies it (docs/ui.md 1.8)."""
+        if event is not None and event.type() in (
+                QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease,
+                QEvent.Type.MouseButtonDblClick, QEvent.Type.MouseMove):
+            return QItemSelectionModel.SelectionFlag.NoUpdate
+        return super().selectionCommand(index, event)
 
     def mousePressEvent(self, event):
         """A left click on a row's status button cycles that row's status
