@@ -109,6 +109,8 @@ minmax(<최소폭>, <비율>fr)
 ### 1.8 표 상호작용
 
 - 행 선택 + 키보드 탐색 허용(`SelectionBehavior.SelectRows`). 편집만 막는다.
+  - 예외(2026-11-25, 사용자 지시): Trading Universe 표는 **마우스 클릭으로 행을 선택하지 않는다**
+    (한 번 클릭에 행 색이 바뀌지 않게; `StockTable.selectionCommand`). 키보드 선택(화살표·Shift+화살표·Ctrl+A)과 Ctrl+C는 그대로.
 - `Ctrl+C` — 선택 행 TSV 복사.
 - `Enter` / 더블클릭 — 상세(MA 차트) 열기.
 - 정렬 상태는 **데이터 갱신 후에도 유지**한다.

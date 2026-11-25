@@ -294,3 +294,27 @@ class TestDoubleClickLeavesNoFocus(unittest.TestCase):
         self.assertFalse(table.hasFocus())
         self.assertIs(QApplication.focusWidget(), root)      # the tab holds it, so reactivation skips the table
         root.close()
+
+
+class TestSingleClickDoesNotSelect(unittest.TestCase):
+    """2026-11-25 (user report): a single click on a cell (market cap, price
+    ...) must not select the row and change its color; keyboard selection
+    still does."""
+
+    def test_click_leaves_no_selection_but_keyboard_selects(self):
+        from PyQt6.QtCore import QPoint
+        from PyQt6.QtTest import QTest
+        table = StockTable()
+        table.load_data([_mk("005930", "Samsung", 70000), _mk("000660", "SK Hynix", 150000)])
+        table.resize(900, 300)
+        table.show()
+        app.processEvents()
+        pos = QPoint(table.columnViewportPosition(COL_PRICE) + 5, table.rowViewportPosition(0) + 5)
+        QTest.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=pos)
+        app.processEvents()
+        self.assertFalse(table.selectionModel().hasSelection())
+        table.setFocus()
+        QTest.keyClick(table, Qt.Key.Key_Down)
+        app.processEvents()
+        self.assertTrue(table.selectionModel().hasSelection())
+        table.close()

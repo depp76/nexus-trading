@@ -23,6 +23,16 @@ from i18n import tr
 from ui.theme import ACCENT, ACCENT_TEXT, ACCENT_BG, TEXT, TEXT_FAINT, LINE, LINE_SOFT, SURFACE
 
 
+class NoFocusDelegate(QStyledItemDelegate):
+    """Plain text cell without the current-cell focus frame: a single click
+    on a Universe cell (price, change ...) must not leave a focus rectangle
+    on that cell (user report 2026-11-25). Row selection is unaffected."""
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        option.state &= ~QStyle.StateFlag.State_HasFocus
+
+
 class CellDelegate(QStyledItemDelegate):
     """Base for every custom-painted cell: the background fill that honors
     selection, an explicit BackgroundRole (Trading History sets its zebra
