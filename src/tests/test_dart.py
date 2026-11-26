@@ -800,7 +800,9 @@ class TestReviewSync(_TmpMixin, unittest.TestCase):
                 raise requests.ConnectionError("boom")
         self.fake.hook = hook
         res = self.sync("auto")
-        self.assertEqual((res.status, res.pending_left), ("done", 1))
+        # A request that failed is "partial", not "done" (review_codex 3 P2).
+        self.assertEqual((res.status, res.pending_left, res.periods_failed), ("partial", 1, 1))
+        self.assertIn("request failures", res.error)
         conn = self._conn()
         got = {r["fiscal_q"] for r in query.get_financials("005930", conn=conn)}
         self.assertEqual(got, {1, 3})                       # the quarters after the failing one still arrived
@@ -1083,10 +1085,51 @@ class TestReviewCodex(_TmpMixin, unittest.TestCase):
         res = self.sync("auto")
         self.assertEqual((res.status, res.pending_left), ("done", 0))
 
-    def test_correction_never_served_is_accepted_after_the_wait(self):
+    def test_correction_not_served_after_the_wait_is_retried_not_closed(self):
+        """review_codex 3 P1: past the 7-day wait a correction the API still
+        answers with the original for is kept as awaiting_correction (never
+        closed with the older numbers) and asked again weekly, uncached."""
         self._add_q3_correction()
         self.assertEqual(self._run("auto", dt.date(2025, 11, 26)).pending_left, 1)
-        self.assertEqual(self._run("auto", dt.date(2025, 12, 5)).pending_left, 0)
+        res = self._run("auto", dt.date(2025, 12, 5))                  # 10 days after the correction
+        self.assertEqual((res.status, res.pending_left), ("done", 0))  # waiting, not due again before 12-12
+        conn = self._conn()
+        row = conn.execute("SELECT status, src_rcept_no, retry_after FROM fin_fetch "
+                           "WHERE rcept_no = '20251125000030'").fetchone()
+        self.assertEqual(tuple(row), ("awaiting_correction", "20251114000003", "2025-12-12"))
+        self.assertTrue(conn.execute("SELECT 1 FROM fin_issue WHERE rcept_no = '20251125000030' "
+                                     "AND kind = 'correction_not_served'").fetchone())
+        self.assertEqual(dsync.collection_status(self.db, today=dt.date(2025, 12, 5))["periods_pending"], 1)
+        n = len(self.fake.requests)
+        self._run("auto", dt.date(2025, 12, 8))                        # not due: no financial request for it
+        self.assertFalse([1 for ep, prm in self.fake.requests[n:]
+                          if ep == "fnlttSinglAcntAll.json" and prm["reprt_code"] == "11014"])
+        self.fake.fin[(SAMSUNG, "2025", "11014", "CFS")] = _is_rows(
+            "131", "-5", "-3", "-2", "20251125000030", add={"rev": "351", "op": "17", "ni": "14", "own": "13"})
+        res = self._run("auto", dt.date(2025, 12, 12))                 # due: asked again, not from the cache
+        self.assertEqual(conn.execute("SELECT status FROM fin_fetch WHERE rcept_no = '20251125000030'")
+                         .fetchone()[0], "ok")
+        q3 = [r["value_q"] for r in query.get_financials("005930", conn=conn)
+              if r["fiscal_q"] == 3 and r["metric"] == "revenue"]
+        self.assertEqual(q3, [131.0])
+
+    def test_migration_rechecks_a_correction_closed_with_older_numbers(self):
+        """Schema 8 reopens corrections an older version closed with the
+        original's numbers; an attachment-only one stays done."""
+        self._add_q3_correction()
+        self.fake.list_rows.append(FakeDart._lr(SAMSUNG, "005930", "삼성전자", "Y", "[첨부정정]분기보고서 (2025.03)",
+                                                "20251125000031"))
+        self._run("auto", dt.date(2025, 12, 5))
+        conn = self._conn()
+        conn.execute("UPDATE fin_fetch SET status = 'ok', retry_after = NULL WHERE rcept_no = '20251125000030'")
+        conn.execute("UPDATE sync_state SET value = '7' WHERE key = 'schema_version'")
+        conn.commit()
+        conn.close()
+        conn = self._conn()                                            # migrates to 8
+        got = dict(conn.execute("SELECT rcept_no, status FROM fin_fetch "
+                                "WHERE rcept_no IN ('20251125000030', '20251125000031')").fetchall())
+        self.assertEqual(got, {"20251125000030": "awaiting_correction", "20251125000031": "ok"})
+        self.assertEqual(self._run("auto", dt.date(2025, 12, 6)).periods_fetched, 1)   # due at once
 
     # ---- P1: a Q4 resting on a later Q3 ----
     def test_q4_is_available_from_the_day_its_q3_was_received(self):
@@ -1253,7 +1296,7 @@ class TestReviewCodex2(_TmpMixin, unittest.TestCase):
                 conn = connect(self.db)
                 self.assertIsNone(conn.execute("SELECT 1 FROM fin_fetch WHERE rcept_no = '20250814000020'").fetchone())
                 self.assertEqual(res.pending_left, 1)
-                self.assertEqual(res.status, "failed" if failure == "800" else "done")      # 800 stops the run
+                self.assertEqual(res.status, "failed" if failure == "800" else "partial")   # 800 stops the run
                 self.fake.hook = None
                 res = self.sync("backfill", tickers=["105560"])                          # no cache to clear by hand
                 self.assertEqual((res.status, res.pending_left), ("done", 0))
@@ -1413,3 +1456,103 @@ class TestVerificationStocks(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReviewCodex3(_TmpMixin, unittest.TestCase):
+    """review_codex.md (2026-11-26, third review): P1 2, P2 3-5 (P1 1 is in TestReviewCodex)."""
+
+    def _conn(self):
+        conn = connect(self.db)
+        self.addCleanup(conn.close)
+        return conn
+
+    # ---- P1: a re-parsed receipt keeps no metric it no longer has ----
+    def test_reparsed_receipt_drops_a_metric_it_no_longer_has(self):
+        conn = self._conn()
+        fin.store_period(conn, SAMSUNG, 2025, "11013", "CFS", _is_rows("100", "10", "8", "7", "20250515000001"))
+        fin.store_period(conn, SAMSUNG, 2025, "11012", "CFS",
+                         _is_rows("120", "12", "9", "8", "20250814000002",
+                                  add={"rev": "220", "op": "22", "ni": "17", "own": "15"}))
+        without_rev = [r for r in _is_rows("", "12", "9", "8", "20250814000002",
+                                           add={"rev": "", "op": "22", "ni": "17", "own": "15"})
+                       if r["account_id"] != "ifrs-full_Revenue"]
+        _src, missing = fin.store_period(conn, SAMSUNG, 2025, "11012", "CFS", without_rev)
+        self.assertEqual(missing, ["revenue"])
+        h1 = {r["metric"]: r for r in query.get_financials(SAMSUNG, conn=conn) if r["fiscal_q"] == 2}
+        self.assertNotIn("revenue", h1)                       # no stale 120 next to the unmapped line
+        self.assertEqual(h1["op_income"]["value_q"], 12.0)
+        self.assertTrue(conn.execute("SELECT 1 FROM fin_unmapped WHERE rcept_no = '20250814000002' "
+                                     "AND metric = 'revenue'").fetchone())
+
+    def test_reparsed_q1_recomputes_the_quarter_derived_from_it(self):
+        conn = self._conn()
+        fin.store_period(conn, SAMSUNG, 2025, "11013", "CFS", _is_rows("100", "10", "8", "7", "20250515000001"))
+        h1 = _is_rows("", "", "", "", "20250814000002", add={"rev": "220", "op": "22", "ni": "17", "own": "15"})
+        fin.store_period(conn, SAMSUNG, 2025, "11012", "CFS", h1)         # only cumulatives: Q2 = 220 - 100
+        rev_q2 = conn.execute("SELECT value_q FROM fin_std WHERE fiscal_q = 2 AND metric = 'revenue'").fetchone()[0]
+        self.assertEqual(rev_q2, 120.0)
+        q1 = [r for r in _is_rows("100", "10", "8", "7", "20250515000001") if r["account_id"] != "ifrs-full_Revenue"]
+        fin.store_period(conn, SAMSUNG, 2025, "11013", "CFS", q1)         # Q1 revenue gone
+        rev_q2 = conn.execute("SELECT value_q FROM fin_std WHERE fiscal_q = 2 AND metric = 'revenue'").fetchone()[0]
+        self.assertIsNone(rev_q2)
+
+    # ---- P2: request failures are reported ----
+    def test_failed_segment_requests_make_the_run_partial(self):
+        self.sync("auto")
+
+        def hook(ep, params):
+            if ep == "fnlttXbrl.xml":
+                raise requests.ConnectionError("down")
+        self.fake.hook = hook
+        res = self.sync("segments", tickers=["005930"])
+        self.assertEqual(res.status, "partial")
+        self.assertGreater(res.segments_failed, 0)
+
+    def test_a_report_dart_has_not_loaded_is_a_wait_not_a_failure(self):
+        self.fake.list_rows.append(FakeDart._lr(BANK, "105560", "은행지주", "Y", "분기보고서 (2025.09)",
+                                                "20251120000040"))
+        res = self.sync("auto")                               # 013 for a 6-day-old report
+        self.assertEqual((res.status, res.periods_failed), ("done", 0))
+        self.assertGreater(res.pending_left, 0)
+
+    # ---- P2: a stub filing is completed by the list ----
+    def test_stub_filing_gets_its_name_and_correction_flag_from_the_list(self):
+        conn = self._conn()
+        conn.execute("INSERT INTO company(corp_code, stock_code, corp_name, fiscal_month) VALUES (?, '005930', 'x', 12)",
+                     (SAMSUNG,))
+        fil.ensure_filing(conn, "20250901000004", SAMSUNG, 2025, "11012")
+        row = conn.execute("SELECT report_nm, is_correction FROM filing WHERE rcept_no = '20250901000004'").fetchone()
+        self.assertEqual(tuple(row), (None, 0))
+        fil.store_filings(conn, [FakeDart._lr(SAMSUNG, "005930", "삼성전자", "Y", "[기재정정]반기보고서 (2025.06)",
+                                              "20250901000004")], 2021)
+        row = conn.execute("SELECT report_nm, is_correction, bsns_year, reprt_code FROM filing "
+                           "WHERE rcept_no = '20250901000004'").fetchone()
+        self.assertEqual(tuple(row), ("[기재정정]반기보고서 (2025.06)", 1, 2025, "11012"))
+
+    def test_stub_with_the_wrong_period_drops_what_was_stored_under_it(self):
+        conn = self._conn()
+        conn.execute("INSERT INTO company(corp_code, stock_code, corp_name, fiscal_month) VALUES (?, '005930', 'x', 12)",
+                     (SAMSUNG,))
+        fin.store_period(conn, SAMSUNG, 2025, "11013", "CFS", _is_rows("100", "10", "8", "7", "20250814000077"))
+        conn.execute("INSERT INTO fin_fetch(rcept_no, status, src_rcept_no) VALUES "
+                     "('20250814000077', 'ok', '20250814000077')")
+        fil.store_filings(conn, [FakeDart._lr(SAMSUNG, "005930", "삼성전자", "Y", "반기보고서 (2025.06)",
+                                              "20250814000077")], 2021)
+        self.assertEqual(tuple(conn.execute("SELECT bsns_year, reprt_code FROM filing "
+                                            "WHERE rcept_no = '20250814000077'").fetchone()), (2025, "11012"))
+        self.assertFalse(conn.execute("SELECT 1 FROM fin_std WHERE rcept_no = '20250814000077'").fetchone())
+        self.assertFalse(conn.execute("SELECT 1 FROM fin_fetch WHERE rcept_no = '20250814000077'").fetchone())
+
+    # ---- P2: a ticker run refreshes an old company list ----
+    def test_ticker_run_refreshes_a_stale_company_list(self):
+        self.sync("init")
+        conn = self._conn()
+        conn.execute("UPDATE sync_state SET value = '2025-08-01' WHERE key = 'corp_list_at'")
+        conn.commit()
+        n = len(self.fake.requests)
+        res = self.sync("backfill", tickers=["123450", "999990"])
+        self.assertEqual([ep for ep, _ in self.fake.requests[n:]].count("corpCode.xml"), 1)
+        self.assertEqual(res.unknown_tickers, ("999990",))
+        n = len(self.fake.requests)
+        self.sync("backfill", tickers=["123450"])                   # fresh now: not asked again
+        self.assertEqual([ep for ep, _ in self.fake.requests[n:]].count("corpCode.xml"), 0)

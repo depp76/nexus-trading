@@ -213,6 +213,10 @@ def store_period(conn, corp_code: str, fiscal_year: int, reprt_code: str, fs_div
     rcept_dt = conn.execute("SELECT rcept_dt FROM filing WHERE rcept_no = ?", (src,)).fetchone()[0]
     conn.execute("DELETE FROM fin_unmapped WHERE rcept_no = ?", (src,))
     conn.execute("DELETE FROM fin_issue WHERE rcept_no = ?", (src,))
+    # The receipt's metric set is replaced as a whole: a metric found the last
+    # time but not in this reply must not keep its old amount (review_codex 3 P1).
+    conn.execute("DELETE FROM fin_std WHERE corp_code = ? AND fiscal_year = ? AND fiscal_q = ? AND rcept_no = ?",
+                 (corp_code, fiscal_year, Q_BY_REPRT[reprt_code], src))
     currency = next((str(r["currency"]).strip() for r in rows if (r.get("currency") or "").strip()), "KRW")
 
     conn.executemany(
@@ -265,6 +269,8 @@ def store_period(conn, corp_code: str, fiscal_year: int, reprt_code: str, fs_div
             (corp_code, fiscal_year, q, fs_div, metric, value_q, ytd, derived, src, rcept_dt, currency))
     if q in (1, 2):
         rederive_following(conn, corp_code, fiscal_year, q)
+    if q in (1, 2):
+        _recompute_derived_following(conn, corp_code, fiscal_year, q)
     derive_q4(conn, corp_code, fiscal_year)
     conn.executemany("INSERT OR IGNORE INTO fin_unmapped(rcept_no, corp_code, metric) VALUES (?, ?, ?)",
                      [(src, corp_code, m) for m in missing])
@@ -299,6 +305,23 @@ def rederive_following(conn, corp_code: str, fiscal_year: int, q: int) -> None:
                 conn.execute("UPDATE fin_std SET value_ytd = ? WHERE corp_code = ? AND fiscal_year = ? "
                              "AND fiscal_q = ? AND metric = ? AND rcept_no = ?",
                              (prev + r["value_q"], corp_code, fiscal_year, nq, r["metric"], r["rcept_no"]))
+
+
+def _recompute_derived_following(conn, corp_code: str, fiscal_year: int, q: int) -> None:
+    """After quarter `q` was (re)stored: the half / Q3 three-month values that
+    were derived from a cumulative minus the quarter before are computed again
+    from what is stored now -- empty when that quarter has no value any more
+    (review_codex 3 P1)."""
+    for nq in range(q + 1, 4):
+        for r in conn.execute(
+                "SELECT metric, fs_div, currency, value_ytd, rcept_no, rcept_dt FROM fin_std "
+                "WHERE corp_code = ? AND fiscal_year = ? AND fiscal_q = ? AND derived = 1 AND value_ytd IS NOT NULL",
+                (corp_code, fiscal_year, nq)).fetchall():
+            prev = _ytd(conn, corp_code, fiscal_year, nq - 1, r["metric"], r["fs_div"], r["rcept_dt"], r["currency"])
+            conn.execute("UPDATE fin_std SET value_q = ? WHERE corp_code = ? AND fiscal_year = ? AND fiscal_q = ? "
+                         "AND metric = ? AND rcept_no = ?",
+                         (None if prev is None else r["value_ytd"] - prev, corp_code, fiscal_year, nq,
+                          r["metric"], r["rcept_no"]))
 
 
 DERIVED_BASE = 1          # Q4 under the annual report's receipt

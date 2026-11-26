@@ -34,7 +34,7 @@ import sqlite3
 # 6 (2026-11-26, stage 4): seg_fetch -- which filings' segment revenue was read.
 # 7 (2026-11-26, review_codex 2): a Q4 row per Q3 version (fin_std.derived = 2 under the
 #   late Q3's receipt) instead of one value with an availability day; Q4 rows re-derived.
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS company (
@@ -140,10 +140,11 @@ CREATE TABLE IF NOT EXISTS sync_run (
 
 CREATE TABLE IF NOT EXISTS fin_fetch (
   rcept_no TEXT PRIMARY KEY,
-  status TEXT NOT NULL,              -- ok / unmapped / document / no_data
+  status TEXT NOT NULL,              -- ok / unmapped / document / no_data / awaiting_correction
   src_rcept_no TEXT,                 -- the filing the API's numbers came from
   fs_div TEXT,
-  fetched_at TEXT
+  fetched_at TEXT,
+  retry_after TEXT                   -- awaiting_correction: asked again from this day (schema 8)
 );
 
 -- Segment revenue requests (stage 4): one row per filing (the newest receipt
@@ -258,6 +259,20 @@ def _migrate(conn: sqlite3.Connection, old: int | None) -> None:
             "WHERE r.rcept_no = fin_std.rcept_no AND r.currency IS NOT NULL AND r.currency <> '' LIMIT 1), 'KRW')")
     if "avail_dt" not in {r[1] for r in conn.execute("PRAGMA table_info(fin_std)")}:
         conn.execute("ALTER TABLE fin_std ADD COLUMN avail_dt TEXT")
+    if "retry_after" not in {r[1] for r in conn.execute("PRAGMA table_info(fin_fetch)")}:
+        conn.execute("ALTER TABLE fin_fetch ADD COLUMN retry_after TEXT")
+    if old is not None and old < 8:
+        # A correction marked done although the numbers stored for it came from an
+        # older receipt (closed after the 7-day wait before schema 8) is asked
+        # again once; attachment-only corrections change no statement and stay
+        # done (review_codex 3 P1).
+        from data.dart.filings import is_attachment_only
+        stale = [r[0] for r in conn.execute(
+            "SELECT x.rcept_no, f.report_nm FROM fin_fetch x JOIN filing f ON f.rcept_no = x.rcept_no "
+            "WHERE x.status IN ('ok', 'unmapped') AND x.src_rcept_no IS NOT NULL AND x.src_rcept_no < x.rcept_no "
+            "AND f.is_correction = 1").fetchall() if not is_attachment_only(r[1])]
+        conn.executemany("UPDATE fin_fetch SET status = 'awaiting_correction', retry_after = '' WHERE rcept_no = ?",
+                         [(r,) for r in stale])
     if old is not None and old < 7:
         # Periods closed as "no data" / "review" may have been closed by a failed
         # request (review_codex 2 P1): look at them once more. A confirmed "no

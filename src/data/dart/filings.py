@@ -146,6 +146,9 @@ def store_filings(conn, rows: list[dict], first_year: int) -> int:
         if fy < first_year - KEEP_YEARS_BEFORE:
             continue
         rcept_dt = _fmt_date(r.get("rcept_dt") or r["rcept_no"][:8])
+        if _complete_stub(conn, r["rcept_no"], r.get("report_nm"), int(bool(tags)), fy, reprt, rcept_dt):
+            corps.add(r["corp_code"])
+            continue
         cur = conn.execute(
             "INSERT OR IGNORE INTO filing(rcept_no, corp_code, reprt_code, bsns_year, rcept_dt, report_nm, is_correction) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -176,14 +179,46 @@ def reclassify_company(conn, corp_code: str) -> None:
             continue
         r = row["rcept_no"]
         conn.execute("UPDATE filing SET bsns_year = ?, reprt_code = ? WHERE rcept_no = ?", (fy, reprt, r))
-        conn.execute("DELETE FROM fin_std WHERE rcept_no = ?", (r,))
-        conn.execute("DELETE FROM fin_issue WHERE rcept_no = ?", (r,))
-        conn.execute("DELETE FROM fin_unmapped WHERE rcept_no = ?", (r,))
-        conn.execute("DELETE FROM fin_fetch WHERE rcept_no = ? OR src_rcept_no = ?", (r, r))
-        # Segment amounts sit under the old fiscal quarter and their fetch mark
-        # would keep the right quarter from ever being read (review_codex 2 P2).
-        conn.execute("DELETE FROM segment_rev WHERE rcept_no = ?", (r,))
-        conn.execute("DELETE FROM seg_fetch WHERE rcept_no = ?", (r,))
+        _forget_receipt(conn, r)
+
+
+def _forget_receipt(conn, r: str) -> None:
+    """Drop what was standardised under receipt `r` and the fetch marks that
+    point at it, so the next run stores it again under its (new) period."""
+    conn.execute("DELETE FROM fin_std WHERE rcept_no = ?", (r,))
+    conn.execute("DELETE FROM fin_issue WHERE rcept_no = ?", (r,))
+    conn.execute("DELETE FROM fin_unmapped WHERE rcept_no = ?", (r,))
+    conn.execute("DELETE FROM fin_fetch WHERE rcept_no = ? OR src_rcept_no = ?", (r, r))
+    # Segment amounts sit under the old fiscal quarter and their fetch mark
+    # would keep the right quarter from ever being read (review_codex 2 P2).
+    conn.execute("DELETE FROM segment_rev WHERE rcept_no = ?", (r,))
+    conn.execute("DELETE FROM seg_fetch WHERE rcept_no = ?", (r,))
+
+
+def _complete_stub(conn, rcept_no, report_nm, is_correction, fy, reprt, rcept_dt) -> bool:
+    """A receipt first seen in a financial reply is a stub (no report name;
+    ensure_filing). When the list brings it, fill in its name, correction flag
+    and period; if the stub's guessed period was wrong, what was stored under
+    it is dropped and fetched again under the right one (review_codex 3 P2).
+    True when `rcept_no` was a stub."""
+    row = conn.execute("SELECT bsns_year, reprt_code FROM filing WHERE rcept_no = ? AND report_nm IS NULL",
+                       (rcept_no,)).fetchone()
+    if row is None:
+        return False
+    conn.execute("UPDATE filing SET report_nm = ?, is_correction = ?, bsns_year = ?, reprt_code = ?, rcept_dt = ? "
+                 "WHERE rcept_no = ?", (report_nm, is_correction, fy, reprt, rcept_dt, rcept_no))
+    if (row[0], row[1]) != (fy, reprt):
+        _forget_receipt(conn, rcept_no)
+    return True
+
+
+ATTACHMENT_ONLY_TAGS = frozenset({"첨부정정", "첨부추가"})   # corrections that change no statement
+
+
+def is_attachment_only(report_nm: str | None) -> bool:
+    """Whether a report is a correction of attachments only ("[첨부정정]...")."""
+    parsed = parse_report_name(report_nm or "")
+    return bool(parsed and parsed[3]) and set(parsed[3]) <= ATTACHMENT_ONLY_TAGS
 
 
 def link_corrections(conn, corp_code: str) -> None:

@@ -292,8 +292,9 @@ class DartAutoSync(QObject):
             self._set(f"DART {_short_time(info.get('last_run'))}", tip)
         elif status == "partial":
             self._set(tr("DART 일부 수집", "DART partial"),
-                      tr(f"한도 또는 종료로 멈춤, 다음 실행에서 이어 받음 · {err}",
-                         f"Stopped by the limit or shutdown; resumed next run · {err}") + by, WARN)
+                      tr(f"한도·종료로 멈췄거나 일부 요청이 실패함, 다음 실행에서 이어 받음 · {err}",
+                         f"Stopped by the limit or shutdown, or some requests failed; resumed next run · {err}")
+                      + by, WARN)
         elif status == "no_key":
             self._set(tr("DART 키 없음", "DART no key"),
                       tr(".env에 DART_API_KEY를 넣으면 다음 실행부터 수집합니다.",
