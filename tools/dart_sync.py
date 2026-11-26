@@ -13,7 +13,9 @@ Only parses arguments and calls ``data.dart.sync.run_sync`` (collection) or
 import argparse
 import logging
 import os
+import signal
 import sys
+import threading
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
@@ -53,8 +55,23 @@ def main(argv=None) -> int:
             print(f"[{done}/{total}] {msg}", flush=True)
             last["msg"] = head
 
+    # Ctrl+C asks the run to stop at the next report boundary: what is done is
+    # committed and the run ends as "partial" (review_agy L2). A second Ctrl+C
+    # falls back to the default handler and interrupts at once.
+    cancel = threading.Event()
+
+    def on_sigint(_signum, _frame):
+        cancel.set()
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        print("stopping after the current report... (Ctrl+C again to abort now)", flush=True)
+
+    previous = signal.signal(signal.SIGINT, on_sigint)
     trigger = "scheduler" if args.mode == "auto" else "cli"
-    res = run_sync(args.mode, trigger, budget=args.budget, on_progress=progress, tickers=args.tickers)
+    try:
+        res = run_sync(args.mode, trigger, budget=args.budget, cancel=cancel, on_progress=progress,
+                       tickers=args.tickers)
+    finally:
+        signal.signal(signal.SIGINT, previous)
     print(f"status={res.status} run={res.run_id} calls={res.calls} new_filings={res.filings_added} "
           f"periods={res.periods_fetched} pending={res.pending_left}" + (f" error={res.error}" if res.error else ""))
     return 0 if res.status in ("done", "partial", "skipped") else 1

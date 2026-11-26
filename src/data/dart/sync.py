@@ -32,6 +32,7 @@ import datetime as _dt
 import json
 import logging
 import os
+import sqlite3
 import uuid
 
 import paths
@@ -39,9 +40,12 @@ from data.dart import corp as corp_mod
 from data.dart import documents as docs
 from data.dart import filings as fil
 from data.dart import financials as fin
-from data.dart.client import DAILY_LIMIT, DartBudgetExceeded, DartClient, api_key_from_env, calls_today, kst_today
+from data.dart.client import (
+    DAILY_LIMIT, DartApiError, DartBudgetExceeded, DartCancelled, DartClient, api_key_from_env, calls_today,
+    is_fatal, kst_today,
+)
 from data.dart.lock import SyncLock
-from data.dart.store import connect, get_state, now_iso, set_state
+from data.dart.store import connect, get_state, now_iso, open_readonly, set_state
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +56,18 @@ _KEY_FROM_ENV = object()
 _KST = _dt.timezone(_dt.timedelta(hours=9))
 EVENING_HOUR = 19              # plan 11-2: one run after 19:00 KST catches the day's filings
 INITIAL_PENDING_PERIODS = 1000  # more periods than this still to fetch = the initial load (plan 11-8)
+MAX_CONSECUTIVE_ERRORS = 5     # per-period request failures in a row before the run gives up
+# A report is listed at once but its statements are loaded into the financial
+# API hours later. For this many days after a receipt, an answer without it (a
+# 013, or still the previous version's numbers) means "not loaded yet": nothing
+# is cached and the receipt stays pending (review_agy M4, review_codex P1).
+RECENT_FILING_DAYS = 7
+ATTACHMENT_ONLY_TAGS = frozenset({"첨부정정", "첨부추가"})   # corrections that change no statement
+FETCH_LOG_KEEP_DAYS = 90
+# Bumped when store_filings keeps more than before: the market-wide list is then
+# walked again (past windows come from the cache). 2: one fiscal year before
+# the window is kept for non-December filers (review_agy H4).
+LIST_VERSION = "2"
 
 
 def kst_now() -> _dt.datetime:
@@ -68,14 +84,23 @@ def _parse_kst(text: str | None) -> _dt.datetime | None:
     return t.replace(tzinfo=_KST) if t.tzinfo is None else t.astimezone(_KST)
 
 
-def is_due(last_run: str | None, last_status: str | None, now: _dt.datetime, at_start: bool) -> bool:
-    """Plan 11-2. At app start: run unless a run (not a failed one) already
-    finished after today's 19:00 KST. On the 30-minute check: run only after
-    19:00, and only if no run finished after 19:00 today."""
+def is_due(last_run: str | None, last_status: str | None, now: _dt.datetime, at_start: bool,
+           last_error: str | None = None) -> bool:
+    """Plan 11-2. At app start: run unless a run already finished after today's
+    19:00 KST. On the 30-minute check: run only after 19:00, and only if no run
+    finished after 19:00 today.
+
+    A run that failed, or that stopped because it was cancelled / its process
+    ended (the app was closed mid-collection), does not count as tonight's run:
+    reopening the app resumes it (plan 11-6; review_agy M2). A run stopped by
+    the daily limit or a run budget does count -- there is nothing left to
+    spend today."""
     now = now.astimezone(_KST) if now.tzinfo else now.replace(tzinfo=_KST)
     evening = now.replace(hour=EVENING_HOUR, minute=0, second=0, microsecond=0)
     last = _parse_kst(last_run)
-    done_tonight = last is not None and last >= evening and last_status != "failed"
+    err = (last_error or "").lower()
+    interrupted = last_status == "partial" and err.startswith(("cancelled", "interrupted"))
+    done_tonight = last is not None and last >= evening and last_status != "failed" and not interrupted
     if done_tonight:
         return False
     return at_start or now >= evening
@@ -84,10 +109,16 @@ def is_due(last_run: str | None, last_status: str | None, now: _dt.datetime, at_
 def collection_status(db_path: str | None = None, today: _dt.date | None = None, years: int = DART_YEARS) -> dict:
     """What a status display needs, read from dart.db: last run (time, status,
     calls, new filings), whether the list backfill is done, the periods in the
-    window and how many still lack financials, and today's calls / limit left."""
-    conn = connect(db_path or paths.DART_DB_FILE)
+    window and how many still lack financials, and today's calls / limit left.
+    Read-only (no write lock; review_agy H1); without a dart.db, the empty state."""
+    today = today or kst_now().date()
+    empty = {"last_run": None, "last_status": None, "last_calls": None, "last_added": None, "last_error": None,
+             "last_trigger": None, "last_run_status": None, "list_done": False, "periods_total": 0,
+             "periods_pending": 0, "calls_today": 0, "calls_left": DAILY_LIMIT}
+    conn = open_readonly(db_path or paths.DART_DB_FILE)
+    if conn is None:
+        return empty
     try:
-        today = today or kst_now().date()
         first = first_fiscal_year(today, years)
         run = conn.execute("SELECT status, calls, filings_added, error, finished_at, trigger FROM sync_run "
                            "WHERE status NOT IN ('running', 'skipped') ORDER BY started_at DESC LIMIT 1").fetchone()
@@ -111,6 +142,9 @@ def collection_status(db_path: str | None = None, today: _dt.date | None = None,
             "calls_today": used,
             "calls_left": max(0, DAILY_LIMIT - used),
         }
+    except sqlite3.Error:
+        logger.warning("DART status read failed", exc_info=True)
+        return empty
     finally:
         conn.close()
 
@@ -182,30 +216,45 @@ def run_sync(mode: str = "auto", trigger: str = "cli", *, budget: int | None = N
             _record_run(conn, run_id, trigger, mode, "running", 0, 0, None)
             if client_factory is not None:
                 client = client_factory(conn, key, run_id)
+                if getattr(client, "_cancel", None) is None and hasattr(client, "_cancel"):
+                    client._cancel = cancel          # waits inside the client stop on cancel too
             else:
-                client = DartClient(conn, key, cache_dir, run_id=run_id, budget=budget)
-            job = _Job(conn, client, today, years, cancel, on_progress, tickers, priority)
-            status, error = "done", None
+                client = DartClient(conn, key, cache_dir, run_id=run_id, budget=budget, cancel=cancel)
             try:
-                job.run(mode)
-            except (DartBudgetExceeded, _Cancelled) as e:
-                status, error = "partial", str(e) or "cancelled"
-                conn.rollback()
-            except Exception as e:
-                # boundary: a run records any failure in sync_run instead of raising into the caller's thread.
-                logger.exception("DART sync failed (run %s)", run_id)
-                status, error = "failed", f"{type(e).__name__}: {e}"
-                conn.rollback()
-            calls = getattr(client, "calls", 0)
-            pending = job.pending_count()
-            set_state(conn, "last_run", kst_now().isoformat(timespec="seconds"))
-            set_state(conn, "last_run_status", status)
-            _record_run(conn, run_id, trigger, mode, status, calls, job.filings_added, error, finished=True)
-            return SyncResult(status, run_id, calls, job.filings_added, job.periods_fetched, pending, error)
+                job = _Job(conn, client, today, years, cancel, on_progress, tickers, priority)
+                status, error = "done", None
+                try:
+                    job.run(mode)
+                except (DartBudgetExceeded, DartCancelled, _Cancelled) as e:
+                    status, error = "partial", str(e) or "cancelled"
+                    conn.rollback()
+                except Exception as e:
+                    # boundary: a run records any failure in sync_run instead of raising into the caller's thread.
+                    logger.exception("DART sync failed (run %s)", run_id)
+                    status, error = "failed", f"{type(e).__name__}: {e}"
+                    conn.rollback()
+                calls = getattr(client, "calls", 0)
+                pending = job.pending_count()
+                set_state(conn, "last_run", kst_now().isoformat(timespec="seconds"))
+                set_state(conn, "last_run_status", status)
+                _prune_fetch_log(conn)
+                _record_run(conn, run_id, trigger, mode, status, calls, job.filings_added, error, finished=True)
+                return SyncResult(status, run_id, calls, job.filings_added, job.periods_fetched, pending, error)
+            finally:
+                close = getattr(client, "close", None)
+                if callable(close):
+                    close()
         finally:
             lock.release()
     finally:
         conn.close()
+
+
+def _prune_fetch_log(conn) -> None:
+    """Drop fetch_log rows older than FETCH_LOG_KEEP_DAYS (one row per API call
+    otherwise grows without end; review_agy L3). Not committed."""
+    cutoff = (_dt.datetime.now() - _dt.timedelta(days=FETCH_LOG_KEEP_DAYS)).isoformat(timespec="seconds")
+    conn.execute("DELETE FROM fetch_log WHERE fetched_at < ?", (cutoff,))
 
 
 def _record_run(conn, run_id, trigger, mode, status, calls, added, error, finished=False) -> None:
@@ -231,7 +280,10 @@ class _Job:
         self.priority = priority
         self.filings_added = 0
         self.periods_fetched = 0
+        self.periods_failed = 0
         self.account_map = fin.load_account_map()
+        self._order: list[str] | None = None      # backfill order, built once per run
+        self._order_has_caps = False
 
     # ---- plumbing ----------------------------------------------------------------
 
@@ -251,12 +303,28 @@ class _Job:
         if mode in ("init", "daily", "auto") or (mode == "backfill" and self.tickers):
             self.sync_corp_list(force=(mode == "init"))
         if self.tickers:
+            # A verification run: these companies' lists, then everything of theirs
+            # still pending -- whatever the mode but "init" (lists only). `--daily
+            # --tickers` used to stop after the lists (review_codex P2).
             self.list_for_tickers()
-        elif mode in ("init", "auto", "backfill") or get_state(self.conn, "list_backfill_done") != "1":
+            if mode != "init":
+                self.fetch_financials()
+            return
+        if mode in ("init", "auto", "backfill") or get_state(self.conn, "list_backfill_done") != "1":
             self.list_backfill()
-        if mode in ("daily", "auto") and not self.tickers:
+        if mode in ("daily", "auto"):
             since = self.daily_list()
+            # Receipts left pending as "not loaded yet" stay in reach until they are
+            # past that wait: the financial window starts RECENT_FILING_DAYS before
+            # the list window, or a daily-only user would never get back to a
+            # report answered 013 for a few days (review_codex P2).
+            since = (_dt.date.fromisoformat(since) - _dt.timedelta(days=RECENT_FILING_DAYS + 1)).isoformat()
             self.fetch_financials(since=since)
+            # Only now is the window "done": a run stopped before this line keeps the
+            # old daily_until, so the next daily run covers the same days again
+            # instead of leaving their financials to a later backfill (review_agy L4).
+            set_state(self.conn, "daily_until", self.today.isoformat())
+            self.conn.commit()
         if mode in ("backfill", "auto"):
             self.fetch_financials()
 
@@ -278,7 +346,13 @@ class _Job:
 
     def list_backfill(self):
         if get_state(self.conn, "list_backfill_done") == "1":
-            return
+            if get_state(self.conn, "list_version", "1") == LIST_VERSION:
+                return
+            # The list rules changed: walk the windows again (cached pages, no calls
+            # for past quarters) so filings the old rules dropped are stored.
+            set_state(self.conn, "list_backfill_done", "0")
+            set_state(self.conn, "list_backfill_cursor", "")
+            self.conn.commit()
         start = _dt.date(self.first_year, 1, 1)
         cursor = get_state(self.conn, "list_backfill_cursor")
         if cursor:
@@ -294,6 +368,7 @@ class _Job:
             set_state(self.conn, "list_backfill_cursor", (end + _dt.timedelta(days=1)).isoformat())
             self.conn.commit()
         set_state(self.conn, "list_backfill_done", "1")
+        set_state(self.conn, "list_version", LIST_VERSION)
         if not get_state(self.conn, "daily_until"):
             set_state(self.conn, "daily_until", self.today.isoformat())
         self.conn.commit()
@@ -308,8 +383,6 @@ class _Job:
                 rows = fil.fetch_filing_list(self.client, bgn, end, corp_cls=cls, check=self._check)
                 self.filings_added += fil.store_filings(self.conn, rows, self.first_year)
             self.conn.commit()
-        set_state(self.conn, "daily_until", self.today.isoformat())
-        self.conn.commit()
         return start.isoformat()
 
     def list_for_tickers(self):
@@ -350,45 +423,77 @@ class _Job:
         return sql, args
 
     def pending_count(self) -> int:
+        """Periods (company, fiscal year, report) still without financials --
+        the unit collection_status counts too (review_agy M9)."""
         try:
             sql, args = self._pending_sql()
-            return len(self.conn.execute(sql, args).fetchall())
+            return self.conn.execute(
+                "SELECT COUNT(*) FROM (SELECT 1 FROM (" + sql + ") GROUP BY corp_code, bsns_year, reprt_code)",
+                args).fetchone()[0]
         except Exception:
             # boundary: only a status figure; never fail the run's bookkeeping over it.
             logger.warning("DART pending count failed", exc_info=True)
             return -1
 
     def fetch_financials(self, since=None):
+        """Financials of the pending filings (`since`: only those received from
+        that day -- the daily phase, reported as "new financials"; the backfill
+        phase as "financials").
+
+        One period failing (a network error after the retries, a broken reply)
+        is logged and left pending for the next run; the run stops only on a
+        fatal status (key / service problems) or MAX_CONSECUTIVE_ERRORS failures
+        in a row (review_agy H3)."""
         sql, args = self._pending_sql(since)
         pending = [dict(r) for r in self.conn.execute(sql, args)]
+        if not pending:
+            return                      # nothing to order: no Universe / market-cap lookup (review_agy M1)
         groups: dict = {}
         for r in pending:
             groups.setdefault((r["corp_code"], r["bsns_year"], r["reprt_code"]), []).append(r)
-        rank = self._rank()
+        rank = self._rank({g[0]["stock_code"] for g in groups.values()})
         q_of = fil.Q_BY_REPRT
         order = sorted(groups, key=lambda k: (rank(groups[k][0]["stock_code"]), k[0], k[1], q_of[k[2]]))
         total = len(order)
+        label = "new financials" if since else "financials"
+        errors_in_a_row = 0
         for i, key in enumerate(order):
             self._check()
             corp, fy, reprt = key
             members = groups[key]
-            self._progress(i, total, f"financials {members[0]['stock_code']} {fy} {reprt}")
-            self._fetch_group(corp, fy, reprt, members)
+            self._progress(i, total, f"{label} {members[0]['stock_code']} {fy} {reprt}")
+            try:
+                self._fetch_group(corp, fy, reprt, members)
+            except DartApiError as e:
+                self.conn.rollback()
+                if is_fatal(e):
+                    raise
+                errors_in_a_row += 1
+                self.periods_failed += 1
+                logger.warning("DART %s %s %s skipped (left pending): %s", members[0]["stock_code"], fy, reprt, e)
+                if errors_in_a_row >= MAX_CONSECUTIVE_ERRORS:
+                    raise
+                continue
+            errors_in_a_row = 0
             self.conn.commit()
             self.periods_fetched += 1
-        if total:
-            self._progress(total, total, "financials done")
+        self._progress(total, total, f"{label} done")
 
     def _fetch_group(self, corp, fy, reprt, members):
         latest = max(m["rcept_no"] for m in members)
         fm = members[0]["fiscal_month"] or 12
         years = api_years(members, fy, fm)
+        recent = any(self._is_recent(m) for m in members)
         fs_div, rows = None, []
         for api_year in years:
-            fs_div, rows = fin.fetch_period(self.client, corp, api_year, reprt, cache_tag=latest)
+            fs_div, rows = fin.fetch_period(self.client, corp, api_year, reprt, cache_tag=None if recent else latest)
             if rows and (fm == 12 or self._period_matches(rows, corp, fy, reprt)):
                 break
             fs_div, rows = None, []
+        if not rows and recent:
+            # DART lists a report at once but loads its statements hours later:
+            # leave it pending (nothing cached or marked) and ask again next run.
+            return
         now = now_iso()
         kw = {}
         source = "api"
@@ -404,38 +509,72 @@ class _Job:
                     kw = {"raw": False, "financial": financial, "nci": nci}
                     source = "document"
                     break
+        q = fil.Q_BY_REPRT[reprt]
+        self.conn.execute(
+            f"DELETE FROM fin_issue WHERE kind = 'no_data' AND rcept_no IN ({','.join('?' * len(members))})",
+            [m["rcept_no"] for m in members])
         if not rows:
             self.conn.executemany(
                 "INSERT OR REPLACE INTO fin_fetch(rcept_no, status, src_rcept_no, fs_div, fetched_at) "
                 "VALUES (?, 'no_data', NULL, NULL, ?)", [(m["rcept_no"], now) for m in members])
-            fin.record_issue(self.conn, latest, corp, fy, fil.Q_BY_REPRT[reprt], "no_data",
+            fin.record_issue(self.conn, latest, corp, fy, q, "no_data",
                              "no API data and no income statement found in the document")
             return
-        src, missing = fin.store_period(self.conn, corp, fy, reprt, fs_div, rows, self.account_map, **kw)
+        src, missing = fin.store_period(self.conn, corp, fy, reprt, fs_div, rows, self.account_map,
+                                        fallback_rcept=latest, **kw)
         if source == "document":
-            fin.record_issue(self.conn, src, corp, fy, fil.Q_BY_REPRT[reprt], "from_document",
+            fin.record_issue(self.conn, src, corp, fy, q, "from_document",
                              "API 013; read from the report's income statement table")
         status = "unmapped" if missing else ("document" if source == "document" else "ok")
-        done = {m["rcept_no"] for m in members} | {src}
+        # A recent correction newer than the receipt the API answered with is
+        # not in these numbers yet: it stays pending and the period is asked
+        # again next run (nothing was cached). An attachment-only correction
+        # changes no statement and is done with the rest (review_codex P1).
+        waiting = {m["rcept_no"] for m in members
+                   if source == "api" and m["rcept_no"] > src and self._is_recent(m)
+                   and not _attachment_only(m.get("report_nm"))}
+        done = ({m["rcept_no"] for m in members} - waiting) | {src}
         self.conn.executemany(
             "INSERT OR REPLACE INTO fin_fetch(rcept_no, status, src_rcept_no, fs_div, fetched_at) VALUES (?, ?, ?, ?, ?)",
             [(r, status, src, fs_div, now) for r in sorted(done)])
+
+    def _is_recent(self, member) -> bool:
+        return (self.today - _dt.date.fromisoformat(member["rcept_dt"][:10])).days <= RECENT_FILING_DAYS
 
     def _cache_dir(self) -> str:
         return getattr(self.client, "cache_dir", None) or paths.DART_CACHE_DIR
 
     def _period_matches(self, rows, corp, fy, reprt) -> bool:
         """For a non-December filer: whether the reply's receipt belongs to the
-        wanted period (an unknown receipt is accepted)."""
-        src = max(str(r.get("rcept_no")) for r in rows if r.get("rcept_no"))
+        wanted period (an unknown or missing receipt is accepted)."""
+        src = fin.source_receipt(rows)
+        if src is None:
+            return True
         row = self.conn.execute("SELECT bsns_year, reprt_code FROM filing WHERE rcept_no = ?", (src,)).fetchone()
         return row is None or (row[0] == fy and row[1] == reprt)
 
-    def _rank(self):
-        order = self.priority if self.priority is not None else default_priority()
+    def _rank(self, stocks: set):
+        """Position of a stock in the backfill order. Built once per run; the
+        KRX market-cap file is asked for only when a pending stock is outside
+        the Universe list (review_agy M1)."""
+        if self.priority is not None:
+            order = list(self.priority)
+        else:
+            if self._order is None:
+                self._order = universe_priority()
+            if not self._order_has_caps and not stocks <= set(self._order):
+                self._order = self._order + market_cap_priority(set(self._order))
+                self._order_has_caps = True
+            order = self._order
         pos = {code: i for i, code in enumerate(order)}
         n = len(pos)
         return lambda stock: pos.get(stock, n)
+
+
+def _attachment_only(report_nm: str | None) -> bool:
+    """Whether a report is a correction of attachments only ("[첨부정정]...")."""
+    parsed = fil.parse_report_name(report_nm or "")
+    return bool(parsed and parsed[3]) and set(parsed[3]) <= ATTACHMENT_ONLY_TAGS
 
 
 def api_years(members, fiscal_year: int, fiscal_month: int) -> list[int]:
@@ -451,24 +590,33 @@ def api_years(members, fiscal_year: int, fiscal_month: int) -> list[int]:
     return [fiscal_year] if fiscal_month == 12 else [fiscal_year, fiscal_year - 1]
 
 
-def default_priority() -> list[str]:
-    """Stock codes in backfill order (plan 11-3-3): the Universe's KOSPI/KOSDAQ
-    rows by market cap, then every other KRX stock by its latest market cap."""
-    codes: list[str] = []
+def universe_priority() -> list[str]:
+    """The Universe cache's KOSPI/KOSDAQ stock codes by market cap (plan 11-3-3)."""
     try:
         with open(paths.UNIVERSE_CACHE_FILE, encoding="utf-8") as f:
             rows = json.load(f)
-        kr = [r for r in rows if isinstance(r, dict) and r.get("market") in ("KOSPI", "KOSDAQ")]
+        kr = [r for r in rows if isinstance(r, dict) and r.get("market") in ("KOSPI", "KOSDAQ") and r.get("ticker")]
         kr.sort(key=lambda r: -(r.get("market_cap") or 0))
-        codes = [str(r.get("ticker")).zfill(6) for r in kr]
+        return [str(r["ticker"]).zfill(6) for r in kr]
     except (OSError, ValueError, TypeError):
         logger.info("DART priority: no Universe cache", exc_info=True)
+        return []
+
+
+def market_cap_priority(seen: set) -> list[str]:
+    """Every other KRX stock by its latest market cap (one download of the KRX file)."""
     try:
         from data.listing import _fetch_recent_marcaps
         _day, caps = _fetch_recent_marcaps()
-        seen = set(codes)
-        codes += [c for c, _ in sorted(caps.items(), key=lambda kv: -(kv[1] or 0)) if c not in seen]
+        return [c for c, _ in sorted(caps.items(), key=lambda kv: -(kv[1] or 0)) if c not in seen]
     except Exception:
         # kept broad: the KRX market-cap file is optional ordering input; any failure keeps the Universe order.
         logger.warning("DART priority: market caps unavailable", exc_info=True)
-    return codes
+        return []
+
+
+def default_priority() -> list[str]:
+    """Stock codes in backfill order (plan 11-3-3): the Universe's KOSPI/KOSDAQ
+    rows by market cap, then every other KRX stock by its latest market cap."""
+    codes = universe_priority()
+    return codes + market_cap_priority(set(codes))

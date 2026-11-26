@@ -7,13 +7,15 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 import zipfile
+from unittest import mock
 
 from data.dart import filings as fil
 from data.dart import financials as fin
 from data.dart import query
-from data.dart.client import DartBudgetExceeded, DartClient, calls_today
+from data.dart.client import DartBudgetExceeded, DartCancelled, DartClient, calls_today
 from data.dart.lock import SyncLock
 from data.dart.store import connect
 from data.dart.sync import run_sync
@@ -61,6 +63,7 @@ class FakeDart:
     def __init__(self):
         self.requests = []
         self.limit_hit = False
+        self.hook = None                  # hook(endpoint, params) -> a reply, an exception raised, or None
         self.list_rows = [
             # Samsung 2025: Q1, H1, Q3 (filed 2025-11-14), and a corrected H1.
             self._lr(SAMSUNG, "005930", "삼성전자", "Y", "분기보고서 (2025.03)", "20250515000001"),
@@ -104,6 +107,10 @@ class FakeDart:
         params = dict(params or {})
         self.requests.append((url.rsplit("/", 1)[-1], {k: v for k, v in params.items() if k != "crtfc_key"}))
         ep = url.rsplit("/", 1)[-1]
+        if self.hook is not None:
+            reply = self.hook(ep, params)
+            if reply is not None:
+                return reply
         if self.limit_hit:
             return FakeResp({"status": "020", "message": "limit"})
         if ep == "corpCode.xml":
@@ -356,8 +363,8 @@ class TestSyncAndQuery(_TmpMixin, unittest.TestCase):
         self.addCleanup(conn.close)
         self.assertEqual(conn.execute("SELECT status FROM sync_run WHERE run_id = ?", (res.run_id,)).fetchone()[0],
                          "partial")
-        done_before = conn.execute("SELECT COUNT(*) FROM fin_fetch").fetchone()[0]
-        self.assertGreater(done_before, 0)               # the period in flight was committed
+        # Nothing half-done is kept: the period in flight is rolled back and fetched by the rerun.
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM fin_std").fetchone()[0], 0)
         res2 = self.sync("auto")
         self.assertEqual((res2.status, res2.pending_left), ("done", 0))
         fetched = [p for ep, p in self.fake.requests if ep == "fnlttSinglAcntAll.json"]
@@ -615,6 +622,601 @@ class TestFollowUps(_TmpMixin, unittest.TestCase):
         self.assertIn("계정 미매핑", text)
         self.assertIn("005930", text)
 
+# ---- review_agy.md (2026-11-26) -----------------------------------------------------
+
+import sqlite3  # noqa: E402
+import sys  # noqa: E402
+
+import requests  # noqa: E402
+
+from data.dart import store  # noqa: E402
+from data.dart import sync as dsync  # noqa: E402
+from data.dart.lock import pid_alive  # noqa: E402
+
+MARCH = "00777777"          # March year end
+
+
+class TestReviewStore(_TmpMixin, unittest.TestCase):
+    """H1: readers never write; the schema script runs only on a version change."""
+
+    def test_current_schema_is_not_rewritten(self):
+        connect(self.db).close()
+        conn = connect(self.db)
+        self.addCleanup(conn.close)
+        self.assertEqual(conn.total_changes, 0)
+
+    def test_readonly_connection_cannot_write_and_reads_while_a_writer_holds_the_lock(self):
+        writer = connect(self.db)
+        self.addCleanup(writer.close)
+        writer.execute("INSERT INTO company(corp_code, stock_code, corp_name) VALUES ('C1', '000001', 'x')")
+        writer.commit()
+        writer.execute("BEGIN IMMEDIATE")                       # a collector mid-transaction
+        ro = store.open_readonly(self.db)
+        self.addCleanup(ro.close)
+        self.assertEqual(ro.execute("SELECT COUNT(*) FROM company").fetchone()[0], 1)
+        self.assertEqual(query.get_financials("000001", db_path=self.db), [])
+        self.assertEqual(dsync.collection_status(self.db)["periods_total"], 0)
+        with self.assertRaises(sqlite3.OperationalError):
+            ro.execute("INSERT INTO company(corp_code, corp_name) VALUES ('C2', 'y')")
+        writer.rollback()
+
+    def test_missing_db_is_empty_and_not_created(self):
+        self.assertIsNone(store.open_readonly(self.db))
+        self.assertEqual(query.get_financials("005930", db_path=self.db), [])
+        self.assertEqual(query.get_growth("005930", db_path=self.db), [])
+        self.assertEqual(query.issues(db_path=self.db)["counts"], [])
+        st = dsync.collection_status(self.db)
+        self.assertEqual((st["last_run"], st["list_done"], st["calls_left"]), (None, False, 19_000))
+        self.assertFalse(os.path.exists(self.db))
+
+    def test_older_schema_is_migrated_once(self):
+        conn = sqlite3.connect(self.db)                         # a version-3 file: no currency, old views
+        old_schema = "\n".join(line for line in store._SCHEMA.splitlines()
+                               if not line.startswith(("  currency TEXT DEFAULT", "  avail_dt TEXT")))
+        conn.executescript(old_schema)
+        conn.execute("INSERT INTO sync_state(key, value) VALUES ('schema_version', '3')")
+        conn.execute("INSERT INTO fin_std VALUES ('C1', 2025, 1, 'CFS', 'revenue', 5, 5, 0, 'r1', '2025-05-15')")
+        conn.execute("INSERT INTO fin_raw(rcept_no, fs_div, sj_div, ord, currency) VALUES ('r1', 'CFS', 'IS', 1, 'USD')")
+        conn.commit()
+        conn.close()
+        ro = store.open_readonly(self.db)
+        self.addCleanup(ro.close)
+        self.assertEqual(ro.execute("SELECT currency FROM fin_std").fetchone()[0], "USD")
+        self.assertEqual(ro.execute("SELECT value FROM sync_state WHERE key = 'schema_version'").fetchone()[0],
+                         str(store.SCHEMA_VERSION))
+        self.assertEqual(ro.execute("SELECT currency, fs_div_changed FROM v_fin_growth").fetchone()[:], ("USD", 0))
+
+
+def _table(rows, head="", cols="<TD>3개월</TD><TD>누적</TD><TD>3개월</TD><TD>누적</TD>", unit="백만원"):
+    body = "".join("<TR>" + "".join(f"<TD>{c}</TD>" for c in r) + "</TR>" for r in rows)
+    return (f'<DOCUMENT><TITLE>2-2. 연결 손익계산서</TITLE>{head}'
+            f"<TABLE><TR><TD>(단위 : {unit})</TD></TR><TR><TD>과목</TD>{cols}</TR>{body}</TABLE>"
+            "<TABLE><TR><TD>영업이익</TD><TD>9</TD><TD>9</TD><TD>9</TD><TD>9</TD></TR></TABLE></DOCUMENT>")
+
+
+class TestReviewDocuments(_TmpMixin, unittest.TestCase):
+    """H2: a blank current cell is a missing value, never the next column's number."""
+
+    def _amounts(self, doc, reprt="11012"):
+        got = docs.income_rows(doc, "20220816000001", reprt)
+        return {r["account_id"]: (r["thstrm_amount"], r["thstrm_add_amount"]) for r in got[1]} if got else None
+
+    def test_blank_three_month_cell_does_not_shift_columns(self):
+        doc = _table([["영업이익", "-", "550", "(10)", "400"], ["당기순이익", "150", "", "5", "300"]])
+        got = self._amounts(doc)
+        self.assertEqual(got["dart_OperatingIncomeLoss"], (None, 550e6))     # was (550e6, -10e6)
+        self.assertEqual(got["ifrs-full_ProfitLoss"], (150e6, None))
+
+    def test_blank_current_period_is_not_the_prior_period(self):
+        doc = _table([["영업이익", "-", "400"], ["당기순이익", "7", "300"]], cols="<TD>당기</TD><TD>전기</TD>")
+        got = self._amounts(doc, "11013")
+        self.assertNotIn("dart_OperatingIncomeLoss", got)                    # was 400e6 (last year's)
+        self.assertEqual(got["ifrs-full_ProfitLoss"], (7e6, None))
+
+    def test_annual_table_with_three_periods(self):
+        doc = _table([["영업이익", "-", "20", "30"], ["당기순이익", "1", "2", "3"]],
+                     cols="<TD>당기</TD><TD>전기</TD><TD>전전기</TD>")
+        got = self._amounts(doc, "11011")
+        self.assertNotIn("dart_OperatingIncomeLoss", got)
+        self.assertEqual(got["ifrs-full_ProfitLoss"], (1e6, None))
+
+    def test_statement_table_found_behind_two_heading_tables_or_none(self):
+        two = _table([["영업이익", "1", "2", "3", "4"]],
+                     head="<TABLE><TR><TD>연결 손익계산서</TD></TR></TABLE><TABLE><TR><TD>제 1 기</TD></TR></TABLE>")
+        self.assertEqual(self._amounts(two)["dart_OperatingIncomeLoss"], (1e6, 2e6))
+        none = _table([["영업이익", "1", "2", "3", "4"]])
+        self.assertEqual(self._amounts(none)["dart_OperatingIncomeLoss"], (1e6, 2e6))   # not the next table's 9
+
+    def test_lowercase_tags_and_foreign_currency_unit(self):
+        doc = _table([["영업이익", "1", "2", "3", "4"]], unit="천USD").lower().replace("usd", "USD")
+        fs_div, rows, *_ = docs.income_rows(doc, "20220816000001", "11012")
+        self.assertEqual((rows[0]["thstrm_amount"], rows[0]["currency"]), (1e3, "USD"))
+
+    def test_header_spans_give_the_columns(self):
+        """The SK스퀘어 2022 layout: one period shown, "3개월 | 누적" each over a
+        sub-amount / total column pair, the 과목 header spanning two rows -- and
+        the tail of the balance sheet (its own "지배기업 소유주 ... 자본" line) in
+        front of the statement."""
+        doc = ('<DOCUMENT><TITLE>2. 연결재무제표</TITLE>'
+               '<TABLE><TR><TH>과목</TH><TH>당기말</TH></TR>'
+               '<TR><TD>Ⅰ.지배기업소유주에귀속되는자본</TD><TD>17,537,797</TD></TR>'
+               '<TR><TD>Ⅱ.비지배지분</TD><TD>196,322</TD></TR></TABLE>'
+               '<TABLE><TR><TD>(단위 : 백만원)</TD></TR></TABLE>'
+               '<TABLE><TR><TH ROWSPAN="2">과목</TH><TH COLSPAN="4">제 2 기 반기</TH></TR>'
+               '<TR><TH COLSPAN="2">3개월</TH><TH COLSPAN="2">누적</TH></TR>'
+               '<TR><TD>Ⅰ.영업수익</TD><TD></TD><TD>1,529,031</TD><TD></TD><TD>2,850,101</TD></TR>'
+               '<TR><TD>매출액</TD><TD>950,373</TD><TD></TD><TD>1,872,241</TD><TD></TD></TR>'
+               '<TR><TD>Ⅲ.영업이익</TD><TD></TD><TD>-</TD><TD></TD><TD>889,478</TD></TR>'
+               '<TR><TD>Ⅵ.반기연결순이익</TD><TD></TD><TD>493,830</TD><TD></TD><TD>958,838</TD></TR>'
+               '<TR><TD>지배기업의 소유주지분</TD><TD></TD><TD>486,221</TD><TD></TD><TD>915,744</TD></TR>'
+               '<TR><TD>비지배지분</TD><TD></TD><TD>7,609</TD><TD></TD><TD>43,094</TD></TR></TABLE></DOCUMENT>')
+        got = self._amounts(doc)
+        self.assertEqual(got["ifrs-full_Revenue"], (1529031e6, 2850101e6))
+        self.assertEqual(got["dart_OperatingIncomeLoss"], (None, 889478e6))          # blank 3-month cell
+        self.assertEqual(got["ifrs-full_ProfitLossAttributableToOwnersOfParent"], (486221e6, 915744e6))
+
+    def test_four_periods_over_column_pairs(self):
+        """The KB금융 2022 Q1 layout: four period headers, each over two columns."""
+        head = "".join(f'<TH COLSPAN="2">{t}</TH>' for t in ("제15기 1분기", "제14기 1분기", "제14기", "제13기"))
+        doc = ('<DOCUMENT><TITLE>2-2. 연결 손익계산서</TITLE><TABLE><TR><TD>(단위 : 백만원)</TD></TR></TABLE>'
+               f'<TABLE><TR><TH>과목</TH>{head}</TR>'
+               '<TR><TD>IX. 영업이익</TD><TD></TD><TD>-</TD><TD></TD><TD>1,746,618</TD><TD></TD><TD>6,097,000</TD>'
+               '<TD></TD><TD>4,616,000</TD></TR>'
+               '<TR><TD>XⅢ. 당기순이익</TD><TD></TD><TD>1,464,102</TD><TD></TD><TD>1,285,009</TD><TD></TD><TD>4,409,543</TD>'
+               '<TD></TD><TD>3,515,566</TD></TR></TABLE></DOCUMENT>')
+        got = self._amounts(doc, "11013")
+        self.assertNotIn("dart_OperatingIncomeLoss", got)                  # not last year's 1,746,618
+        self.assertEqual(got["ifrs-full_ProfitLoss"], (1464102e6, None))
+
+    def test_numbered_account_names_from_the_api(self):
+        """신영증권: "III. 영업이익" without the standard tag."""
+        rows = [_fin_row("CIS", "-표준계정코드 미사용-", "III. 영업이익", 1, "7"),
+                _fin_row("CIS", "-표준계정코드 미사용-", "Ⅵ. 당기순이익(주5)", 2, "5")]
+        self.assertEqual(fin.find_metric(rows, "op_income")["thstrm_amount"], "7")
+        self.assertEqual(fin.find_metric(rows, "net_income")["thstrm_amount"], "5")
+        self.assertFalse(fin.is_owners_name("Ⅰ.지배기업소유주에귀속되는자본"))
+
+    def test_section_cache_is_written_atomically(self):
+        path = os.path.join(self.dir, "document", "2022", "r_is.xml")
+        docs._write_section(path, ("CFS", "<TABLE></TABLE>"))
+        self.assertEqual(os.listdir(os.path.dirname(path)), ["r_is.xml"])    # no temporary file left
+        with open(path, encoding="utf-8") as f:
+            self.assertTrue(f.read().startswith("<!--fs_div=CFS-->"))
+
+
+class TestReviewSync(_TmpMixin, unittest.TestCase):
+    def _conn(self):
+        conn = connect(self.db)
+        self.addCleanup(conn.close)
+        return conn
+
+    # ---- H3 ----
+    def test_one_failing_period_is_skipped_and_stays_pending(self):
+        def hook(ep, params):
+            if ep == "fnlttSinglAcntAll.json" and params["reprt_code"] == "11012":
+                raise requests.ConnectionError("boom")
+        self.fake.hook = hook
+        res = self.sync("auto")
+        self.assertEqual((res.status, res.pending_left), ("done", 1))
+        conn = self._conn()
+        got = {r["fiscal_q"] for r in query.get_financials("005930", conn=conn)}
+        self.assertEqual(got, {1, 3})                       # the quarters after the failing one still arrived
+        self.fake.hook = None
+        self.assertEqual(self.sync("auto").pending_left, 0)
+
+    def test_consecutive_failures_stop_the_run(self):
+        def hook(ep, params):
+            if ep == "fnlttSinglAcntAll.json":
+                raise requests.ConnectionError("down")
+        self.fake.hook = hook
+        with mock.patch.object(dsync, "MAX_CONSECUTIVE_ERRORS", 2):
+            res = self.sync("auto")
+        self.assertEqual(res.status, "failed")
+        self.assertIn("network_error", res.error)
+
+    def test_fatal_status_stops_at_once(self):
+        def hook(ep, params):
+            if ep == "fnlttSinglAcntAll.json":
+                return FakeResp({"status": "010", "message": "unregistered key"})
+        self.fake.hook = hook
+        res = self.sync("auto")
+        self.assertEqual(res.status, "failed")
+        self.assertEqual(len([1 for ep, _ in self.fake.requests if ep == "fnlttSinglAcntAll.json"]), 1)
+
+    def test_429_is_retried(self):
+        seen = []
+
+        def hook(ep, params):
+            if ep == "list.json" and not seen:
+                seen.append(1)
+                return FakeResp({"status": "000"}, status_code=429)
+        self.fake.hook = hook
+        self.assertEqual(self.sync("auto").status, "done")
+
+    def test_cancel_interrupts_a_backoff_wait(self):
+        conn = self._conn()
+        stop = threading.Event()
+        c = DartClient(conn, "k", self.cache, session=self.fake, min_interval=0, backoff=30, cancel=stop)
+
+        def hook(ep, params):
+            stop.set()
+            raise requests.ConnectionError("down")
+        self.fake.hook = hook
+        t0 = time.monotonic()
+        with self.assertRaises(DartCancelled):
+            c.get_json("list.json", {"bgn_de": "20250101", "end_de": "20250102"})
+        self.assertLess(time.monotonic() - t0, 2.0)
+
+    def test_client_closes_only_its_own_session(self):
+        conn = self._conn()
+        own = DartClient(conn, "k", self.cache)
+        with mock.patch.object(own.session, "close") as closed:
+            own.close()
+        closed.assert_called_once()
+        given = mock.Mock()
+        DartClient(conn, "k", self.cache, session=given).close()
+        given.close.assert_not_called()
+
+    # ---- H4 / M8 ----
+    def _march_rows(self):
+        lr = FakeDart._lr
+        return [lr(MARCH, "067010", "새이름", "K", "사업보고서 (2021.03)", "20210610000002"),
+                lr(MARCH, "067010", "옛이름", "K", "분기보고서 (2020.12)", "20210215000001")]
+
+    def test_first_year_quarter_of_a_march_filer_is_kept_and_reclassified(self):
+        conn = self._conn()
+        rows = self._march_rows()
+        fil.store_filings(conn, rows[1:], 2021)             # the Q3 report arrives a window earlier
+        self.assertEqual(tuple(conn.execute("SELECT bsns_year, reprt_code FROM filing").fetchone()),
+                         (2020, "11014"))                   # looks like FY2020 until the fiscal month is known
+        fil.store_filings(conn, rows[:1], 2021)
+        got = dict((r[0], (r[1], r[2])) for r in conn.execute("SELECT rcept_no, bsns_year, reprt_code FROM filing"))
+        self.assertEqual(got, {"20210215000001": (2021, "11014"), "20210610000002": (2021, "11011")})
+
+    def test_reclassify_drops_what_was_stored_under_the_old_period(self):
+        conn = self._conn()
+        rows = self._march_rows()
+        fil.store_filings(conn, rows[1:], 2021)
+        fin.store_period(conn, MARCH, 2020, "11014", "OFS", _is_rows("5", "1", "1", "", "20210215000001"))
+        conn.execute("INSERT INTO fin_fetch(rcept_no, status, src_rcept_no) VALUES ('20210215000001', 'ok', "
+                     "'20210215000001')")
+        fil.store_filings(conn, rows[:1], 2021)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM fin_std").fetchone()[0], 0)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM fin_fetch").fetchone()[0], 0)
+
+    def test_company_name_comes_from_the_newest_report(self):
+        conn = self._conn()
+        fil.store_filings(conn, self._march_rows(), 2021)   # list.json order: newest first
+        self.assertEqual(conn.execute("SELECT corp_name FROM company").fetchone()[0], "새이름")
+
+    def test_list_rules_change_walks_the_windows_again(self):
+        self.sync("auto")
+        conn = self._conn()
+        conn.execute("UPDATE sync_state SET value = '1' WHERE key = 'list_version'")
+        conn.commit()
+        n = len([1 for ep, _ in self.fake.requests if ep == "list.json"])
+        self.sync("backfill")
+        self.assertGreater(len([1 for ep, _ in self.fake.requests if ep == "list.json"]), n)
+        self.assertEqual(dsync.get_state(conn, "list_version"), dsync.LIST_VERSION)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows process check")
+    def test_pid_alive_counts_an_unopenable_process_as_alive(self):
+        self.assertTrue(pid_alive(4))                       # the System process: OpenProcess is denied
+        self.assertTrue(pid_alive(os.getpid()))
+        self.assertFalse(pid_alive(2 ** 22 + 12345))
+
+    # ---- M1 ----
+    def test_no_pending_means_no_priority_lookup(self):
+        self.sync("auto")
+        with mock.patch.object(dsync, "universe_priority", side_effect=AssertionError("looked up")), \
+                mock.patch.object(dsync, "market_cap_priority", side_effect=AssertionError("looked up")):
+            res = run_sync("auto", "cli", api_key="k" * 40, db_path=self.db, cache_dir=self.cache,
+                           lock_path=self.lock, today=dt.date(2025, 11, 26), client_factory=self.factory())
+        self.assertEqual(res.status, "done", res.error)
+
+    def test_market_caps_only_when_a_pending_stock_is_outside_the_universe(self):
+        with mock.patch.object(dsync, "universe_priority", return_value=["005930", "123450"]), \
+                mock.patch.object(dsync, "market_cap_priority", side_effect=AssertionError("looked up")) as caps:
+            res = run_sync("auto", "cli", api_key="k" * 40, db_path=self.db, cache_dir=self.cache,
+                           lock_path=self.lock, today=dt.date(2025, 11, 26), client_factory=self.factory())
+        self.assertEqual(res.status, "done", res.error)
+        caps.assert_not_called()
+
+    def test_universe_rows_without_ticker_are_ignored(self):
+        with open(paths.UNIVERSE_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump([{"market": "KOSPI", "ticker": None, "market_cap": 9}, {"market": "KOSPI", "ticker": "5930",
+                                                                           "market_cap": 5}], f)
+        self.assertEqual(dsync.universe_priority(), ["005930"])
+
+    # ---- M4 ----
+    def test_recent_filing_without_data_stays_pending_and_uncached(self):
+        self.fake.list_rows.append(FakeDart._lr(SAMSUNG, "005930", "삼성전자", "Y", "[기재정정]분기보고서 (2025.09)",
+                                                "20251125000030"))
+        saved = self.fake.fin.pop((SAMSUNG, "2025", "11014", "CFS"))
+        res = self.sync("auto")                              # 013 for a report received yesterday
+        self.assertEqual((res.status, res.pending_left), ("done", 1))
+        conn = self._conn()
+        self.assertIsNone(conn.execute("SELECT 1 FROM fin_fetch WHERE rcept_no = '20251125000030'").fetchone())
+        # DART has loaded the corrected statements by the next run.
+        self.fake.fin[(SAMSUNG, "2025", "11014", "CFS")] = [dict(r, rcept_no="20251125000030") for r in saved]
+        self.assertEqual(self.sync("auto").pending_left, 0)
+        self.assertIn(3, {r["fiscal_q"] for r in query.get_financials("005930", conn=conn)})
+
+    # ---- M5 ----
+    def test_reparse_replaces_unmapped_and_issue_lines(self):
+        conn = self._conn()
+        rows = [_fin_row("IS", "entity_Sales", "제품매출합계", 1, "5", rcept="20250515000001"),
+                _fin_row("IS", "dart_OperatingIncomeLoss", "영업이익", 2, "1", rcept="20250515000001"),
+                _fin_row("IS", "entity_NI", "순이익합계", 3, "1", rcept="20250515000001")]
+        _src, missing = fin.store_period(conn, SAMSUNG, 2025, "11013", "CFS", rows)
+        self.assertEqual(set(missing), {"revenue", "net_income", "net_income_owners"})
+        amap = {SAMSUNG: {"revenue": ["entity_Sales"], "net_income": ["entity_NI"]}}
+        _src, missing = fin.store_period(conn, SAMSUNG, 2025, "11013", "CFS", rows, amap)
+        self.assertEqual(missing, [])                        # owners' profit falls back to the mapped net income
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM fin_unmapped").fetchone()[0], 0)
+        self.assertEqual([r[0] for r in conn.execute("SELECT kind FROM fin_issue")], ["owners_from_net_income"])
+
+    def test_rows_without_receipt_use_the_fallback(self):
+        conn = self._conn()
+        rows = [dict(r, rcept_no="") for r in _is_rows("5", "1", "1", "1", "x")]
+        with self.assertRaises(ValueError):
+            fin.store_period(conn, SAMSUNG, 2025, "11013", "CFS", rows)
+        src, _ = fin.store_period(conn, SAMSUNG, 2025, "11013", "CFS", rows, fallback_rcept="20250515000001")
+        self.assertEqual(src, "20250515000001")
+
+    # ---- M6 ----
+    def test_currency_is_kept_and_shown(self):
+        conn = self._conn()
+        rows = [dict(r, currency="USD") for r in _is_rows("5,000,000", "1,000,000", "1", "1", "20250515000001")]
+        fin.store_period(conn, SAMSUNG, 2025, "11013", "CFS", rows)
+        conn.execute("INSERT INTO company(corp_code, stock_code, corp_name) VALUES (?, '005930', 'x')", (SAMSUNG,))
+        conn.commit()
+        self.assertEqual(query.get_financials("005930", conn=conn)[0]["currency"], "USD")
+        text = query.format_growth_table("005930", conn=conn)
+        self.assertIn("백만 USD", text)
+        self.assertNotIn("억원", text)
+
+    def test_growth_is_not_computed_across_a_statement_change(self):
+        conn = self._conn()
+        fin.store_period(conn, SAMSUNG, 2024, "11013", "OFS", _is_rows("50", "5", "4", "", "20240515000001"))
+        fin.store_period(conn, SAMSUNG, 2025, "11013", "CFS", _is_rows("100", "10", "8", "7", "20250515000001"))
+        row = [r for r in query.get_financials(SAMSUNG, conn=conn)
+               if r["fiscal_year"] == 2025 and r["metric"] == "revenue"][0]
+        self.assertEqual((row["yoy"], row["fs_div_changed"]), (None, True))
+        v = conn.execute("SELECT yoy, turn, fs_div_changed FROM v_fin_growth WHERE fiscal_year = 2025 "
+                         "AND metric = 'op_income'").fetchone()
+        self.assertEqual(tuple(v), (None, None, 1))
+
+    # ---- M7 ----
+    def test_lookahead_q4_is_flagged_and_hidden_until_knowable(self):
+        conn = self._conn()
+        fin.store_period(conn, SAMSUNG, 2024, "11011", "CFS", _is_rows("130", "10", "-1", "1", "20250310000002"))
+        fin.store_period(conn, SAMSUNG, 2024, "11014", "CFS",
+                         _is_rows("30", "3", "2", "2", "20250620000009",
+                                  add={"rev": "90", "op": "9", "ni": "6", "own": "5"}))
+        early = [r for r in query.get_financials(SAMSUNG, as_of="2025-04-01", conn=conn) if r["metric"] == "revenue"][0]
+        self.assertEqual((early["value_q"], early["value_ytd"], early["lookahead"]), (None, 130.0, True))
+        late = [r for r in query.get_financials(SAMSUNG, as_of="2025-06-20", conn=conn)
+                if r["metric"] == "revenue" and r["fiscal_q"] == 4][0]
+        self.assertEqual((late["value_q"], late["avail_dt"]), (40.0, "2025-06-20"))
+
+    def test_half_year_value_is_filled_when_q1_arrives_later(self):
+        conn = self._conn()
+        half = [dict(r, thstrm_amount=None) for r in
+                _is_rows("", "", "", "", "20250814000002", add={"rev": "220", "op": "22", "ni": "17", "own": "15"})]
+        fin.store_period(conn, SAMSUNG, 2025, "11012", "CFS", half)            # cumulative only, no Q1 yet
+        fin.store_period(conn, SAMSUNG, 2025, "11013", "CFS", _is_rows("100", "10", "8", "7", "20250515000001"))
+        h1 = [r for r in query.get_financials(SAMSUNG, conn=conn) if r["fiscal_q"] == 2 and r["metric"] == "revenue"]
+        self.assertEqual((h1[0]["value_q"], h1[0]["derived"]), (120.0, 1))
+
+    # ---- M9 / L3 / L4 ----
+    def test_pending_is_counted_in_periods(self):
+        self.sync("init")
+        res = self.sync("daily")
+        st = dsync.collection_status(self.db, today=dt.date(2025, 11, 26))
+        self.assertEqual(res.pending_left, st["periods_pending"])
+        self.assertEqual(res.pending_left, 4)               # 5 filings: Samsung's H1 and its correction are one period
+
+    def test_old_fetch_log_rows_are_pruned(self):
+        conn = self._conn()
+        conn.execute("INSERT INTO fetch_log(endpoint, fetched_at) VALUES ('old', '2020-01-01T00:00:00')")
+        conn.commit()
+        self.sync("auto")
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM fetch_log WHERE endpoint = 'old'").fetchone()[0], 0)
+        self.assertGreater(conn.execute("SELECT COUNT(*) FROM fetch_log").fetchone()[0], 0)
+
+    def test_daily_until_moves_only_after_the_new_filings_are_fetched(self):
+        self.sync("init")
+        conn = self._conn()
+        conn.execute("UPDATE sync_state SET value = '2025-11-10' WHERE key = 'daily_until'")
+        conn.commit()
+        stop = threading.Event()
+        res = self.sync("daily", cancel=stop,
+                        on_progress=lambda d, t, m: stop.set() if m.startswith("new financials") else None)
+        self.assertEqual(res.status, "partial")
+        self.assertEqual(dsync.get_state(conn, "daily_until"), "2025-11-10")
+        self.assertEqual(self.sync("daily").status, "done")
+        self.assertEqual(dsync.get_state(conn, "daily_until"), "2025-11-26")
+        self.assertIn(3, {r["fiscal_q"] for r in query.get_financials("005930", conn=conn)})
+
+class TestReviewCodex(_TmpMixin, unittest.TestCase):
+    """review_codex.md (2026-11-26)."""
+
+    def _conn(self):
+        conn = connect(self.db)
+        self.addCleanup(conn.close)
+        return conn
+
+    def _run(self, mode, today, **kw):
+        return run_sync(mode, "cli", api_key="k" * 40, db_path=self.db, cache_dir=self.cache, lock_path=self.lock,
+                        today=today, priority=[], client_factory=self.factory(), **kw)
+
+    # ---- P1: a correction the API does not serve yet ----
+    def _add_q3_correction(self, name="[기재정정]분기보고서 (2025.09)"):
+        self.fake.list_rows.append(FakeDart._lr(SAMSUNG, "005930", "삼성전자", "Y", name, "20251125000030"))
+
+    def test_correction_not_served_yet_stays_pending_then_arrives(self):
+        self._add_q3_correction()
+        res = self.sync("auto")                       # the API still answers with the 11-14 original
+        self.assertEqual((res.status, res.pending_left), ("done", 1))
+        conn = self._conn()
+        self.assertIsNone(conn.execute("SELECT 1 FROM fin_fetch WHERE rcept_no = '20251125000030'").fetchone())
+        q3 = [r for r in query.get_financials("005930", conn=conn) if r["fiscal_q"] == 3 and r["metric"] == "revenue"]
+        self.assertEqual((q3[0]["value_q"], q3[0]["rcept_no"]), (130.0, "20251114000003"))
+        # DART loads the corrected statements; nothing stale was cached.
+        self.fake.fin[(SAMSUNG, "2025", "11014", "CFS")] = _is_rows(
+            "131", "-5", "-3", "-2", "20251125000030", add={"rev": "351", "op": "17", "ni": "14", "own": "13"})
+        res = self.sync("auto")
+        self.assertEqual((res.status, res.pending_left, res.periods_fetched), ("done", 0, 1))
+
+        def rev(as_of):
+            return [r["value_q"] for r in query.get_financials("005930", as_of=as_of, conn=conn)
+                    if r["fiscal_q"] == 3 and r["metric"] == "revenue"]
+        self.assertEqual((rev("2025-11-13"), rev("2025-11-20"), rev("2025-11-26")), ([], [130.0], [131.0]))
+
+    def test_attachment_only_correction_is_done_with_the_original(self):
+        self._add_q3_correction("[첨부정정]분기보고서 (2025.09)")
+        res = self.sync("auto")
+        self.assertEqual((res.status, res.pending_left), ("done", 0))
+
+    def test_correction_never_served_is_accepted_after_the_wait(self):
+        self._add_q3_correction()
+        self.assertEqual(self._run("auto", dt.date(2025, 11, 26)).pending_left, 1)
+        self.assertEqual(self._run("auto", dt.date(2025, 12, 5)).pending_left, 0)
+
+    # ---- P1: a Q4 resting on a later Q3 ----
+    def test_q4_is_available_from_the_day_its_q3_was_received(self):
+        conn = self._conn()
+        fin.store_period(conn, SAMSUNG, 2025, "11011", "CFS", _is_rows("1000", "100", "80", "70", "20260320000001"))
+        fin.store_period(conn, SAMSUNG, 2025, "11014", "CFS",           # the Q3 correction of 2026-04-01
+                         _is_rows("200", "20", "16", "14", "20260401000002",
+                                  add={"rev": "600", "op": "60", "ni": "48", "own": "42"}))
+
+        def q4(as_of=None):
+            r = [x for x in query.get_financials(SAMSUNG, as_of=as_of, conn=conn)
+                 if x["fiscal_q"] == 4 and x["metric"] == "revenue"][0]
+            return r["value_q"], r["value_ytd"], r["lookahead"]
+        self.assertEqual(q4("2026-03-21"), (None, 1000.0, True))        # only the annual total is known
+        self.assertEqual(q4("2026-04-02"), (400.0, 1000.0, True))
+        self.assertEqual(q4(), (400.0, 1000.0, True))
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM fin_issue WHERE kind = 'q4_uses_later_q3'").fetchone()[0],
+                         4)
+        # The original Q3 turns up later: the Q4 known on the annual's day uses it, and the warning goes.
+        fin.store_period(conn, SAMSUNG, 2025, "11014", "CFS",
+                         _is_rows("250", "25", "20", "18", "20251114000003",
+                                  add={"rev": "650", "op": "65", "ni": "52", "own": "46"}))
+        self.assertEqual(q4("2026-03-21"), (350.0, 1000.0, False))
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM fin_issue WHERE kind = 'q4_uses_later_q3'").fetchone()[0],
+                         0)
+
+    def test_q4_does_not_depend_on_arrival_order(self):
+        made = []
+
+        def load(order):
+            path = os.path.join(self.dir, f"order{len(made)}.db")
+            made.append(path)
+            conn = connect(path)
+            self.addCleanup(conn.close)
+            steps = {
+                1: lambda: fin.store_period(conn, SAMSUNG, 2025, "11011", "CFS",
+                                            _is_rows("1000", "100", "80", "70", "20260320000001")),
+                2: lambda: fin.store_period(conn, SAMSUNG, 2025, "11014", "CFS",
+                                            _is_rows("200", "20", "16", "14", "20260401000002",
+                                                     add={"rev": "600", "op": "60", "ni": "48", "own": "42"})),
+                3: lambda: fin.store_period(conn, SAMSUNG, 2025, "11014", "CFS",
+                                            _is_rows("250", "25", "20", "18", "20251114000003",
+                                                     add={"rev": "650", "op": "65", "ni": "52", "own": "46"})),
+            }
+            for k in order:
+                steps[k]()
+            return [(r["fiscal_q"], r["metric"], r["value_q"], r["avail_dt"])
+                    for r in query.get_financials(SAMSUNG, as_of="2026-03-25", conn=conn)]
+        self.assertEqual(load((1, 2, 3)), load((3, 2, 1)))
+        self.assertEqual(load((1, 2, 3)), load((2, 3, 1)))
+
+    # ---- P1: reporting currency changes ----
+    def test_amounts_of_different_currencies_are_not_combined(self):
+        conn = self._conn()
+        krw = _is_rows("700", "70", "56", "49", "20251114000003", add={"rev": "700", "op": "70", "ni": "56", "own": "49"})
+        usd = [dict(r, currency="USD") for r in _is_rows("1000", "100", "80", "70", "20260320000001")]
+        fin.store_period(conn, SAMSUNG, 2025, "11014", "CFS", krw)
+        fin.store_period(conn, SAMSUNG, 2025, "11011", "CFS", usd)
+        fin.store_period(conn, SAMSUNG, 2024, "11011", "CFS", _is_rows("900", "90", "72", "63", "20250320000001"))
+        fin.store_period(conn, SAMSUNG, 2024, "11014", "CFS",
+                         _is_rows("300", "30", "24", "21", "20241114000001",
+                                  add={"rev": "600", "op": "60", "ni": "48", "own": "42"}))
+        rows = {(r["fiscal_year"], r["fiscal_q"]): r for r in query.get_financials(SAMSUNG, conn=conn)
+                if r["metric"] == "revenue"}
+        self.assertEqual(rows[(2025, 4)]["value_q"], None)               # was 300 "USD" (1000 USD - 700 KRW)
+        self.assertEqual((rows[(2025, 4)]["currency"], rows[(2025, 4)]["currency_changed"]), ("USD", True))
+        self.assertEqual(rows[(2024, 4)]["value_q"], 300.0)
+        view = conn.execute("SELECT yoy, currency_changed FROM v_fin_growth WHERE fiscal_year = 2025 "
+                            "AND fiscal_q = 4 AND metric = 'revenue'").fetchone()
+        self.assertEqual(tuple(view), (None, 1))
+        conn.execute("INSERT INTO company(corp_code, stock_code, corp_name) VALUES (?, '005930', 'x')", (SAMSUNG,))
+        conn.commit()
+        lines = query.format_growth_table("005930", conn=conn).splitlines()
+        self.assertIn("백만 USD", lines[0])
+        krw_line = next(x for x in lines if x.startswith("2024Q4"))
+        self.assertIn("단위 억원", krw_line)                              # not shown in the dollar unit
+        self.assertIn("통화 변경", next(x for x in lines if x.startswith("2025Q4")))
+
+    # ---- P2: daily runs reach a report answered 013 for a few days ----
+    def _bank_q3(self):
+        self.fake.list_rows.append(FakeDart._lr(BANK, "105560", "은행지주", "Y", "분기보고서 (2025.09)",
+                                                "20251120000040"))
+
+    def test_daily_runs_retry_a_recent_013_until_it_is_served(self):
+        self._run("init", dt.date(2025, 11, 19))
+        self._bank_q3()
+        for day in (21, 22, 23, 24):
+            self.assertEqual(self._run("daily", dt.date(2025, 11, day)).status, "done")
+        conn = self._conn()
+        self.assertIsNone(conn.execute("SELECT 1 FROM fin_fetch WHERE rcept_no = '20251120000040'").fetchone())
+        self.fake.fin[(BANK, "2025", "11014", "CFS")] = _is_rows(
+            "9", "3", "2", "2", "20251120000040", add={"rev": "30", "op": "9", "ni": "6", "own": "6"})
+        self._run("daily", dt.date(2025, 11, 25))                       # the list window starts 11-21, after the filing
+        self.assertEqual(conn.execute("SELECT status FROM fin_fetch WHERE rcept_no = '20251120000040'").fetchone()[0],
+                         "ok")
+
+    def test_daily_runs_fall_back_to_the_document_after_the_wait(self):
+        self._run("init", dt.date(2025, 11, 19))
+        self._bank_q3()
+        self.fake.documents["20251120000040"] = _doc()
+        for day in (21, 22, 23, 24, 25, 26, 27):
+            self._run("daily", dt.date(2025, 11, day))
+        conn = self._conn()
+        self.assertIsNone(conn.execute("SELECT 1 FROM fin_fetch WHERE rcept_no = '20251120000040'").fetchone())
+        self.assertEqual([p for ep, p in self.fake.requests if ep == "document.xml"], [])
+        self._run("daily", dt.date(2025, 11, 28))                       # 8 days after the receipt
+        self.assertEqual(conn.execute("SELECT status FROM fin_fetch WHERE rcept_no = '20251120000040'").fetchone()[0],
+                         "document")
+
+    # ---- P2: --daily --tickers ----
+    def test_daily_with_tickers_fetches_their_financials(self):
+        res = self.sync("daily", tickers=["123450"])
+        self.assertEqual((res.status, res.periods_fetched, res.pending_left), ("done", 1, 0))
+        conn = self._conn()
+        self.assertTrue(query.get_financials("123450", conn=conn))
+        self.assertEqual(query.get_financials("005930", conn=conn), [])
+        self.assertEqual(self.sync("init", tickers=["123450"]).periods_fetched, 0)      # lists only
+
+    # ---- P2: a reader that must not migrate someone's DB ----
+    def test_readonly_without_migration_leaves_an_old_db_untouched(self):
+        conn = sqlite3.connect(self.db)
+        conn.executescript(store._SCHEMA)
+        conn.execute("INSERT INTO sync_state(key, value) VALUES ('schema_version', '2')")
+        conn.execute("INSERT INTO fin_fetch(rcept_no, status) VALUES ('r1', 'unmapped')")
+        conn.commit()
+        conn.close()
+        ro = store.open_readonly(self.db, migrate=False)
+        self.assertFalse(store.schema_is_current(ro))
+        ro.close()
+        check = sqlite3.connect(self.db)
+        self.addCleanup(check.close)
+        self.assertEqual(check.execute("SELECT value FROM sync_state WHERE key = 'schema_version'").fetchone()[0], "2")
+        self.assertEqual(check.execute("SELECT COUNT(*) FROM fin_fetch").fetchone()[0], 1)   # v3 would delete it
+
 # 2025 quarterly revenue / operating income (KRW, consolidated) of the plan-7
 # verification stocks, checked on 2026-11-26 against each report's own income
 # statement table (document.xml; Q4 = annual - Q3 cumulative of those tables).
@@ -636,14 +1238,17 @@ class TestVerificationStocks(unittest.TestCase):
     """Plan 8 regression (optional): the collected dart.db against EXPECTED_2025.
     Runs only with a DART key and a dart.db holding these stocks (fill it with
     `tools/dart_sync.py --backfill --tickers 005930 000660 005380 043260 036930`);
-    reads the DB only, no API calls."""
+    reads the DB only, through a read-only connection: no API calls, nothing
+    written, and it works on a read-only copy (review_agy tests #1)."""
 
     def test_2025_quarters_match_report_tables(self):
         from data.dart.client import api_key_from_env
         if not api_key_from_env() or not os.path.exists(REAL_DART_DB):
             self.skipTest("no DART key or dart.db")
-        conn = connect(REAL_DART_DB)
+        conn = store.open_readonly(REAL_DART_DB, migrate=False)     # the user's data: never migrated by a test
         self.addCleanup(conn.close)
+        if not store.schema_is_current(conn):
+            self.skipTest("dart.db is at an older schema; run the collector once to migrate it")
         for code, metrics in EXPECTED_2025.items():
             rows = query.get_financials(code, conn=conn)
             if not rows:

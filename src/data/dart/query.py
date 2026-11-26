@@ -5,14 +5,33 @@ newest value whose filing was received on or before ``as_of`` (the first day a
 strategy could have used it; plan 1 and 4-5), with YoY / QoQ growth and the
 profit-turn flag computed over that same as-of set. Without ``as_of`` it is the
 newest value overall (what ``v_fin_growth`` shows).
+
+Every function here reads through ``store.open_readonly``: nothing is written
+and no write lock is taken, so a query never waits for (or disturbs) a running
+collector, and a missing dart.db is simply "no data" (review_agy H1).
 """
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
 import sqlite3
 
 import paths
-from data.dart.store import connect
+from data.dart.store import open_readonly
+
+
+@contextlib.contextmanager
+def _reader(conn: sqlite3.Connection | None, db_path: str | None):
+    """`conn` as given, else a read-only connection closed on exit (None: no DB yet)."""
+    if conn is not None:
+        yield conn
+        return
+    own = open_readonly(db_path or paths.DART_DB_FILE)
+    try:
+        yield own
+    finally:
+        if own is not None:
+            own.close()
 
 
 def _resolve_corp(conn, code: str) -> str | None:
@@ -55,64 +74,85 @@ def _turn(metric, cur, prev_year):
 
 def get_financials(code: str, as_of=None, *, metrics=None, conn: sqlite3.Connection | None = None,
                    db_path: str | None = None) -> list[dict]:
-    """Rows {fiscal_year, fiscal_q, metric, fs_div, value_q, value_ytd, derived,
-    rcept_no, rcept_dt, period_end, cal_year, cal_q, yoy, qoq, turn} for a stock
-    code (6 digits) or corp code (8), oldest quarter first. `as_of` is a date
-    or "YYYY-MM-DD". period_end / cal_year / cal_q place a fiscal quarter on the
-    calendar for non-December year ends (plan 4-7)."""
-    own = conn is None
-    if own:
-        conn = connect(db_path or paths.DART_DB_FILE)
-    try:
-        corp = _resolve_corp(conn, code)
+    """Rows {fiscal_year, fiscal_q, metric, fs_div, currency, value_q, value_ytd,
+    derived, rcept_no, rcept_dt, avail_dt, period_end, cal_year, cal_q, yoy, qoq,
+    turn, fs_div_changed, currency_changed, lookahead} for a stock code (6
+    digits) or corp code (8), oldest quarter first. `as_of` is a date or
+    "YYYY-MM-DD".
+
+    - period_end / cal_year / cal_q place a fiscal quarter on the calendar for
+      non-December year ends (plan 4-7).
+    - Growth and the turn flag compare like with like only: with a base
+      quarter of another statement kind (OFS -> CFS) or reporting currency,
+      yoy / qoq / turn are None and ``fs_div_changed`` / ``currency_changed``
+      is True (review_agy M6, review_codex P1).
+    - A derived Q4 can rest on a Q3 received after the annual report
+      (``avail_dt`` later than ``rcept_dt``; ``lookahead`` True). With `as_of`
+      before that day the row is returned with its annual cumulative but
+      ``value_q`` None -- the quarter value was not knowable yet -- and from
+      that day on with the value (review_codex P1). Without `as_of` the value
+      is always there; ``lookahead`` tells a caller it is such a value."""
+    with _reader(conn, db_path) as db:
+        if db is None:
+            return []
+        corp = _resolve_corp(db, code)
         if corp is None:
             return []
-        sql = ("SELECT fiscal_year, fiscal_q, metric, fs_div, value_q, value_ytd, derived, rcept_no, rcept_dt "
-               "FROM fin_std WHERE corp_code = ?")
+        cols = {r[1] for r in db.execute("PRAGMA table_info(fin_std)")}
+        currency = "COALESCE(currency, 'KRW') AS currency" if "currency" in cols else "'KRW' AS currency"
+        avail = "avail_dt" if "avail_dt" in cols else "NULL AS avail_dt"
+        sql = (f"SELECT fiscal_year, fiscal_q, metric, fs_div, {currency}, value_q, value_ytd, derived, rcept_no, "
+               f"rcept_dt, {avail} FROM fin_std WHERE corp_code = ?")
         args: list = [corp]
+        day = None
         if as_of is not None:
-            day = as_of.isoformat() if isinstance(as_of, (_dt.date, _dt.datetime)) else str(as_of)
+            day = (as_of.isoformat() if isinstance(as_of, (_dt.date, _dt.datetime)) else str(as_of))[:10]
             sql += " AND rcept_dt <= ?"
-            args.append(day[:10])
+            args.append(day)
         if metrics:
             sql += f" AND metric IN ({','.join('?' * len(metrics))})"
             args.extend(metrics)
         latest: dict = {}
-        for r in conn.execute(sql + " ORDER BY rcept_no", args):
+        for r in db.execute(sql + " ORDER BY rcept_no", args):
             latest[(r["fiscal_year"], r["fiscal_q"], r["metric"])] = dict(r)
-        fm_row = conn.execute("SELECT fiscal_month FROM company WHERE corp_code = ?", (corp,)).fetchone()
+        fm_row = db.execute("SELECT fiscal_month FROM company WHERE corp_code = ?", (corp,)).fetchone()
         fiscal_month = fm_row[0] if fm_row else None
-    finally:
-        if own:
-            conn.close()
+
+    for row in latest.values():
+        row["lookahead"] = bool(row["avail_dt"] and row["avail_dt"] > row["rcept_dt"])
+        if day is not None and row["avail_dt"] and row["avail_dt"] > day:
+            row["value_q"] = None           # not knowable on `as_of`; the cumulative is
+
+    def base(key, row):
+        """(the base quarter's value, statement kind differs, currency differs)."""
+        b = latest.get(key)
+        if b is None:
+            return None, False, False
+        fs, cur = b["fs_div"] != row["fs_div"], b["currency"] != row["currency"]
+        return (None if (fs or cur) else b["value_q"]), fs, cur
 
     out = []
     for (fy, fq, metric), row in sorted(latest.items()):
-        prev_year = latest.get((fy - 1, fq, metric), {}).get("value_q")
-        pk = (fy, fq - 1, metric) if fq > 1 else (fy - 1, 4, metric)
-        prev_q = latest.get(pk, {}).get("value_q")
+        prev_year, fs_changed, cur_changed = base((fy - 1, fq, metric), row)
+        prev_q, _, _ = base((fy, fq - 1, metric) if fq > 1 else (fy - 1, 4, metric), row)
         period_end, cal_year, cal_q = calendar_period(fy, fq, fiscal_month)
         row.update(corp_code=corp, yoy=_growth(row["value_q"], prev_year), qoq=_growth(row["value_q"], prev_q),
-                   turn=_turn(metric, row["value_q"], prev_year),
-                   period_end=period_end, cal_year=cal_year, cal_q=cal_q)
+                   turn=_turn(metric, row["value_q"], prev_year), fs_div_changed=fs_changed,
+                   currency_changed=cur_changed, period_end=period_end, cal_year=cal_year, cal_q=cal_q)
         out.append(row)
     return out
 
 
 def get_growth(code: str, *, conn: sqlite3.Connection | None = None, db_path: str | None = None) -> list[dict]:
     """``v_fin_growth`` rows of one company (newest values), oldest quarter first."""
-    own = conn is None
-    if own:
-        conn = connect(db_path or paths.DART_DB_FILE)
-    try:
-        corp = _resolve_corp(conn, code)
+    with _reader(conn, db_path) as db:
+        if db is None:
+            return []
+        corp = _resolve_corp(db, code)
         if corp is None:
             return []
-        return [dict(r) for r in conn.execute(
+        return [dict(r) for r in db.execute(
             "SELECT * FROM v_fin_growth WHERE corp_code = ? ORDER BY fiscal_year, fiscal_q, metric", (corp,))]
-    finally:
-        if own:
-            conn.close()
 
 
 # ---- text reports (tools/dart_sync.py --show / --issues) ---------------------------
@@ -122,7 +162,9 @@ def growth_table(code: str, as_of=None, *, quarters: int = 12, conn: sqlite3.Con
     """One row per fiscal quarter, newest last (at most `quarters`): revenue,
     operating income, owners' (else total) net income with YoY / QoQ, the
     operating margin, the operating-income turn flag, and whether a value is
-    derived (Q4 = annual - Q3). Plan 3단계 "증감표"."""
+    derived (Q4 = annual - Q3), rests on later numbers (lookahead) or follows a
+    change of statement kind / reporting currency. Each row carries its own
+    currency. Plan 3단계 "증감표"."""
     rows = get_financials(code, as_of, conn=conn, db_path=db_path)
     by_q: dict = {}
     for r in rows:
@@ -145,13 +187,23 @@ def growth_table(code: str, as_of=None, *, quarters: int = 12, conn: sqlite3.Con
             "op_turn": op["turn"] if op else None, "op_margin": margin,
             "net_income": ni["value_q"] if ni else None, "net_yoy": ni["yoy"] if ni else None,
             "derived": any(x["derived"] for x in present),
-            "fs_div": present[0]["fs_div"], "rcept_dt": max(x["rcept_dt"] for x in present),
+            "lookahead": any(x["lookahead"] for x in present),
+            "fs_div_changed": any(x["fs_div_changed"] for x in present),
+            "currency_changed": any(x["currency_changed"] for x in present),
+            "fs_div": present[0]["fs_div"], "currency": present[0]["currency"] or "KRW",
+            "rcept_dt": max(x["rcept_dt"] for x in present),
         })
     return out
 
 
-def _eok(v) -> str:
-    return "-" if v is None else f"{v / 1e8:,.0f}"
+def _unit(currency: str) -> tuple[float, str]:
+    """(divisor, label): 억원 for KRW; a foreign reporting currency is shown in
+    its own millions, never converted (plan 4-6)."""
+    return (1e8, "억원") if (currency or "KRW") == "KRW" else (1e6, f"백만 {currency}")
+
+
+def _amt(v, div: float) -> str:
+    return "-" if v is None else f"{v / div:,.0f}"
 
 
 def _pct(v) -> str:
@@ -162,21 +214,28 @@ _TURN = {"turn_profit": "흑자전환", "turn_loss": "적자전환", "loss_conti
 
 
 def format_growth_table(code: str, as_of=None, **kw) -> str:
-    """growth_table() as text, amounts in 억원."""
+    """growth_table() as text. Amounts are in 억원, or millions of the row's own
+    reporting currency: a row in another currency than the newest one says so
+    in its note instead of being shown in the wrong unit (review_codex P1)."""
     rows = growth_table(code, as_of, **kw)
     if not rows:
         return f"{code}: no data in dart.db"
-    title = f"{code} (억원, {rows[-1]['fs_div']}" + (f", as of {as_of}" if as_of else "") + ")"
+    _div, unit = _unit(rows[-1]["currency"])
+    title = f"{code} ({unit}, {rows[-1]['fs_div']}" + (f", as of {as_of}" if as_of else "") + ")"
     head = (f"{'분기':<8}{'기간말':<9}{'매출':>11}{'YoY':>7}{'QoQ':>7}{'영업이익':>10}{'YoY':>7}{'이익률':>7}"
             f"{'순이익':>10}{'YoY':>7}  {'접수일':<11}비고")
     lines = [title, head]
     for r in rows:
-        note = " ".join(x for x in (_TURN.get(r["op_turn"] or "", ""), "†계산값" if r["derived"] else "") if x)
+        div, row_unit = _unit(r["currency"])
+        notes = (f"단위 {row_unit}" if row_unit != unit else "", _TURN.get(r["op_turn"] or "", ""),
+                 "†계산값" if r["derived"] else "", "‡이후 정정 3분기 사용" if r["lookahead"] else "",
+                 "연결/별도 변경" if r["fs_div_changed"] else "", "통화 변경" if r["currency_changed"] else "")
+        note = " ".join(x for x in notes if x)
         margin = "" if r["op_margin"] is None else f"{r['op_margin'] * 100:.1f}%"
         quarter = f"{r['fiscal_year']}Q{r['fiscal_q']}"
-        lines.append(f"{quarter:<8}{r['period_end']:<9}{_eok(r['revenue']):>11}{_pct(r['revenue_yoy']):>7}"
-                     f"{_pct(r['revenue_qoq']):>7}{_eok(r['op_income']):>10}{_pct(r['op_yoy']):>7}{margin:>7}"
-                     f"{_eok(r['net_income']):>10}{_pct(r['net_yoy']):>7}  {r['rcept_dt']:<11}{note}")
+        lines.append(f"{quarter:<8}{r['period_end']:<9}{_amt(r['revenue'], div):>11}{_pct(r['revenue_yoy']):>7}"
+                     f"{_pct(r['revenue_qoq']):>7}{_amt(r['op_income'], div):>10}{_pct(r['op_yoy']):>7}{margin:>7}"
+                     f"{_amt(r['net_income'], div):>10}{_pct(r['net_yoy']):>7}  {r['rcept_dt']:<11}{note}")
     return "\n".join(lines)
 
 
@@ -184,12 +243,12 @@ def issues(conn: sqlite3.Connection | None = None, db_path: str | None = None) -
     """What collection could not do cleanly (plan 4-1 / 4-4): counts per kind,
     the unmapped metrics, and the fs_div changes / no-data periods / Q4 values
     resting on a later Q3."""
-    own = conn is None
-    if own:
-        conn = connect(db_path or paths.DART_DB_FILE)
-    try:
+    with _reader(conn, db_path) as db:
+        if db is None:
+            return {"counts": [], "unmapped": [], "listed": []}
+
         def q(sql, *a):
-            return [dict(r) for r in conn.execute(sql, a)]
+            return [dict(r) for r in db.execute(sql, a)]
         return {
             "counts": q("SELECT kind, COUNT(*) AS n, COUNT(DISTINCT corp_code) AS companies FROM fin_issue "
                         "GROUP BY kind ORDER BY kind")
@@ -203,9 +262,6 @@ def issues(conn: sqlite3.Connection | None = None, db_path: str | None = None) -
                         "WHERE i.kind IN ('fs_div_change', 'no_data', 'q4_uses_later_q3') "
                         "ORDER BY i.kind, c.corp_name, i.fiscal_year, i.fiscal_q"),
         }
-    finally:
-        if own:
-            conn.close()
 
 
 ISSUE_LABELS = {
