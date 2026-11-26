@@ -202,6 +202,10 @@ class TestFinancials(_TmpMixin, unittest.TestCase):
         self.assertEqual(fin.find_metric(rows, "revenue")["thstrm_amount"], "77")
         self.assertEqual(fin.find_metric(rows, "net_income")["thstrm_amount"], "5")
         self.assertIsNone(fin.find_metric(rows, "op_income"))
+        # Untagged net income named by period (Hyundai 2021 Q3: "연결분기순이익(손실)").
+        for name in ("연결분기순이익(손실)", "반기순손익", "당기순이익"):
+            self.assertIsNotNone(fin.find_metric([_fin_row("IS", "-표준계정코드 미사용-", name, 1, "1")], "net_income"))
+        self.assertIsNone(fin.find_metric([_fin_row("IS", "x", "법인세비용차감전순이익(손실)", 1, "1")], "net_income"))
 
     def test_unmapped_metrics_are_listed(self):
         conn = self._conn()
@@ -409,6 +413,47 @@ class TestClient(_TmpMixin, unittest.TestCase):
                 self.assertNotIn("SECRETKEY123", name)
                 with open(os.path.join(root, name), encoding="utf-8") as f:
                     self.assertNotIn("SECRETKEY123", f.read())
+
+
+# 2025 quarterly revenue / operating income (KRW, consolidated) of the plan-7
+# verification stocks, checked on 2026-11-26 against each report's own income
+# statement table (document.xml; Q4 = annual - Q3 cumulative of those tables).
+EXPECTED_2025 = {
+    "000660": {"revenue": [17639141000000, 22231952000000, 24448929000000, 32826653000000],
+               "op_income": [7440504000000, 9212851000000, 11383390000000, 19169574000000]},
+    "005380": {"revenue": [44407761000000, 48286677000000, 46721448000000, 46838586000000],
+               "op_income": [3633609000000, 3601597000000, 2537266000000, 1695379000000]},
+    "005930": {"revenue": [79140503000000, 74566317000000, 86061747000000, 93837371000000],
+               "op_income": [6685272000000, 4676057000000, 12166062000000, 20073660000000]},
+    "036930": {"revenue": [120846474023, 78792213478, 58773454725, 52280442586],
+               "op_income": [33907650658, 6575447323, 3355821494, -12581107733]},
+    "043260": {"revenue": [59265858353, 56551289696, 55603044857, 60156842864],
+               "op_income": [1599388705, 1322860055, 539736800, 4089437148]},
+}
+
+
+class TestVerificationStocks(unittest.TestCase):
+    """Plan 8 regression (optional): the collected dart.db against EXPECTED_2025.
+    Runs only with a DART key and a dart.db holding these stocks (fill it with
+    `tools/dart_sync.py --backfill --tickers 005930 000660 005380 043260 036930`);
+    reads the DB only, no API calls."""
+
+    def test_2025_quarters_match_report_tables(self):
+        import paths
+        from data.dart.client import api_key_from_env
+        if not api_key_from_env() or not os.path.exists(paths.DART_DB_FILE):
+            self.skipTest("no DART key or dart.db")
+        conn = connect(paths.DART_DB_FILE)
+        self.addCleanup(conn.close)
+        for code, metrics in EXPECTED_2025.items():
+            rows = query.get_financials(code, conn=conn)
+            if not rows:
+                self.skipTest(f"{code} not collected yet")
+            got = {(r["metric"], r["fiscal_q"]): r["value_q"] for r in rows if r["fiscal_year"] == 2025}
+            for metric, values in metrics.items():
+                for q, want in enumerate(values, start=1):
+                    with self.subTest(code=code, metric=metric, q=q):
+                        self.assertEqual(got.get((metric, q)), want)
 
 
 if __name__ == "__main__":

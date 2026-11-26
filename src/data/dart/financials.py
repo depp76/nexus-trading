@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 
 from data.dart.filings import Q_BY_REPRT, ensure_filing, link_corrections
 
@@ -45,10 +46,9 @@ ACCOUNT_IDS = {
 ACCOUNT_NAMES = {
     "revenue": ("매출액", "매출", "수익(매출액)", "매출액(수익)", "영업수익", "매출및지분법손익", "영업수익(매출액)"),
     "op_income": ("영업이익", "영업이익(손실)", "영업손익", "영업손실", "영업이익(영업손실)"),
-    "net_income": ("당기순이익", "당기순이익(손실)", "당기순손익", "당기순손실", "분기순이익", "분기순이익(손실)",
-                   "반기순이익", "반기순이익(손실)", "분기순손익", "반기순손익", "연결당기순이익", "연결분기순이익",
-                   "연결반기순이익"),
 }
+# Net income is named by period and statement ("연결분기순이익(손실)", "반기순손익", ...).
+_NET_INCOME_NAME = re.compile(r"^(연결)?(당기|분기|반기)순(이익|손익|손실)(\(손실\))?$")
 _ACCOUNT_MAP_FILE = os.path.join(os.path.dirname(__file__), "account_map.json")
 _account_map_cache: dict | None = None
 
@@ -111,6 +111,9 @@ def find_metric(rows: list[dict], metric: str, extra_ids=()) -> dict | None:
             n = _norm(r.get("account_nm"))
             if metric == "net_income_owners":
                 if _is_owners_name(n):
+                    return r
+            elif metric == "net_income":
+                if _NET_INCOME_NAME.match(n):
                     return r
             elif n in ACCOUNT_NAMES.get(metric, ()):
                 return r
