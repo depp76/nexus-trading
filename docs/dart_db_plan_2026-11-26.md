@@ -319,7 +319,7 @@ docs/ui.md 8장에 새 절로 기록하고, 8장 테스트(수집·앱 스레드
   PC가 꺼져 있던 날은 '예약된 시작 시간을 놓치면 가능한 빨리 실행' 옵션으로 다음 부팅 때 실행.
 - 붙일 때 할 일: 등록·해제 스크립트(`tools/register_dart_task.ps1`), 로그 파일(`cache/dart/logs/`), 앱 상태 표시가 `sync_run.trigger='scheduler'` 실행도 보여 주는지 확인.
 
-## 13. 화면 시안 (5단계, 승인 대기)
+## 13. 화면 시안 (5단계, 2026-11-26 구현)
 
 시안 파일: `docs/ui_mockups/dart_financials_mockup.html` (가상 회사·가상 수치).
 
@@ -330,4 +330,8 @@ docs/ui.md 8장에 새 절로 기록하고, 8장 테스트(수집·앱 스레드
 - 분기 표: 매출·YoY·영업이익·영업이익률·지배순이익·접수일, 흑자전환·적자전환 배지, 계산값 †, 정정 반영 표시.
 - 사업부 매출: 연도별 누적 막대(부문 비중) + 부문별 매출·YoY 표, 검산 배지(ok / 합계 불일치 / 확인 필요), 부문 개편 메모(`segment_map`).
 - 색: 앱 규칙 그대로 파랑 = 증가·이익, 빨강 = 감소·손실(ui.md 1.1, 8.16 Soft Slate).
+
+5단계 구현 메모 (2026-11-26; docs/ui.md 8.34):
+- `ui/dialogs/stock_financials.py` `StockFinancialsTab`, 계산은 `ui/dart_financials_model.py`(Qt 없음), 읽기는 `threads/dart_threads.py` `FinancialsLoadThread` → `data.dart.query.company_financials`(읽기 전용, `data_fetcher`에 노출). `StockMaDialog`는 KOSPI·KOSDAQ 종목일 때만 `차트 | 재무` 탭을 갖고, 재무는 탭을 처음 열 때 읽는다.
+- 시안과 다르게 한 것: 흑자·적자 전환 배지는 직전 분기가 아니라 **전년 동기** 기준(데이터 계층 `v_fin_growth`·`get_financials`의 `turn`과 같은 기준). 사업부 표의 열은 사업보고서 연도 + 진행 중인 해의 최신 보고 기간(그 보고서가 3개월값이면 '2026 3Q', 누계면 '3Q누적'). 내부거래 제거 전 총액으로 보고된 해(조정 행이 있는 해, 표 머리글 `*`)와 외부매출로 보고된 해 사이에는 증감률을 계산하지 않고, 연평균은 같은 기준이 이어지는 최근 연도 구간으로만 계산한다(현대차: 2023 원문 순액 → 2024 XBRL 총액, 그대로 비교하면 차량 +70%로 보임). 금융업은 매출 카드가 '—'(해당 없음). 사업부 데이터가 없으면 `--segments`를 안내.
 

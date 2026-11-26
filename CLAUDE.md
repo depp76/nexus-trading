@@ -157,7 +157,9 @@ Dev tooling is in `requirements-dev.txt`
   `holdings_summary`, `assets_report`, `stock_report`, `variant_picker`, `trend_conditions`, `strategy_trades`, `add_ticker`, `add_record`, `signal_conditions` (신호 추가); import from `ui.dialogs`;
   `StockMaDialog` is split into mixins over shared dialog state since 2026-11-15: `stock_ma_plot`
   (panels, slots, margins, end labels, toggles), `stock_ma_hover` (crosshair/hover), `stock_ma_view`
-  (pan/zoom/period/autofit), plus `stock_ma_side` (right panel), `stock_ma_consts`, `stock_ma_helpers`),
+  (pan/zoom/period/autofit), plus `stock_ma_side` (right panel), `stock_ma_consts`, `stock_ma_helpers`;
+  for a KOSPI/KOSDAQ stock the dialog has `차트 | 재무` tabs -- `stock_financials.py` `StockFinancialsTab`,
+  DART results and segments, numbers from the Qt-free `ui/dart_financials_model.py`; docs/ui.md 8.34),
   `history_table.py` (cell factories, `fill_table_rows`, `SectionTable` + the column
   `SECTIONS` for the history grid), `history_calc.py` (pure P/L maths, no Qt:
   `compute_pl_fields`, `build_monthly_rows`, `summarize_positions`), `assets_report.py` (pure maths for the Total Assets graph's
@@ -180,7 +182,8 @@ Dev tooling is in `requirements-dev.txt`
   `TickerValidateThread`, `AssetMetricsPreloadThread`, `AssetReportThread`, `KisAccountThread` (Trading History's KIS 조회: deposit, holdings, executed orders),
   `GeminiStockReportThread`, `AutoBackupThread`; `strategy_threads.py` holds
   `TrendFollowingResearchThread`, which loads the dataset and runs the research matrix, and
-  `SignalPicksThread` / `StrategyCheckThread`, the `signal_api` universe run and one-stock check).
+  `SignalPicksThread` / `StrategyCheckThread`, the `signal_api` universe run and one-stock check;
+  `dart_threads.py` `FinancialsLoadThread` reads one stock's DART data for the 재무 tab).
   Never call `data_fetcher` functions from a
   slot on the UI thread; add a thread class instead. Connect `finished` signals to bound
   methods, not closures, so Qt queues them onto the UI thread; when a slot needs per-request
