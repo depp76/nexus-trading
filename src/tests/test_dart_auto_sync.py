@@ -248,7 +248,7 @@ class TestAutoSync(unittest.TestCase):
 
     def test_partial_failed_no_key_labels(self):
         s, msgs = self._sync()
-        s._on_done({"status": "partial", "error": "daily limit", "info": _INFO})
+        s._on_done({"status": "partial", "error": "cancelled", "info": _INFO})
         self.assertEqual(s.label.text(), "DART 일부 수집")
         self.assertIn(WARN, s.label.styleSheet())
         s._on_done({"status": "failed", "error": "HTTPError: 500\nmore", "info": _INFO})
@@ -287,6 +287,7 @@ class TestAutoSync(unittest.TestCase):
         self.assertTrue(s.label.isHidden())
 
     def test_check_timer_runs_with_at_start_false_and_stop_ends_it(self):
+        _FakeThread.result = SyncResult("done", "r", calls=7)     # nothing got: no continuation run
         s = DartAutoSync(thread_factory=_FakeThread, start_delay_ms=10, check_interval_ms=100)
         self.addCleanup(lambda: [t.wait(3000) for t in s.threads()])
         s.arm(universe_ready=True)
@@ -371,3 +372,77 @@ class TestMainWindowClose(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestContinuousCollection(unittest.TestCase):
+    """User direction 2026-11-26: keep collecting while the app is open; stop
+    at the daily limit with a status-bar line and resume after midnight KST."""
+
+    def setUp(self):
+        _FakeThread.runs = []
+        _FakeThread.info = dict(_INFO)
+
+    def _sync(self, **kw):
+        kw.setdefault("continue_ms", 30)
+        s = DartAutoSync(thread_factory=_FakeThread, start_delay_ms=10, check_interval_ms=60_000, **kw)
+        self.addCleanup(s.stop)
+        self.addCleanup(lambda: [t.wait(3000) for t in s.threads()])
+        return s
+
+    def test_a_run_that_got_something_is_followed_by_another(self):
+        results = [SyncResult("done", "r", periods_fetched=40), SyncResult("done", "r", segments_done=3),
+                   SyncResult("done", "r")]
+        _FakeThread.result = property(lambda self: results[min(len(_FakeThread.runs), len(results)) - 1])
+        try:
+            s = self._sync()
+            s.arm(universe_ready=True)
+            self.assertTrue(_pump(lambda: len(_FakeThread.runs) >= 3 and not s.is_running(), 3.0))
+            _pump(lambda: False, 0.2)
+            self.assertEqual(_FakeThread.runs, [True, False, False])          # the third got nothing: stops
+            self.assertFalse(s._continue_timer.isActive())
+        finally:
+            _FakeThread.result = SyncResult("done", "r", calls=7, filings_added=12)
+
+    def test_spent_limit_shows_the_status_bar_line_and_waits_for_midnight(self):
+        s = self._sync(reset_ms=lambda: 200)
+        s._on_done({"status": "partial", "error": "daily limit of 19000 calls reached (2026-11-26 KST)",
+                    "info": dict(_INFO, calls_today=19_000, calls_left=0),
+                    "result": SyncResult("partial", "r", periods_fetched=900)})
+        self.assertEqual(s.label.text(), "DART 한도 소진")
+        self.assertFalse(s.limit_label.isHidden())
+        self.assertIn("19,000건", s.limit_label.text())
+        self.assertIn("자정", s.limit_label.text())
+        self.assertTrue(s._reset_timer.isActive())
+        self.assertFalse(s._continue_timer.isActive())                     # no retry before midnight
+        s._on_check_timer()
+        self.assertEqual(_FakeThread.runs, [])                              # the 30-min check waits too
+        _FakeThread.result = SyncResult("done", "r")
+        try:
+            self.assertTrue(_pump(lambda: _FakeThread.runs == [False] and not s.is_running(), 3.0))
+            self.assertTrue(_pump(lambda: s.limit_label.isHidden(), 2.0))  # cleared when the new day's run starts
+        finally:
+            _FakeThread.result = SyncResult("done", "r", calls=7, filings_added=12)
+
+    def test_no_calls_left_at_start_does_not_run(self):
+        calls = []
+        t = DartSyncThread(True, runner=lambda *a, **k: calls.append(1),
+                           status_reader=lambda: dict(_INFO, calls_left=0), due=lambda *a: True)
+        got = []
+        t.sync_done.connect(got.append)
+        self.addCleanup(t.wait, 3000)
+        t.start()
+        self.assertTrue(_pump(lambda: got))
+        self.assertEqual((got[0]["status"], calls), ("limit", []))
+
+    def test_limit_survives_a_language_switch(self):
+        old = self._sync(reset_ms=lambda: 60_000)
+        old._on_done({"status": "limit", "info": dict(_INFO, calls_left=0, calls_today=19_000)})
+        new = self._sync(reset_ms=lambda: 60_000)
+        new.import_state(old.export_state())
+        self.assertFalse(new.limit_label.isHidden())
+        self.assertTrue(new._reset_timer.isActive())
+
+    def test_reset_is_a_minute_past_midnight_kst(self):
+        from ui.dart_sync_thread import ms_until_limit_reset
+        self.assertEqual(ms_until_limit_reset(_kst(23, 59)), 120_000)
+        self.assertEqual(ms_until_limit_reset(_kst(15, 28)), (8 * 3600 + 32 * 60 + 60) * 1000)
