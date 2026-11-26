@@ -19,7 +19,9 @@ from PyQt6.QtCore import Qt
 
 app = QApplication.instance() or QApplication([])
 
-from ui.widgets import StockTable, COL_IDENTITY, COL_PRICE  # noqa: E402
+from ui.universe_table import StockTable  # noqa: E402
+
+from ui.universe_columns import COL_IDENTITY, COL_PRICE  # noqa: E402
 
 
 def _mk(ticker, name, price, market_cap=100_000_000_000):
@@ -156,7 +158,7 @@ class TestIndexRowsFormatByChangeMode(unittest.TestCase):
         raise AssertionError(ticker)
 
     def test_price_and_change_units(self):
-        from ui.widgets import COL_CHG, COL_CAP, COL_D3
+        from ui.universe_columns import COL_CHG, COL_CAP, COL_D3
         table = StockTable()
         table.load_data([
             {"ticker": "KS11", "name": "KOSPI", "market": "Index", "is_index": True, "price": 2500.126,
@@ -180,7 +182,7 @@ class TestIndexRowsFormatByChangeMode(unittest.TestCase):
     def test_us_cap_shows_dollars_and_sorts_in_krw(self):
         """2026-11-18 (user direction, docs/ui.md 8.31): US rows show the cap in
         USD; the sort key stays the KRW cap (억) so mixed markets keep one scale."""
-        from ui.widgets import COL_CAP
+        from ui.universe_columns import COL_CAP
         table = StockTable()
         us = {"ticker": "AAPL", "name": "Apple", "market": "NASDAQ 150", "price": 280_000.0, "usd_price": 200.0,
               "currency": "$", "market_cap": 3.0e12 * 1400, "usd_market_cap": 3.0e12, "changes": {}}
@@ -200,7 +202,7 @@ class TestIndexRowsFormatByChangeMode(unittest.TestCase):
     def test_cap_sort_keeps_korea_then_us_each_by_its_own_cap(self):
         """2026-11-18 (user direction): with both markets on screen, sorting by 시총
         gives the Korean rows by KRW cap, then the US rows by USD cap, either way."""
-        from ui.widgets import COL_CAP
+        from ui.universe_columns import COL_CAP
         table = StockTable()
 
         def us(t, usd):

@@ -5,7 +5,7 @@ range filters.
 
 Moved out of ui/widgets.py (2026-11-15, code review #5); its column spec lives
 in ui/universe_columns.py, its header in ui/table_headers.py and its cell
-painters in ui/delegates.py. ui.widgets still re-exports StockTable.
+painters in ui/delegates.py.
 """
 from PyQt6.QtWidgets import (
     QFrame, QTableWidget, QTableWidgetItem, QHeaderView, QMenu, QApplication, QAbstractItemView,

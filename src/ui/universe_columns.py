@@ -4,8 +4,7 @@ range-filter / momentum column maps and the change-cell formatters.
 
 Moved out of ui/widgets.py (2026-11-15, code review #5) so StockTable
 (ui/universe_table.py), its header (ui/table_headers.py) and HeatLegend
-(ui/heat_legend.py) share it without importing each other. ui.widgets still
-re-exports the public names.
+(ui/heat_legend.py) share it without importing each other.
 """
 from i18n import tr
 from ui.colors import heatmap_bg

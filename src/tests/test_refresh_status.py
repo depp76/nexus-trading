@@ -94,7 +94,8 @@ class TestRefreshState(unittest.TestCase):
 
 class TestHeatLegend(unittest.TestCase):
     def test_text_follows_column_scales(self):
-        from ui.widgets import HeatLegend, COLUMNS
+        from ui.heat_legend import HeatLegend
+        from ui.universe_columns import COLUMNS
         scale = {c.key: c.scale for c in COLUMNS}
         text = HeatLegend.scale_text()
         self.assertIn(f"등락 ±{scale['chg']:g}%", text)

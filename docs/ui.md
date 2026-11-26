@@ -12,9 +12,9 @@ Strategy 탭은 2026-09-28 옛 전략 계층과 함께 제거됐다가 같은 �
 | Trading History | `Trading History Redesign.dc.html` | 10건 |
 | Total Assets | `Total Assets Redesign.dc.html` | 9건 |
 | ~~Strategy~~ | `Strategy Redesign.dc.html` | 9건 — 옛 Strategy 탭 기준. 지금의 Strategy 탭(Trend Following)과는 다른 화면이라 5장은 기록용 |
-| Strategy › Trend Following (2026-11) | `docs/ui_mockups/2026-11/Main.dc.html` | 8.10 — 실행 화면 `impl_strategy.png` |
-| Trading Universe 상세 패널 (2026-11) | `docs/ui_mockups/2026-11/Universe.dc.html` | 8.10 — 구현 후 철회, 점수 구성은 MA 차트 팝업으로 |
-| 토큰·배지 (2026-11) | `docs/ui_mockups/2026-11/Tokens.dc.html` | 8.10 |
+| Strategy › Trend Following (2026-11) | `docs/ui_mockups/2026-11/Main.dc.html`(삭제됨, `git show cc28828:docs/ui_mockups/2026-11/Main.dc.html`) | 8.10 — 실행 화면 `impl_strategy.png` |
+| Trading Universe 상세 패널 (2026-11) | `docs/ui_mockups/2026-11/Universe.dc.html`(삭제됨) | 8.10 — 구현 후 철회, 점수 구성은 MA 차트 팝업으로 |
+| 토큰·배지 (2026-11) | `docs/ui_mockups/2026-11/Tokens.dc.html`(삭제됨) | 8.10 |
 
 ---
 
@@ -396,7 +396,7 @@ KRW 7열 + USD 6열 = 15열을 **토글 하나 + 10열**로 줄인다. 환산율
 
 ## 5. 옛 Strategy 탭 (기록용)
 
-2026-09-28에 제거된 옛 Strategy 화면 명세(5.1 구조 ~ 5.6 고지)는 `docs/history/ui_archive_2026-09_10.md`로 옮겼다.
+2026-09-28에 제거된 옛 Strategy 화면 명세(5.1 구조 ~ 5.6 고지)는 `docs/history/ui_archive_2026-09_10.md`(삭제됨, `git show cc28828:docs/history/ui_archive_2026-09_10.md`)로 옮겼다.
 지금 화면에도 남은 원칙은 둘: 연구용 고지 문구를 항상 보이게(5.6 → 8.10·8.19), 상태와 오류를 한 줄에 섞지 않기(5.2).
 
 ## 5A. MA 차트 다이얼로그 (2026-09-19 추가 — "MA Chart Redesign" 목업)
@@ -445,7 +445,7 @@ KRW 7열 + USD 6열 = 15열을 **토글 하나 + 10열**로 줄인다. 환산율
 
 ### 6.1·6.2 (옮김)
 
-당시 전역 스타일시트 상태(6.1)와 Phase 0 테마 모듈 제안 코드(6.2)는 `docs/history/ui_archive_2026-09_10.md`로 옮겼다.
+당시 전역 스타일시트 상태(6.1)와 Phase 0 테마 모듈 제안 코드(6.2)는 `docs/history/ui_archive_2026-09_10.md`(삭제됨, `git show cc28828:docs/history/ui_archive_2026-09_10.md`)로 옮겼다.
 구현 결과가 기준이다: `src/ui/theme.py`(토큰·`app_qss()`·`app_palette()`), 8.16.
 
 ### 6.3 Qt에서 재현되지 않는 것과 대체 수단
@@ -472,7 +472,7 @@ KRW 7열 + USD 6열 = 15열을 **토글 하나 + 10열**로 줄인다. 환산율
 
 ## 7. 적용 순서 (당시 계획)
 
-Phase 0~6 계획표는 `docs/history/ui_archive_2026-09_10.md`로 옮겼다. Phase 0~4와 6은 적용됐고(2026-09~10, 8장),
+Phase 0~6 계획표는 `docs/history/ui_archive_2026-09_10.md`(삭제됨, `git show cc28828:docs/history/ui_archive_2026-09_10.md`)로 옮겼다. Phase 0~4와 6은 적용됐고(2026-09~10, 8장),
 2.5 열 그룹 토글은 삭제, "지수/원자재 분리"는 2.4에서 폐기됐다.
 
 ## 8. 탭 간 일관성 규칙 (2026-10-25)
@@ -838,7 +838,7 @@ Phase 0~6 계획표는 `docs/history/ui_archive_2026-09_10.md`로 옮겼다. Pha
 
 ### 8.18 Strategy 실행 설정 카드 3열 격자 (2026-11-14)
 
-`docs/ui_strategy_settings_2026-11-14.md`(시안 `docs/ui_mockups/2026-11/strategy_settings_compare.png`)를 적용했다.
+`docs/ui_strategy_settings_2026-11-14.md`(시안 `docs/ui_mockups/2026-11/strategy_settings_compare.png`, 삭제됨)를 적용했다.
 8.12·8.17과 다른 곳은 이 장이 우선한다. 결과 화면·결과 줄(비교 대상·상세 기준·표시 비용·리포트 저장)과 계산은 바꾸지 않았다.
 
 - **전역 체크 상태**(`theme.py` `QPushButton:checked`): ACCENT_BG 채움 + **ACCENT_TEXT 글씨** + 테두리 `LINE_STRONG`(이전 ACCENT 테두리 제거), 600 유지.
@@ -863,7 +863,7 @@ Phase 0~6 계획표는 `docs/history/ui_archive_2026-09_10.md`로 옮겼다. Pha
   변형 요약은 선택만("A0, A1, A2, B, C1, C2, C3 (7/10)"), "…은(는) 투자자 수급 필요" 문장은 요약·경고의 툴팁에 남겼다.
 - **칩 줄(접힘)**: 폼 순서와 같다 — 기간 · 홀드아웃 · 시장 상위 N · 유동성 │ 최대 · 점검 · 실행 비용 · 전략 · 목표 Sharpe.
   가운데 열 첫 줄 자리에 놓이고, 오른쪽 버튼은 그대로다.
-- **실측(오프스크린, Windows 글꼴, 스크린샷 `docs/ui_mockups/2026-11/impl_strategy_settings_*.png`)**:
+- **실측(오프스크린, Windows 글꼴, 스크린샷 `docs/ui_mockups/2026-11/impl_strategy_settings_*.png`, 삭제됨)**:
   - 1440px: 규칙·실행 줄은 1줄, **데이터 줄은 2줄**(유동성 하한까지 / 투자자 수급 + 경고). 시안은 1줄이지만, 실제 앱 기본값에서는 종료일이 오늘이라
     "홀드아웃 포함"이 늘 보이고 수급 경고도 기본으로 보이며, 숫자칸(`_SPIN_W`)이 시안보다 넓어 데이터 줄이 약 1.3배 길다. 시안 2.5의 트레이드오프가 1440px에서도 나타난 것.
   - 1100px: 데이터 2줄 + 규칙·실행 2줄. 811px(빈 상태 — 결과가 있으면 결과 줄·KPI가 탭 최소 폭을 약 930px로 정한다, 이 장 범위 밖): 4줄 + 4줄, 잘리는 컨트롤 없음.
@@ -1227,7 +1227,7 @@ Phase 0~6 계획표는 `docs/history/ui_archive_2026-09_10.md`로 옮겼다. Pha
 
 ### 8.35 MA 차트 조작 개선 — 기간 재선택 · 가격선 메뉴 · 상세 접기 (2026-11-26)
 
-`docs/history/ma_chart_ux_review_2026-11-26.md`의 우선 개선 세 가지를 적용(사용자 지시).
+`docs/history/ma_chart_ux_review_2026-11-26.md`(삭제됨, `git show cc28828:docs/history/ma_chart_ux_review_2026-11-26.md`)의 우선 개선 세 가지를 적용(사용자 지시).
 
 - **기간 재선택 복귀**: 기간 콤보는 `activated`에 연결 — 휠 확대나 이동 뒤 같은 기간을 다시 골라도 마지막 거래일 기준의 그 기간으로 돌아간다.
   툴팁 "기간을 다시 선택하면 최근 구간으로 돌아갑니다.". 이동할 구간이 없으면(예: '전체') 차트 아래 스크롤바는 비활성(자리는 유지)이고,

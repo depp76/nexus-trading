@@ -3,8 +3,8 @@ Universe header: group dividers, right edge, active-filter marks) and
 GroupedHeaderView (the two-row grouped header of Trading History and Total
 Assets).
 
-Moved out of ui/widgets.py (2026-11-15, code review #5); ui.widgets still
-re-exports both.
+Moved out of ui/widgets.py (2026-11-15, code review #5); the ui.widgets re-export
+module was removed on 2026-11-26.
 """
 from PyQt6.QtWidgets import QHeaderView, QStyleOptionHeader
 from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QRect

@@ -205,7 +205,7 @@ class TestStatusFilterButton(unittest.TestCase):
         self.assertEqual(tab.filters_btn.width(), widths.pop())    # "필터 (1)" keeps the size
 
     def test_filter_hides_rows_of_other_statuses(self):
-        from ui.widgets import StockTable
+        from ui.universe_table import StockTable
         table = StockTable()
         rows = {"A": "-", "B": "On", "C": "Tg"}
         table.setRowCount(0)
@@ -225,7 +225,7 @@ class TestRowStatusButton(unittest.TestCase):
     cell do not."""
 
     def _table(self):
-        from ui.widgets import StockTable
+        from ui.universe_table import StockTable
         table = StockTable()
         table.resize(900, 300)
         table.show()
@@ -239,7 +239,7 @@ class TestRowStatusButton(unittest.TestCase):
         from PyQt6.QtCore import QPoint, QRect, Qt
         from PyQt6.QtTest import QTest
         from ui.delegates import IdentityDelegate
-        from ui.widgets import COL_IDENTITY
+        from ui.universe_columns import COL_IDENTITY
         table = self._table()
         seen = []
         table.toggle_requested.connect(seen.append)
@@ -260,7 +260,8 @@ class TestRowStatusButton(unittest.TestCase):
         from PyQt6.QtTest import QTest
         from PyQt6.QtWidgets import QApplication, QLineEdit, QVBoxLayout, QWidget
         from ui.delegates import IdentityDelegate
-        from ui.widgets import COL_IDENTITY, StockTable
+        from ui.universe_columns import COL_IDENTITY
+        from ui.universe_table import StockTable
         host = QWidget()
         lay = QVBoxLayout(host)
         edit = QLineEdit()

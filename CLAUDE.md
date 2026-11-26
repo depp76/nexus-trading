@@ -75,8 +75,7 @@ looked at, so for UI refactors write a throwaway characterisation script that du
 matplotlib-axes state before and after and diff the two (done for `StockMaDialog` and
 `TradingHistoryTab._build_ui` on 2026-09-19); for non-trivial changes to fetch logic
 write a throwaway script comparing old vs. new behaviour on random inputs
-(`docs/history/changelog_optimization_2026-08-11.md` shows the pattern;
-`docs/history/test_plan_2026-08-29.md` is an old manual-check list kept for reference).
+(`git show cc28828:docs/history/changelog_optimization_2026-08-11.md` shows the pattern).
 Dev tooling is in `requirements-dev.txt`
 (`-r requirements.txt` + pytest + ruff); runtime pins are in `requirements.txt`.
 
@@ -136,10 +135,10 @@ Dev tooling is in `requirements-dev.txt`
   generic `signal_api.StockCheck` drawn as verdict, score line, metric cards and condition badges; the
   Universe tab passes a `SignalContext` (its rows, its `SignalCache`, the pinned variant) through
   `StockMaDialog(signal_ctx=...)`),
-  `widgets.py` (since 2026-11-15 only a re-export of: `table_items.py` `ColSpec`/`NumericItem`,
+  `table_items.py` `ColSpec`/`NumericItem`,
   `universe_columns.py` the Universe `COLUMNS`/`COL_*`, `universe_table.py` `StockTable`,
   `filter_popups.py` `FilterPopup`/`SignalScanPopup` (the 신호 포착 panel), `table_headers.py` `GroupedHeaderView`,
-  `heat_legend.py` `HeatLegend`; new code imports from those modules), `delegates.py`
+  `heat_legend.py` `HeatLegend` (the old `widgets.py` re-export of these was removed on 2026-11-26), `delegates.py`
   (every custom-painted table cell: `CellDelegate` base + the Universe/History delegates),
   `ma_chart.py` (`StockMaLauncherMixin`, the MA-chart dialog launcher; `UniverseTab` is its
   only user now),
@@ -256,7 +255,13 @@ Dev tooling is in `requirements-dev.txt`
   `TradingRecordTab` reads the DB in its constructor. `backup_to()` is the online-backup
   entry point `AutoBackupThread` uses.
 - **`tools/register_secret.py`**: standalone CLI for pushing secrets to Google Cloud Secret
-  Manager; unrelated to the app runtime. **`docs/history/`**: dated one-off documents.
+  Manager; unrelated to the app runtime. Finished documents are deleted rather than archived (user direction, 2026-11-26):
+  `docs/history/` (old roadmap sections and rows, superseded ui.md sections, the 2026-08 changelog and
+  test plan, the MA chart UX review), the 2026-11 mockups and screenshots (`docs/ui_mockups/2026-11/`) and the
+  finished implementation briefs (`docs/ui_redesign_2026-11.md`,
+  `ui_design_proposal_2026-11-14.md`, `ui_strategy_settings_2026-11-14.md`, `yearly_flows_report_2026-11-15.md`,
+  `ma60_unification_2026-11-18.md`, `ma60_default_2026-11-18.md`). Comments and docs still cite their section
+  numbers ("roadmap 2-4", "6-1a", ...) -- read them with `git show cc28828:docs/<path>`.
 - **`src/gemini_helper.py`**: Gemini calls for the per-stock AI report feature
   (`GOOGLE_API_KEY` in `.env`); the AI filter (2026-09-19) and portfolio diagnosis
   (2026-09-19) features were removed. Prompts were rewritten from
@@ -286,7 +291,7 @@ Dev tooling is in `requirements-dev.txt`
 written by the load layer since 2026-11-20: the hold-out opening record,
 trend_following.md 10-7 -- not a cache, never delete it),
 plus the legacy `trading_record.json` (read once by
-`_migrate_asset_records_json`; left on disk afterwards — the import records completion in
+`_migrate_asset_records_json`, which skips it when absent; the file was deleted on 2026-11-26 — the import records completion in
 `portfolio.db`'s `migrations` table so deleted rows are never re-imported), and
 the rebuildable caches under `cache/` (`investor_flows/<ticker>.json`, `cd91.json`,
 `krx_calendar.json`, and
@@ -379,5 +384,5 @@ not fixtures. Trading History principal/deposit/withdrawal live in `QSettings`
 - `roadmap.md` is the running log of what was done and why (current-state summary, open long-term
   items, a priority matrix, and a dated change history). Add a row there for non-trivial changes.
   Finished sections (2, 3, 6, 7 — the "roadmap 2-4" / "6-1a" / "7-2c" that code comments cite) and the
-  2026-08~10 rows live in `docs/history/roadmap_2026-08_10.md`; superseded `docs/ui.md` sections (5,
-  6.1-6.2, 7) in `docs/history/ui_archive_2026-09_10.md`, with a one-line pointer left at each number.
+  2026-08~10 rows were in `docs/history/roadmap_2026-08_10.md` and superseded `docs/ui.md` sections (5,
+  6.1-6.2, 7) in `docs/history/ui_archive_2026-09_10.md`; both deleted, see `git show cc28828:...`.

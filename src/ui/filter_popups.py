@@ -3,8 +3,8 @@ checkbox list) and SignalScanPopup (the Trading Universe's 신호 포착 panel:
 the added signals as check boxes, docs/ui.md 8.9; the signals themselves are
 added in ui/dialogs/signal_conditions.py).
 
-Moved out of ui/widgets.py (2026-11-15, code review #5); ui.widgets still
-re-exports both.
+Moved out of ui/widgets.py (2026-11-15, code review #5); the ui.widgets re-export
+module was removed on 2026-11-26.
 """
 from PyQt6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLineEdit, QCheckBox, QScrollArea,

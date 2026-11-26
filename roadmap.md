@@ -4,7 +4,7 @@
 > 현재 상태: PyQt6 단일 사용자 데스크톱 앱 (한국/미국 주식 포트폴리오 추적 + Trend Following 리서치) — git(PR 단위),
 > GitHub Actions CI(ruff·pytest), pytest 853 통과, ruff(F) 0건, 화면 언어 한국어/영어
 > 구조와 규칙은 `CLAUDE.md`, 화면 규칙은 `docs/ui.md`, 전략 스펙은 `src/strategy/trend_following/trend_following.md`
-> **2026-11-15 정리**: 끝난 2·3·6·7장과 2026-08~10 변경 이력은 `docs/history/roadmap_2026-08_10.md`로 옮겼다
+> **2026-11-15 정리**: 끝난 2·3·6·7장과 2026-08~10 변경 이력은 `docs/history/roadmap_2026-08_10.md`(삭제됨, `git show cc28828:docs/history/roadmap_2026-08_10.md`)로 옮겼다
 > (절 번호 그대로 — 코드 주석의 "roadmap 2-4", "roadmap 6-1a", "roadmap 7-2c" 등은 그 문서에 있다).
 
 ---
@@ -12,10 +12,10 @@
 ## 목차
 
 1. [현황 요약](#1-현황-요약)
-2. ~~단기 개선~~ · 3. ~~중기 개선~~ — 완료, `docs/history/roadmap_2026-08_10.md`
+2. ~~단기 개선~~ · 3. ~~중기 개선~~ — 완료, `docs/history/roadmap_2026-08_10.md`(삭제됨, `git show cc28828:docs/history/roadmap_2026-08_10.md`)
 4. [장기 개선 (3개월+)](#4-장기-개선-3개월)
 5. [우선순위 매트릭스](#5-우선순위-매트릭스)
-6. ~~코드 분석 기반 개선 항목~~ · 7. ~~UI 개선 항목~~ — 완료, `docs/history/roadmap_2026-08_10.md`
+6. ~~코드 분석 기반 개선 항목~~ · 7. ~~UI 개선 항목~~ — 완료, `docs/history/roadmap_2026-08_10.md`(삭제됨, `git show cc28828:docs/history/roadmap_2026-08_10.md`)
 8. [변경 이력](#변경-이력)
 
 ---
@@ -142,7 +142,7 @@ src/
 ## 5. 우선순위 매트릭스
 
 > `상태` 컬럼은 2026-09-17 재조사 결과 반영, **2026-10-25 현행화**(3-4A·3-4B/C·3-6·4-4 행, UI 행 추가). 완료 항목은 우선순위 재산정 대상에서 제외.
-> 6-x 행은 섹션 6(코드 분석 기반 개선 항목, `docs/history/roadmap_2026-08_10.md`) 참고.
+> 6-x 행은 섹션 6(코드 분석 기반 개선 항목, `docs/history/roadmap_2026-08_10.md`(삭제됨, `git show cc28828:docs/history/roadmap_2026-08_10.md`)) 참고.
 
 | # | 항목 | 영향 | 난이도 | 우선순위 | 상태 |
 |---|------|------|--------|----------|------|
@@ -174,7 +174,7 @@ src/
 
 ## 변경 이력
 
-2026-08 ~ 2026-10의 행은 `docs/history/roadmap_2026-08_10.md`로 옮겼다.
+2026-08 ~ 2026-10의 행은 `docs/history/roadmap_2026-08_10.md`(삭제됨, `git show cc28828:docs/history/roadmap_2026-08_10.md`)로 옮겼다.
 
 | 날짜 | 변경 내용 |
 |------|-----------|
@@ -220,7 +220,7 @@ src/
 | 2026-11-15 (16차) | MA 차트 추세 점수 영역: 점수가 없어도 같은 행·카드·조건 줄을 "-"/중립 배지로 유지해 높이 고정(세 상태 211px), 채점 제외는 "채점 제외"+툴팁. 글자 크기 검토: 제목 8pt 흐림 → 표 제목과 같은 9pt 굵게, 핵심 점수(주간 평균) 9pt → 13pt, 카드 값 13pt → 12pt(전역 QSS가 setFont를 덮어쓰던 것 수정), 내용별 높이 차이는 `_lock_height`로 고정. 테스트 2개(기존 1개 대체), 3개 갱신. pytest 851, ruff 0건. |
 | 2026-11-15 (17차) | 남은 영어 문구 한글화(검토 1번): 표·그룹 머리글, KPI 띠, 헤더 자동 갱신·툴팁, 상태바·푸터·진행 문구(스레드 14곳, 전략 패키지 진행 24곳), 빈 표 안내, 차트 축·범례, Strategy 면책 문구 등 약 300곳을 `tr()`로. 저장·비교되는 값은 그대로 두고 표시만 번역(`_part_label`, `_market_label`, `SUMMARY_LABELS`, `run_label`). 열 폭: Total Assets 'KOSPI 대비 (%p)' 90→96, Strategy 표는 머리글 폭에 맞춤(`_fit_headers`, 영어에서 잘리던 머리글도 해결). 검증: pytest 851, ruff 0건, 메인 창 348개 문구 — 영어 모드 한글 0, 한국어 모드 영어는 유지 목록(파일명·약어·고유명)만, Windows 렌더링. 같은 날: `.gitattributes`로 LF 통일, GitHub Actions CI(ruff·pytest), CI 첫 실행이 잡은 투자자 표 열 폭 버그 수정. |
 | 2026-11-15 (18차) | 코드 검토 8·9·11번. **8**: `KpiCard.set()`이 값 라벨 스타일을 색 한 줄로 덮어써 카드별 값 크기를 줄 수 없던 것 — `KpiCard(value_pt=)`·`set_value_size()`, `set()`은 색과 크기를 함께 씀(추세 점수 카드의 우회 코드 제거). **9**: 둘 다 9pt이던 `FONT_SMALL`을 `FONT_BODY`로 합침(8개 파일 35곳, 화면 변화 없음). **11**: 메인 창 바탕(`central_widget`)에 ClickFocus — 헤더·빈 곳을 눌러도 Trading History 선택 해제. 테스트 2개. pytest 853, ruff 0건, 실제 메인 창에서 확인. |
-| 2026-11-15 (19차) | 문서 정리(코드 검토 14번): roadmap.md 846→222줄 — 끝난 2·3·6·7장, 1장의 기존 최적화 내역, 2026-08~10 변경 이력을 `docs/history/roadmap_2026-08_10.md`로(절 번호 그대로, 코드 주석의 "roadmap 2-4" 등이 그대로 찾아짐). 머리말·현황 요약(Strategy 탭·소스 구조·CI·언어)을 현재 상태로 갱신. docs/ui.md 1029→844줄 — 옛 Strategy 탭(5장), Phase 0 제안 코드(6.1·6.2), 당시 적용 계획(7장)을 `docs/history/ui_archive_2026-09_10.md`로, 각 번호 자리에 한두 줄 요약과 안내. 옮기기 전 문서의 모든 줄이 새 문서들에 있는지 기계 대조(바꾼 머리말·목차 8줄 외 누락 0). |
+| 2026-11-15 (19차) | 문서 정리(코드 검토 14번): roadmap.md 846→222줄 — 끝난 2·3·6·7장, 1장의 기존 최적화 내역, 2026-08~10 변경 이력을 `docs/history/roadmap_2026-08_10.md`(삭제됨, `git show cc28828:docs/history/roadmap_2026-08_10.md`)로(절 번호 그대로, 코드 주석의 "roadmap 2-4" 등이 그대로 찾아짐). 머리말·현황 요약(Strategy 탭·소스 구조·CI·언어)을 현재 상태로 갱신. docs/ui.md 1029→844줄 — 옛 Strategy 탭(5장), Phase 0 제안 코드(6.1·6.2), 당시 적용 계획(7장)을 `docs/history/ui_archive_2026-09_10.md`(삭제됨, `git show cc28828:docs/history/ui_archive_2026-09_10.md`)로, 각 번호 자리에 한두 줄 요약과 안내. 옮기기 전 문서의 모든 줄이 새 문서들에 있는지 기계 대조(바꾼 머리말·목차 8줄 외 누락 0). |
 | 2026-11-15 (20차) | 코드 검토 5~7번. **7**(PR #27): ruff 규칙 F → F·E7·E9·B·UP·PIE, 위반 113건 0으로(B905 zip strict는 동작 변화로 제외). **5**: `ui/widgets.py` 1,457→31줄(재노출) — `table_items`·`universe_columns`·`universe_table`·`filter_popups`·`table_headers`·`heat_legend`로, `stock_ma.py` 1,311→1,074줄(오른쪽 패널 `stock_ma_side.py`, 헬퍼 `stock_ma_helpers.py`), 거래 내역 창 `__init__` 240→50줄. 전후 화면 구조·픽셀 덤프 2,263줄 완전 일치. **6**: data·threads의 `except Exception` 117곳 중 59곳을 실제 예외로 좁힘(`PAYLOAD_ERRORS`, `KIS_ERRORS`), 58곳은 경계로 남기고 이유 주석 + 추적 로그(로그 없던 8곳 추가). 비현실적 예외를 넣던 테스트 3개 수정. 함께: 매칭 거래 없는 청산 종목의 거래 내역 창이 AttributeError로 안 열리던 버그 수정(테스트 추가). pytest 854, ruff 0건. |
 | 2026-11-15 (21차) | 미국 시장 이름 정리(코드 검토 13번, 사용자 결정 "토글=지수명, 추가·입력=미국 하나"): Universe 토글 라벨 NASDAQ→NASDAQ 100, S&P500→S&P 500(키 유지, 버튼 폭 글자에 맞춤). 종목 추가와 거래 입력 창의 시장은 KOSPI·KOSDAQ·미국(저장 값 US) — 이전의 NASDAQ·NYSE(추가), NASDAQ·NASDAQ 100·NYSE·AMEX(거래 입력) 선택지 정리. 기존 저장 값은 그대로 읽힘. Strategy의 거래소 기준 NASDAQ·NYSE는 유지. 테스트 2개 추가·4개 갱신. pytest 856, ruff 0건. |
 | 2026-11-15 (22차) | 연말 트림 체결가-종가 차이를 그해 결과에 포함(코드 검토 12번, 스펙 9-28): `_year_end_reset`의 그해 결과를 트림 직후 실제 평가액으로 — 수수료·세금만 빼서 체결가 차이(실데이터 최대 990원/년)가 NAV·인출 어디에도 없던 것. `fill_gap` 폐지(Σ연도별 손익 = 총손익 정확). nex23 42건 중 8건만 변화, 최대 Sharpe −0.0001·CAGR −0.002%p·MDD −0.005%p(표시 자릿수 아래, 9-19 판정 불변). 회귀 테스트(수정 전 993원 차이로 실패). |
@@ -296,4 +296,6 @@ src/
 | 2026-11-26 | **DART 5단계: MA 차트 팝업 재무 탭**(`docs/dart_db_plan_2026-11-26.md` 13장 시안, docs/ui.md 8.34): KOSPI·KOSDAQ 종목의 `StockMaDialog`에 `차트 | 재무` 탭 — 머리줄·분기/연간 전환, KPI 4장, 분기 매출·영업이익률 차트(4분기 빗금, 적자 빨강), 실적 표(전환·정정·계산값 표시), 사업부 비중 막대와 부문 × 연도 표(검산 배지, 총액/외부매출 기준이 다른 해는 증감 없음). `ui/dart_financials_model.py`(순수 계산), `threads/dart_threads.py`, `query.company_financials`. 테스트 8개. |
 | 2026-11-26 | **DART 코드 리뷰 2차(`review_codex.md`) 반영**: 원문·XBRL 요청 실패를 자료 없음으로 확정하지 않음(013·014만 음성 캐시), 4분기를 3분기 버전마다 한 행으로 보존(스키마 7, 과거 기준일 답 불변), 정정본 부문 검증은 그 재무가 들어온 뒤 해당 매출로, 부문 조회는 처리된 최신 접수번호 기준, 재무 탭 TTM·전년비·연평균의 연속성·통화·연결 기준 검사, 재분류 시 부문 데이터 정리. 테스트 10개 추가. 실데이터 사본에서 검증 종목 40개 값 불변. |
 | 2026-11-26 | MA 차트 팝업 '기업 정보' 버튼(네이버 금융/Google Finance 링크) 삭제 — 재무 탭이 대체(사용자 지시, docs/ui.md 8.34). 오른쪽 패널은 투자자/선물 표나 전략 점검 칸이 있을 때만 생성(버튼만 남는 빈 패널 방지). pytest 1323, ruff 0건. |
-| 2026-11-26 | **MA 차트 조작 개선**(`docs/history/ma_chart_ux_review_2026-11-26.md` 우선 개선 1~3, docs/ui.md 8.35): 기간 콤보를 `activated`에 연결해 같은 기간 재선택 시 최근 구간 복귀, 이동 여유가 없으면 스크롤바 비활성; '이동평균' → '가격선', 메뉴를 이동평균·비교선·채널로 묶고 툴팁에 켠 선 전체; 오른쪽 상세 패널 '상세 접기/펼치기'(분할 폭 복원, 상태 유지). 고배율 실기 확인은 미완. |
+| 2026-11-26 | **MA 차트 조작 개선**(`docs/history/ma_chart_ux_review_2026-11-26.md`(삭제됨, `git show cc28828:docs/history/ma_chart_ux_review_2026-11-26.md`) 우선 개선 1~3, docs/ui.md 8.35): 기간 콤보를 `activated`에 연결해 같은 기간 재선택 시 최근 구간 복귀, 이동 여유가 없으면 스크롤바 비활성; '이동평균' → '가격선', 메뉴를 이동평균·비교선·채널로 묶고 툴팁에 켠 선 전체; 오른쪽 상세 패널 '상세 접기/펼치기'(분할 폭 복원, 상태 유지). 고배율 실기 확인은 미완. |
+| 2026-11-26 | 끝난 문서 삭제(사용자 지시): `docs/history/` 5개(옛 roadmap 장·이력, ui.md 대체 절, 2026-08 최적화 기록·점검 목록, MA 차트 리뷰)와 구현이 끝난 지시서 6개: `docs/ui_redesign_2026-11.md`·`ui_design_proposal_2026-11-14.md`·`ui_strategy_settings_2026-11-14.md`·`yearly_flows_report_2026-11-15.md`·`ma60_unification_2026-11-18.md`·`ma60_default_2026-11-18.md`. 결정은 docs/ui.md·스펙에 있고, 코드·문서의 인용(절 번호)은 그대로 — 원문은 `git show cc28828:docs/<이름>.md`. |
+| 2026-11-26 | 저장소 정리(사용자 지시, 구조 점검 후): 테스트만 쓰던 재수출 모듈 `src/ui/widgets.py` 삭제(테스트 5개는 실제 모듈에서 import), CLAUDE.md와 어긋난 낡은 규칙 `.agents/rules/optimize-code.md` 삭제(AGENTS.md가 CLAUDE.md를 가리킴), 구현이 끝난 시안·스크린샷 `docs/ui_mockups/2026-11/` 10개 삭제(`git show cc28828:…`). `docs/nexus/`는 Paperclip 운영 문서라 유지. |

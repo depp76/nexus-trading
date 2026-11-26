@@ -1,8 +1,8 @@
 """ui/heat_legend.py — HeatLegend, the Trading Universe footer legend for the
 change/momentum heatmap (docs/ui.md 1.2 / 8.7).
 
-Moved out of ui/widgets.py (2026-11-15, code review #5); ui.widgets still
-re-exports it.
+Moved out of ui/widgets.py (2026-11-15, code review #5); the ui.widgets re-export
+module was removed on 2026-11-26.
 """
 from PyQt6.QtWidgets import QWidget
 from PyQt6.QtCore import QSize
