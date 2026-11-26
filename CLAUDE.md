@@ -221,7 +221,9 @@ Dev tooling is in `requirements-dev.txt`
   fin_std: CFS before OFS, IS before CIS, Q4 = annual - Q3 cumulative; financial-sector filers get no
   revenue, by user decision), `documents.py` (the income statement read from a report's document.xml for
   periods the API answers 013 -- financial filers before 2023 H2), `store.py` (schema incl. `fin_issue`,
-  views `v_fin_latest`/`v_fin_growth` with the calendar quarter), `query.py` (`get_financials(code,
+  views `v_fin_latest`/`v_fin_growth` with the calendar quarter; `connect()` is the collector's
+  read-write connection and runs the schema script only on a version change, `open_readonly()` is what
+  every reader uses -- never open dart.db read-write just to query it), `query.py` (`get_financials(code,
   as_of=)`: only filings received by then -- the one read entry point for screens and strategies; also
   the growth table and issue reports), `lock.py` (`cache/dart/sync.lock`), `sync.py` (`run_sync(mode,
   trigger, ...)`: the only collection logic, no Qt; records `sync_run`). `tools/dart_sync.py`

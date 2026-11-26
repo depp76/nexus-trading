@@ -97,9 +97,21 @@ def fetch_filing_list(client, bgn: _dt.date, end: _dt.date, *, corp_cls: str | N
     return rows
 
 
+# Filings are kept from one fiscal year before the window: a non-December
+# filer's first reports arrive before its first annual report tells the fiscal
+# month, so they are classified with month 12 at first and can look a year too
+# early ("분기보고서 (2020.12)" of a March year end is FY2021 Q3). Dropping them
+# then would lose them for good; the financial fetch still starts at the
+# window's first year (review_agy H4).
+KEEP_YEARS_BEFORE = 1
+
+
 def store_filings(conn, rows: list[dict], first_year: int) -> int:
     """Store the periodic reports among `rows` (list.json items) whose fiscal
-    year is `first_year` or later, with their companies; returns new filings."""
+    year is `first_year - KEEP_YEARS_BEFORE` or later, with their companies;
+    returns new filings. Rows are taken oldest first (list.json answers newest
+    first), so a company's name and market end as its newest report has them
+    (review_agy M8)."""
     periodic = []
     for r in rows:
         parsed = parse_report_name(r.get("report_nm", ""))
@@ -107,6 +119,7 @@ def store_filings(conn, rows: list[dict], first_year: int) -> int:
             periodic.append((r, parsed))
     if not periodic:
         return 0
+    periodic.sort(key=lambda x: str(x[0]["rcept_no"]))
 
     now = now_iso()
     touched_fm = set()
@@ -130,7 +143,7 @@ def store_filings(conn, rows: list[dict], first_year: int) -> int:
     for r, (kind, py, pm, tags) in periodic:
         fm = _fiscal_month(conn, r["corp_code"])
         fy, _q, reprt = classify(kind, py, pm, fm)
-        if fy < first_year:
+        if fy < first_year - KEEP_YEARS_BEFORE:
             continue
         rcept_dt = _fmt_date(r.get("rcept_dt") or r["rcept_no"][:8])
         cur = conn.execute(
@@ -147,14 +160,25 @@ def store_filings(conn, rows: list[dict], first_year: int) -> int:
 
 
 def reclassify_company(conn, corp_code: str) -> None:
-    """Recompute bsns_year / reprt_code of a company's filings after its fiscal month changed."""
+    """Recompute bsns_year / reprt_code of a company's filings after its fiscal
+    month changed. A filing whose period moved loses what was standardised
+    under the old period (fin_std, issues, the fetch mark), so the next run
+    stores it again under the right fiscal year / quarter (review_agy H4)."""
     fm = _fiscal_month(conn, corp_code)
-    for row in conn.execute("SELECT rcept_no, report_nm FROM filing WHERE corp_code = ?", (corp_code,)).fetchall():
+    for row in conn.execute("SELECT rcept_no, report_nm, bsns_year, reprt_code FROM filing WHERE corp_code = ?",
+                            (corp_code,)).fetchall():
         parsed = parse_report_name(row["report_nm"] or "")
         if not parsed:
             continue
         fy, _q, reprt = classify(parsed[0], parsed[1], parsed[2], fm)
-        conn.execute("UPDATE filing SET bsns_year = ?, reprt_code = ? WHERE rcept_no = ?", (fy, reprt, row["rcept_no"]))
+        if (fy, reprt) == (row["bsns_year"], row["reprt_code"]):
+            continue
+        r = row["rcept_no"]
+        conn.execute("UPDATE filing SET bsns_year = ?, reprt_code = ? WHERE rcept_no = ?", (fy, reprt, r))
+        conn.execute("DELETE FROM fin_std WHERE rcept_no = ?", (r,))
+        conn.execute("DELETE FROM fin_issue WHERE rcept_no = ?", (r,))
+        conn.execute("DELETE FROM fin_unmapped WHERE rcept_no = ?", (r,))
+        conn.execute("DELETE FROM fin_fetch WHERE rcept_no = ? OR src_rcept_no = ?", (r, r))
 
 
 def link_corrections(conn, corp_code: str) -> None:

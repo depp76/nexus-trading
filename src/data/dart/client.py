@@ -8,8 +8,11 @@
   instead of being sent. A per-run ``budget`` stops a run earlier the same way.
 - Status ``013`` (no data) is a normal answer; ``020`` (limit reached on DART's
   side) raises ``DartBudgetExceeded``; other non-000 codes raise ``DartApiError``.
-- Network errors and 5xx replies are retried with exponential back-off.
+- Network errors, 5xx and 429 replies are retried with exponential back-off
+  (a 429's Retry-After is honoured up to a minute).
 - Calls are spaced at least ``min_interval`` seconds apart (<= 5 per second).
+- Every wait (spacing, back-off) watches the run's ``cancel`` and raises
+  ``DartCancelled`` at once, so closing the app never sits out a back-off.
 - Replies are cached under ``cache/dart/`` so re-parsing never calls the API
   again; callers decide what is cacheable through ``cache_tag``.
 """
@@ -53,6 +56,20 @@ class DartBudgetExceeded(Exception):
     """The daily limit (api_usage), this run's budget, or DART's own 020."""
 
 
+class DartCancelled(Exception):
+    """The run's cancel was set while the client was waiting."""
+
+
+# Statuses that make every further call pointless: the run stops. Anything
+# else (a network failure after the retries, a broken reply, one report DART
+# cannot serve) concerns one request and the run may go on (review_agy H3).
+FATAL_STATUSES = frozenset({"010", "011", "012", "800", "900", "901", "http_401", "http_403"})
+
+
+def is_fatal(error: DartApiError) -> bool:
+    return str(error.status) in FATAL_STATUSES
+
+
 def kst_today() -> str:
     return _dt.datetime.now(_KST).strftime("%Y-%m-%d")
 
@@ -84,7 +101,7 @@ class DartClient:
     def __init__(self, conn: sqlite3.Connection, api_key: str, cache_dir: str, *,
                  run_id: str = "", daily_limit: int = DAILY_LIMIT, budget: int | None = None,
                  min_interval: float = MIN_INTERVAL, session=None, retries: int = 3,
-                 backoff: float = 1.0, today=kst_today):
+                 backoff: float = 1.0, today=kst_today, cancel=None):
         self.conn = conn
         self._key = api_key
         self.cache_dir = cache_dir
@@ -98,16 +115,54 @@ class DartClient:
         self.calls = 0                 # network calls made by this client
         self.cache_hits = 0
         self._last_call = 0.0
+        self._cancel = cancel            # threading.Event, a callable, or None
+        self._owns_session = session is None
         if session is None:
             session = requests.Session()
             session.mount("https://", SharedTlsAdapter())
         self.session = session
 
+    def close(self) -> None:
+        """Close the HTTP session this client created (a given one is the caller's)."""
+        if self._owns_session:
+            try:
+                self.session.close()
+            except Exception:
+                # boundary: closing sockets at the end of a run must never raise into it.
+                logger.debug("DART session close failed", exc_info=True)
+
+    def _cancelled(self) -> bool:
+        c = self._cancel
+        if c is None:
+            return False
+        return c.is_set() if hasattr(c, "is_set") else bool(c())
+
+    def _wait(self, seconds: float) -> None:
+        """Sleep, waking at once (DartCancelled) when the run is cancelled."""
+        if self._cancelled():
+            raise DartCancelled("cancelled")
+        if seconds <= 0:
+            return
+        c = self._cancel
+        if c is not None and hasattr(c, "wait"):
+            if c.wait(seconds):
+                raise DartCancelled("cancelled")
+            return
+        end = time.monotonic() + seconds
+        while True:
+            left = end - time.monotonic()
+            if left <= 0:
+                return
+            time.sleep(min(0.1, left))
+            if self._cancelled():
+                raise DartCancelled("cancelled")
+
     # ---- public ------------------------------------------------------------------
 
     def get_json(self, endpoint: str, params: dict, cache_tag: str | None = None) -> dict:
         """The decoded reply of `endpoint` ("list.json", ...). With a `cache_tag`
-        the reply (000 or 013) is cached under it and served from there next time."""
+        the reply (000 or 013) is cached under it and served from there next
+        time; without one nothing is read from or written to the cache."""
         path = self._cache_path(endpoint, params, cache_tag, ".json") if cache_tag else None
         if path and os.path.exists(path):
             try:
@@ -173,12 +228,15 @@ class DartClient:
         last_exc = None
         for attempt in range(self.retries):
             self._reserve_call()
-            wait = self.min_interval - (time.monotonic() - self._last_call)
-            if wait > 0:
-                time.sleep(wait)
+            self._wait(self.min_interval - (time.monotonic() - self._last_call))
             self._last_call = time.monotonic()
+            delay = self.backoff * (2 ** attempt)
             try:
-                resp = self.session.get(BASE_URL + endpoint, params={**params, "crtfc_key": self._key}, timeout=30)
+                resp = self.session.get(BASE_URL + endpoint, params={**params, "crtfc_key": self._key},
+                                        timeout=(10, 30))
+                if resp.status_code == 429:
+                    delay = max(delay, _retry_after(resp))
+                    raise requests.HTTPError("HTTP 429")
                 if resp.status_code >= 500:
                     raise requests.HTTPError(f"HTTP {resp.status_code}")
                 if resp.status_code != 200:
@@ -189,7 +247,7 @@ class DartClient:
                 last_exc = e
                 self._log(endpoint, params, "network_error", _scrub(str(e), self._key))
                 if attempt + 1 < self.retries:
-                    time.sleep(self.backoff * (2 ** attempt))
+                    self._wait(delay)
         raise DartApiError("network_error", _scrub(str(last_exc), self._key))
 
     def _raise_for_status(self, status: str, message: str) -> None:
@@ -222,6 +280,14 @@ class DartClient:
             os.replace(tmp, path)
         except OSError:
             logger.warning("Could not write DART cache file %s", path, exc_info=True)
+
+
+def _retry_after(resp) -> float:
+    """Seconds a 429 asks to wait (0 when absent or unreadable), at most 60."""
+    try:
+        return min(60.0, max(0.0, float(resp.headers.get("Retry-After", 0))))
+    except (AttributeError, TypeError, ValueError):
+        return 0.0
 
 
 def _scrub(text: str, key: str) -> str:

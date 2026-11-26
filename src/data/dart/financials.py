@@ -86,22 +86,33 @@ def parse_amount(value):
     return -v if neg else v
 
 
+_NUMBERING = re.compile(r"^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩIVX\d]+[.)]")      # "XⅢ." mixes both kinds of numeral
+_NOTE_REF = re.compile(r"\((?:주|주석|Note)[^)]*\)$")
+
+
 def _norm(name: str) -> str:
     return "".join((name or "").split())
+
+
+def account_name(name: str) -> str:
+    """An account name as the rules compare it: no spaces, no leading item
+    number ("III. 영업이익", "Ⅵ.반기순이익", "1. 지배기업소유지분") and no
+    trailing note reference ("매출액(주27)")."""
+    return _NOTE_REF.sub("", _NUMBERING.sub("", _norm(name)))
 
 
 def is_owners_name(name: str) -> bool:
     """Owners-of-parent profit line: "지배기업 소유주지분", "지배회사소유주지분순이익",
     "지배주주순이익", ... but not a non-controlling or comprehensive-income line."""
-    n = _norm(name)
-    if "비지배" in n or "포괄" in n:
+    n = account_name(name)
+    if "비지배" in n or "포괄" in n or n.endswith("자본"):      # "...에 귀속되는 자본" is the balance sheet's
         return False
     return any(k in n for k in ("지배기업", "지배회사", "지배주주")) and any(k in n for k in ("소유주", "지분", "주주", "순이익"))
 
 
 def is_net_income_name(name: str) -> bool:
     """"당기순이익(손실)", "분기연결순이익", "연결당반기순이익", "당(분)기연결순이익", ..."""
-    return bool(_NET_INCOME_NAME.match(_norm(name).replace("(분)", "분").replace("(반)", "반")))
+    return bool(_NET_INCOME_NAME.match(account_name(name).replace("(분)", "분").replace("(반)", "반")))
 
 
 # Accounts only a financial-sector filer (bank, insurer, financial holding)
@@ -148,7 +159,7 @@ def find_metric(rows: list[dict], metric: str, extra_ids=()) -> dict | None:
                 if (r.get("account_id") or "").strip() == aid:
                     return r
         for r in stmt:
-            n = _norm(r.get("account_nm"))
+            n = account_name(r.get("account_nm"))
             if metric == "net_income_owners":
                 if is_owners_name(n) and "ComprehensiveIncome" not in (r.get("account_id") or ""):
                     return r
@@ -160,8 +171,13 @@ def find_metric(rows: list[dict], metric: str, extra_ids=()) -> dict | None:
     return None
 
 
-def fetch_period(client, corp_code: str, api_year: int, reprt_code: str, cache_tag: str):
-    """(fs_div, rows) of the period: CFS, else OFS on 013; (None, []) when neither has data."""
+def fetch_period(client, corp_code: str, api_year: int, reprt_code: str, cache_tag: str | None):
+    """(fs_div, rows) of the period: CFS, else OFS on 013; (None, []) when neither has data.
+    `cache_tag=None` (no cache read or write) for a period with a report
+    received in the last few days: DART lists a report at once but loads its
+    statements hours later, so a reply in between -- a 013, or still the
+    numbers of the version before a correction -- must not be kept and served
+    again (review_agy M4, review_codex P1)."""
     for fs_div in ("CFS", "OFS"):
         data = client.get_json("fnlttSinglAcntAll.json",
                                {"corp_code": corp_code, "bsns_year": str(api_year),
@@ -174,7 +190,8 @@ def fetch_period(client, corp_code: str, api_year: int, reprt_code: str, cache_t
 
 def store_period(conn, corp_code: str, fiscal_year: int, reprt_code: str, fs_div: str,
                  rows: list[dict], account_map: dict | None = None, *, raw: bool = True,
-                 financial: bool | None = None, nci: bool | None = None) -> tuple[str, list[str]]:
+                 financial: bool | None = None, nci: bool | None = None,
+                 fallback_rcept: str | None = None) -> tuple[str, list[str]]:
     """Store one fetched period (fin_raw + fin_std); returns (the receipt number
     the numbers belong to, metrics not found). Not committed. `raw=False` for
     rows read from a document (fin_raw keeps API replies only); `financial` /
@@ -183,11 +200,20 @@ def store_period(conn, corp_code: str, fiscal_year: int, reprt_code: str, fs_div
     - A financial-sector filer without a revenue line: no revenue row, a
       ``revenue_na`` issue instead of an unmapped one.
     - Consolidated statements without any non-controlling line: the owners'
-      profit is the whole net income (derived = 1, issue ``owners_from_net_income``)."""
-    src = max(str(r.get("rcept_no")) for r in rows if r.get("rcept_no"))
+      profit is the whole net income (derived = 1, issue ``owners_from_net_income``).
+    - The receipt's earlier fin_unmapped / fin_issue lines are replaced, so a
+      period re-parsed after account_map.json was extended drops out of the
+      lists (review_agy M5).
+    - `fallback_rcept` is the receipt to store under when no row carries one."""
+    src = source_receipt(rows) or fallback_rcept
+    if not src:
+        raise ValueError(f"financial rows of {corp_code} {fiscal_year} {reprt_code} carry no receipt number")
     ensure_filing(conn, src, corp_code, fiscal_year, reprt_code)
     link_corrections(conn, corp_code)
     rcept_dt = conn.execute("SELECT rcept_dt FROM filing WHERE rcept_no = ?", (src,)).fetchone()[0]
+    conn.execute("DELETE FROM fin_unmapped WHERE rcept_no = ?", (src,))
+    conn.execute("DELETE FROM fin_issue WHERE rcept_no = ?", (src,))
+    currency = next((str(r["currency"]).strip() for r in rows if (r.get("currency") or "").strip()), "KRW")
 
     conn.executemany(
         "INSERT OR REPLACE INTO fin_raw(rcept_no, fs_div, sj_div, account_id, account_nm, ord, thstrm_amount, "
@@ -210,7 +236,7 @@ def store_period(conn, corp_code: str, fiscal_year: int, reprt_code: str, fs_div
             record_issue(conn, src, corp_code, fiscal_year, q, "revenue_na", "financial-sector statement")
             continue
         if row is None and metric == "net_income_owners" and fs_div == "CFS" and not nci:
-            row = find_metric(rows, "net_income")
+            row = find_metric(rows, "net_income", extra.get("net_income", ()))
             if row is not None:
                 derived = 1
                 record_issue(conn, src, corp_code, fiscal_year, q, "owners_from_net_income", "no non-controlling line")
@@ -226,7 +252,7 @@ def store_period(conn, corp_code: str, fiscal_year: int, reprt_code: str, fs_div
             value_q, ytd = None, cur          # filled by derive_q4
         else:
             value_q, ytd = cur, add
-            prev = _ytd(conn, corp_code, fiscal_year, q - 1, metric, fs_div, rcept_dt)
+            prev = _ytd(conn, corp_code, fiscal_year, q - 1, metric, fs_div, rcept_dt, currency)
             if ytd is None and value_q is not None and prev is not None:
                 ytd = prev + value_q
             elif value_q is None and ytd is not None and prev is not None:
@@ -235,41 +261,91 @@ def store_period(conn, corp_code: str, fiscal_year: int, reprt_code: str, fs_div
             continue                          # the account is there but blank (e.g. OFS owners' line)
         conn.execute(
             "INSERT OR REPLACE INTO fin_std(corp_code, fiscal_year, fiscal_q, fs_div, metric, value_q, value_ytd, "
-            "derived, rcept_no, rcept_dt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (corp_code, fiscal_year, q, fs_div, metric, value_q, ytd, derived, src, rcept_dt))
-    if q in (3, 4):
-        derive_q4(conn, corp_code, fiscal_year)
+            "derived, rcept_no, rcept_dt, currency) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (corp_code, fiscal_year, q, fs_div, metric, value_q, ytd, derived, src, rcept_dt, currency))
+    if q in (1, 2):
+        rederive_following(conn, corp_code, fiscal_year, q)
+    derive_q4(conn, corp_code, fiscal_year)
     conn.executemany("INSERT OR IGNORE INTO fin_unmapped(rcept_no, corp_code, metric) VALUES (?, ?, ?)",
                      [(src, corp_code, m) for m in missing])
     return src, missing
 
 
+def source_receipt(rows: list[dict]) -> str | None:
+    """The newest receipt number carried by a reply's rows, or None."""
+    found = [str(r["rcept_no"]) for r in rows if r.get("rcept_no")]
+    return max(found) if found else None
+
+
+def rederive_following(conn, corp_code: str, fiscal_year: int, q: int) -> None:
+    """After quarter `q` (1 or 2) was stored: fill the half / Q3 rows of the
+    year that were stored with only one of (3-month value, cumulative) because
+    their previous quarter was not there yet -- a document-sourced period has
+    the cumulative only (review_agy M7). Each row uses the previous quarter
+    known on its own receipt date."""
+    for nq in range(q + 1, 4):
+        for r in conn.execute(
+                "SELECT metric, fs_div, currency, value_q, value_ytd, rcept_no, rcept_dt FROM fin_std "
+                "WHERE corp_code = ? AND fiscal_year = ? AND fiscal_q = ? AND (value_q IS NULL) <> (value_ytd IS NULL)",
+                (corp_code, fiscal_year, nq)).fetchall():
+            prev = _ytd(conn, corp_code, fiscal_year, nq - 1, r["metric"], r["fs_div"], r["rcept_dt"], r["currency"])
+            if prev is None:
+                continue
+            if r["value_q"] is None:
+                conn.execute("UPDATE fin_std SET value_q = ?, derived = 1 WHERE corp_code = ? AND fiscal_year = ? "
+                             "AND fiscal_q = ? AND metric = ? AND rcept_no = ?",
+                             (r["value_ytd"] - prev, corp_code, fiscal_year, nq, r["metric"], r["rcept_no"]))
+            else:
+                conn.execute("UPDATE fin_std SET value_ytd = ? WHERE corp_code = ? AND fiscal_year = ? "
+                             "AND fiscal_q = ? AND metric = ? AND rcept_no = ?",
+                             (prev + r["value_q"], corp_code, fiscal_year, nq, r["metric"], r["rcept_no"]))
+
+
 def derive_q4(conn, corp_code: str, fiscal_year: int) -> None:
-    """Q4 value = annual - Q3 cumulative for every annual receipt of the year,
-    using the newest Q3 (same fs_div) received on or before the annual's date.
-    When the only stored Q3 is a correction received after the annual (the API
-    serves the newest version only; KB금융 2023 Q3 corrected 2024-12), that Q3
-    is used and the period gets a ``q4_uses_later_q3`` issue: the Q4 value then
-    rests on numbers published after the annual's date."""
+    """Q4 value = annual - Q3 cumulative for every annual receipt of the year
+    (same fs_div and reporting currency -- amounts of different currencies are
+    never subtracted; review_codex P1).
+
+    The Q3 used is the newest one received on or before the annual's date. When
+    the only stored Q3 was received later (the API serves the newest version
+    only; KB금융 2023 Q3 was corrected in 2024-12), that one is used and the
+    row's ``avail_dt`` is its receipt date: the Q4 value was not knowable
+    before that day, and ``query.get_financials(as_of=...)`` returns it from
+    then on only (the annual cumulative is available from the annual's date).
+    Such a row also gets a ``q4_uses_later_q3`` issue. Both are rewritten on
+    every call, so the result does not depend on the order periods arrive in."""
     for r in conn.execute(
-            "SELECT metric, fs_div, value_ytd, rcept_no, rcept_dt FROM fin_std "
+            "SELECT metric, fs_div, currency, value_ytd, rcept_no, rcept_dt FROM fin_std "
             "WHERE corp_code = ? AND fiscal_year = ? AND fiscal_q = 4", (corp_code, fiscal_year)).fetchall():
-        q3 = _ytd(conn, corp_code, fiscal_year, 3, r["metric"], r["fs_div"], r["rcept_dt"])
+        conn.execute("DELETE FROM fin_issue WHERE rcept_no = ? AND kind = 'q4_uses_later_q3' AND detail = ?",
+                     (r["rcept_no"], r["metric"]))
+        avail = None
+        q3 = _ytd_row(conn, corp_code, fiscal_year, 3, r["metric"], r["fs_div"], r["rcept_dt"], r["currency"])
         if q3 is None:
-            q3 = _ytd(conn, corp_code, fiscal_year, 3, r["metric"], r["fs_div"], "9999-12-31")
+            q3 = _ytd_row(conn, corp_code, fiscal_year, 3, r["metric"], r["fs_div"], "9999-12-31", r["currency"])
             if q3 is not None:
+                avail = q3["rcept_dt"]
                 record_issue(conn, r["rcept_no"], corp_code, fiscal_year, 4, "q4_uses_later_q3", r["metric"])
-        value_q = r["value_ytd"] - q3 if (r["value_ytd"] is not None and q3 is not None) else None
+        q3_ytd = q3["value_ytd"] if q3 is not None else None
+        value_q = r["value_ytd"] - q3_ytd if (r["value_ytd"] is not None and q3_ytd is not None) else None
         conn.execute(
-            "UPDATE fin_std SET value_q = ?, derived = 1 WHERE corp_code = ? AND fiscal_year = ? AND fiscal_q = 4 "
-            "AND metric = ? AND rcept_no = ?", (value_q, corp_code, fiscal_year, r["metric"], r["rcept_no"]))
+            "UPDATE fin_std SET value_q = ?, derived = 1, avail_dt = ? WHERE corp_code = ? AND fiscal_year = ? "
+            "AND fiscal_q = 4 AND metric = ? AND rcept_no = ?",
+            (value_q, avail if value_q is not None else None, corp_code, fiscal_year, r["metric"], r["rcept_no"]))
 
 
-def _ytd(conn, corp_code, fiscal_year, q, metric, fs_div, as_of_dt):
-    row = conn.execute(
-        "SELECT value_ytd FROM fin_std WHERE corp_code = ? AND fiscal_year = ? AND fiscal_q = ? AND metric = ? "
-        "AND fs_div = ? AND rcept_dt <= ? ORDER BY rcept_no DESC LIMIT 1",
-        (corp_code, fiscal_year, q, metric, fs_div, as_of_dt)).fetchone()
+def _ytd_row(conn, corp_code, fiscal_year, q, metric, fs_div, as_of_dt, currency="KRW"):
+    """The newest row of (quarter, metric) in the same statement kind and
+    reporting currency, received on or before `as_of_dt`; None when absent."""
+    return conn.execute(
+        "SELECT value_ytd, rcept_dt FROM fin_std WHERE corp_code = ? AND fiscal_year = ? AND fiscal_q = ? "
+        "AND metric = ? AND fs_div = ? AND COALESCE(currency, 'KRW') = ? AND rcept_dt <= ? "
+        "ORDER BY rcept_no DESC LIMIT 1",
+        (corp_code, fiscal_year, q, metric, fs_div, currency or "KRW", as_of_dt)).fetchone()
+
+
+def _ytd(conn, corp_code, fiscal_year, q, metric, fs_div, as_of_dt, currency="KRW"):
+    row = _ytd_row(conn, corp_code, fiscal_year, q, metric, fs_div, as_of_dt, currency)
     return row[0] if row else None
 
 

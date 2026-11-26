@@ -55,6 +55,17 @@ class TestDueRule(unittest.TestCase):
     def test_naive_local_time_is_read_as_kst(self):
         self.assertFalse(is_due("2026-11-26T19:42:00", "done", _kst(22), at_start=True))
 
+    def test_cancelled_evening_run_resumes_but_a_spent_limit_does_not(self):
+        """review_agy M2: closing the app mid-collection after 19:00 must not
+        count as tonight's run; a run stopped by the limit has nothing left."""
+        last = _kst(19, 30).isoformat()
+        self.assertTrue(is_due(last, "partial", _kst(19, 40), True, "cancelled"))
+        self.assertTrue(is_due(last, "partial", _kst(19, 40), True, "interrupted: the process ended during the run"))
+        self.assertTrue(is_due(last, "partial", _kst(20), False, "cancelled"))
+        self.assertFalse(is_due(last, "partial", _kst(19, 40), True, "daily limit of 19000 calls reached"))
+        self.assertFalse(is_due(last, "partial", _kst(19, 40), True, "run budget of 30 calls used"))
+        self.assertFalse(is_due(last, "done", _kst(19, 40), True, None))
+
 
 class TestCollectionStatus(unittest.TestCase):
     def test_counts_periods_and_usage(self):
@@ -201,6 +212,40 @@ class TestAutoSync(unittest.TestCase):
         s._on_progress(3, 9, "filing list 2025-01-01..2025-03-31")
         self.assertEqual(s.label.text(), "DART 초기 수집 57%")
 
+    def test_initial_percentage_on_the_first_run_and_through_the_daily_phase(self):
+        """review_agy M3: the status read at start is empty on the very first
+        run, and the daily phase (a handful of periods) must not move the figure."""
+        s, _ = self._sync()
+        s._on_started({"list_done": False, "periods_total": 0, "periods_pending": 0})
+        self.assertEqual(s.label.text(), "DART 초기 수집 0%")
+        s._on_progress(15_000, 60_000, "financials 005930 2021 11013")
+        self.assertEqual(s.label.text(), "DART 초기 수집 25%")           # was stuck at 0%
+        s._on_started(dict(_INFO, periods_total=60_000, periods_pending=40_000))
+        self.assertEqual(s.label.text(), "DART 초기 수집 33%")
+        s._on_progress(4, 5, "new financials 005930 2026 11014")
+        self.assertEqual(s.label.text(), "DART 초기 수집 33%")           # was 99%
+        s._on_progress(10_000, 40_000, "financials 000660 2021 11013")
+        self.assertEqual(s.label.text(), "DART 초기 수집 50%")
+
+    def test_daily_phase_counts_when_not_initial(self):
+        s, _ = self._sync()
+        s._on_started(dict(_INFO, periods_pending=3))
+        s._on_progress(2, 3, "new financials 005930 2026 11014")
+        self.assertEqual(s.label.text(), "DART 수집 중 2건")
+
+    def test_state_is_carried_over_a_language_switch(self):
+        """review_agy L1: the new window shows the last outcome at once and
+        does not post the status-bar message again."""
+        old, _ = self._sync()
+        old._on_done({"status": "done", "info": dict(_INFO), "result": SyncResult("done", "r", 7, 12)})
+        new, msgs = self._sync()
+        new.import_state(old.export_state())
+        self.assertEqual(new.label.text(), "DART 11-26 19:42")
+        self.assertIn("새 공시 12건", new.label.toolTip())
+        self.assertEqual(msgs, [])
+        new.import_state(None)                               # nothing to carry over: unchanged
+        self.assertEqual(new.label.text(), "DART 11-26 19:42")
+
     def test_partial_failed_no_key_labels(self):
         s, msgs = self._sync()
         s._on_done({"status": "partial", "error": "daily limit", "info": _INFO})
@@ -284,6 +329,15 @@ _CLOSE_SCRIPT = textwrap.dedent(r'''
     import ui.dart_sync_thread as dst
     dst.START_DELAY_MS = 0
     import main
+    # No other worker may reach the network: the tabs' own threads (asset metrics
+    # -> Yahoo FX, prices, ...) would make the 2 s shutdown wait depend on the
+    # connection (review_agy tests #2). Only the DART thread really runs.
+    from PyQt6.QtCore import QThread
+    for _name, _mod in list(sys.modules.items()):
+        if _name.startswith("threads."):
+            for _cls in vars(_mod).values():
+                if isinstance(_cls, type) and issubclass(_cls, QThread) and _cls is not QThread:
+                    _cls.run = lambda self: None
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
     w = main.MainWindow(initial_refresh=False, run_backup=False)

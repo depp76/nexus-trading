@@ -20,18 +20,31 @@ STALE_AFTER = 2 * 60 * 60   # seconds
 
 def pid_alive(pid: int) -> bool:
     """Whether process `pid` is running. On Windows os.kill would terminate the
-    process, so OpenProcess / GetExitCodeProcess is asked instead."""
+    process, so OpenProcess / GetExitCodeProcess is asked instead.
+
+    The ctypes prototypes are declared: without them a HANDLE comes back as a
+    32-bit int and can be truncated on 64-bit Python. A process that exists but
+    may not be opened (another account, e.g. a scheduled task run elevated)
+    answers ERROR_ACCESS_DENIED and counts as alive, like PermissionError on
+    POSIX -- its lock must not be taken over (review_agy H5)."""
     if pid <= 0:
         return False
     if sys.platform == "win32":
         import ctypes
         from ctypes import wintypes
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
         PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
         STILL_ACTIVE = 259
+        ERROR_ACCESS_DENIED = 5
         handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
         if not handle:
-            return False
+            return ctypes.get_last_error() == ERROR_ACCESS_DENIED
         try:
             code = wintypes.DWORD()
             if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):

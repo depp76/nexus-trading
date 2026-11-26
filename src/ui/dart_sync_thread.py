@@ -70,7 +70,8 @@ class DartSyncThread(QThread):
         try:
             info = self._status()
             out["info"] = info
-            if not self._due(info.get("last_run"), info.get("last_status"), dart_sync.kst_now(), self.at_start):
+            if not self._due(info.get("last_run"), info.get("last_status"), dart_sync.kst_now(), self.at_start,
+                             info.get("last_error")):
                 out["status"] = "not_due"
                 return
             self.started_info.emit(info)
@@ -114,6 +115,7 @@ class DartAutoSync(QObject):
         self._stopped = False
         self._initial = False
         self._info: dict = {}
+        self._last_out: dict | None = None      # the last finished run's outcome (kept across a language switch)
         self.label = QLabel("")
         self.label.setObjectName("faint")
         self.label.setFont(create_font(FONT_BODY, style_name="Semilight"))
@@ -209,24 +211,50 @@ class DartAutoSync(QObject):
             self._set(tr("DART 수집 중", "DART collecting"))
 
     def _initial_pct(self, done, total) -> int:
-        all_ = self._info.get("periods_total") or 0
-        pending = self._info.get("periods_pending") or 0
-        if done is not None and total:
-            pending = max(0, total - done)
-        if all_ <= 0:
-            return 0
-        return max(0, min(99, int(100 * (all_ - pending) / all_)))
+        """Share of all periods that have financials. `done` / `total` are the
+        backfill phase's progress (total = the periods pending when it began);
+        the periods fetched before this run come from the status read at start.
+        On the very first run that status is empty (the report list is loaded
+        during the run), and the share is simply done / total (review_agy M3)."""
+        fetched_before = max(0, (self._info.get("periods_total") or 0) - (self._info.get("periods_pending") or 0))
+        if done is None or not total:
+            all_ = self._info.get("periods_total") or 0
+            return max(0, min(99, int(100 * fetched_before / all_))) if all_ > 0 else 0
+        return max(0, min(99, int(100 * (fetched_before + done) / (fetched_before + total))))
 
     def _on_progress(self, done: int, total: int, msg: str) -> None:
-        if not msg.startswith("financials"):
+        """run_sync's progress: "filing list ..." (report lists), "new financials
+        ..." (the last days' filings) and "financials ..." (the backfill). Only
+        the backfill moves the initial-load percentage -- the daily phase counts
+        a handful of periods and would swing it to 99 % and back."""
+        backfill = msg.startswith("financials")
+        if not (backfill or msg.startswith("new financials")):
             return
         if self._initial:
-            pct = self._initial_pct(done, total)
-            self._set(tr(f"DART 초기 수집 {pct}%", f"DART initial load {pct}%"))
+            if backfill:
+                pct = self._initial_pct(done, total)
+                self._set(tr(f"DART 초기 수집 {pct}%", f"DART initial load {pct}%"))
         else:
             self._set(tr(f"DART 수집 중 {done:,}건", f"DART collecting {done:,}"))
 
     def _on_done(self, out: dict) -> None:
+        self._last_out = out
+        self._render(out, announce=True)
+        if out.get("status") == "skipped":
+            self._retry_timer.start()
+
+    def export_state(self):
+        """The last finished run's outcome, for the window a language switch builds."""
+        return self._last_out
+
+    def import_state(self, out) -> None:
+        """Show the carried-over outcome at once (in the new language) instead
+        of an empty label until this window's first check (review_agy L1)."""
+        if isinstance(out, dict):
+            self._last_out = out
+            self._render(out, announce=False)
+
+    def _render(self, out: dict, announce: bool) -> None:
         status = out.get("status")
         info = out.get("info") or {}
         res = out.get("result")
@@ -240,10 +268,9 @@ class DartAutoSync(QObject):
                 self.label.setText(tr("DART 대기", "DART waiting"))
             self.label.setToolTip(tr("다른 수집(CLI·스케줄러)이 진행 중이라 이번 실행은 건너뜀 · 5분 뒤 다시 확인",
                                      "Another collector (CLI / scheduler) is running; skipped, checking again in 5 min"))
-            self._retry_timer.start()
         else:
             self._show_run(status, info, res, err)
-            if status == "done":
+            if status == "done" and announce:
                 added = res.filings_added if res is not None else 0
                 self.status_message.emit(tr(f"DART 새 공시 {added:,}건 반영", f"DART: {added:,} new filings"))
 

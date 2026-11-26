@@ -383,6 +383,7 @@ class MainWindow(QMainWindow):
             "tab": self.tabs.currentIndex(), "auto_refresh": self.auto_refresh_cb.isChecked(),
             "last_sync_at": self._last_sync_at,
             "failures": dict(self._failures._by_source),
+            "dart": self.dart_sync.export_state(),
             "universe": self.universe_tab.export_state(),
             "history": self.trading_history_tab.export_state(),
             "assets": self.trading_record_tab.export_state(),
@@ -400,6 +401,7 @@ class MainWindow(QMainWindow):
         for source, (at, reason) in (state.get("failures") or {}).items():
             self._failures.fail(source, reason, at)      # the header dot stays red (review_agy L4)
         self._update_refresh_indicator()
+        self.dart_sync.import_state(state.get("dart"))
         self.trading_history_tab.import_state(state["history"])
         self.trading_record_tab.import_state(state["assets"])
         self.strategy_tab.import_state(state["strategy"])
