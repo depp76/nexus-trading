@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>DART 재무 탭 시안 — Nexus Trading</title>
+<style>
+  :root{
+    --bg:#303844; --surface:#3a4452; --hdr:#424e5e; --text:#f0f2f6; --muted:#c6ceda; --empty:#9aa3b2;
+    --accent-bg:#514b69; --accent:#c4b8f1; --profit:#a5c9ff; --loss:#ffb1a8; --ok:#8fd6b0; --warn:#f2b866; --danger:#ff9e94;
+    --grid:#4a5566; --group:#5a6678; --primary:#675a94;
+  }
+  *{box-sizing:border-box}
+  body{color-scheme:dark;margin:0;background:#262d37;font-family:"Malgun Gothic Semilight","Malgun Gothic","맑은 고딕",sans-serif;color:var(--text);font-size:12px;padding:20px}
+  .note{max-width:1120px;margin:0 auto 10px;color:var(--muted);font-size:12px}
+  .note b{color:var(--warn);font-weight:600}
+  .win{max-width:1120px;margin:0 auto;background:var(--bg);border:1px solid var(--group);box-shadow:0 8px 30px rgba(0,0,0,.45)}
+  .titlebar{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--group);background:#2b323d}
+  .titlebar .t{font-size:16px;font-weight:600}
+  .titlebar .t small{font-size:12px;color:var(--muted);font-weight:400;margin-left:8px}
+  .tabs{display:flex;gap:2px;padding:8px 12px 0}
+  .tab{padding:6px 18px;background:var(--hdr);color:var(--muted);border:1px solid var(--group);border-bottom:none;font-weight:600}
+  .tab.on{background:var(--surface);color:var(--text);box-shadow:inset 0 2px 0 var(--accent)}
+  .pane{background:var(--surface);border-top:1px solid var(--group);padding:10px 12px 12px}
+  .bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+  .chip{background:var(--hdr);border:1px solid var(--group);padding:3px 8px;color:var(--muted)}
+  .chip b{color:var(--text);font-weight:600}
+  .seg{display:inline-flex;border:1px solid var(--group)}
+  .seg span{padding:4px 12px;color:var(--muted)}
+  .seg span.on{background:var(--accent-bg);color:var(--text)}
+  .sp{flex:1}
+  .sync{color:var(--muted)} .sync i{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);margin-right:5px}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
+  .kpi{background:var(--bg);border:1px solid var(--group);padding:8px 10px}
+  .kpi .l{font-size:11px;color:var(--muted);letter-spacing:.02em}
+  .kpi .v{font-size:18px;font-weight:600;margin:3px 0}
+  .kpi .d{font-size:11.5px;color:var(--muted)}
+  .up{color:var(--profit)} .dn{color:var(--loss)} .fl{color:var(--empty)}
+  .row2{display:grid;grid-template-columns:1.25fr 1fr;gap:10px}
+  .card{background:var(--bg);border:1px solid var(--group);padding:8px 10px}
+  .card h3{margin:0 0 6px;font-size:13px;font-weight:600;display:flex;justify-content:space-between;align-items:baseline}
+  .card h3 small{font-weight:400;color:var(--muted);font-size:11px}
+  table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+  th,td{border:1px solid var(--grid);padding:2px 5px;height:22px;white-space:nowrap}
+  th{background:var(--hdr);color:var(--muted);font-weight:600;text-align:center;font-size:11.5px}
+  td{text-align:right} td.c{text-align:center} td.lft{text-align:left}
+  tr.yr td{border-top:1px solid var(--group)}
+  .scroll{max-height:300px;overflow-y:auto;overflow-x:hidden}
+  #qt td,#qt th{padding:2px 4px;font-size:11.5px}
+  .badge{display:inline-block;padding:0 6px;font-size:10.5px;border-radius:2px;line-height:16px}
+  .b-ok{background:#2d4a3d;color:var(--ok)} .b-warn{background:#4d3f28;color:var(--warn)} .b-fail{background:#4d302d;color:var(--danger)} .b-na{background:#3d4553;color:var(--empty)}
+  .b-turn{background:#2c3d58;color:var(--profit)} .b-lossturn{background:#4d302d;color:var(--loss)}
+  .foot{color:var(--empty);font-size:11px;margin-top:6px;line-height:1.6}
+  svg text{font-family:inherit}
+  .legend{display:flex;gap:12px;color:var(--muted);font-size:11px;margin-top:2px}
+  .legend i{display:inline-block;width:10px;height:10px;margin-right:4px;vertical-align:-1px}
+</style>
+</head>
+<body>
+<p class="note"><b>시안 · 가상 데이터</b> — 회사명과 모든 수치는 화면 구성을 보여 주기 위한 가상 값입니다. MA 차트 팝업(StockMaDialog)에 붙는 <b>재무</b> 탭, Soft Slate 테마, 파랑 = 증가·이익 / 빨강 = 감소·손실.</p>
+
+<div class="win">
+  <div class="titlebar">
+    <div class="t">예시테크 <small>000000 · KOSDAQ · 반도체 장비 (가상)</small></div>
+    <div class="sync"><i></i>DART 11-26 19:42</div>
+  </div>
+  <div class="tabs"><div class="tab">차트</div><div class="tab on">재무</div></div>
+  <div class="pane">
+    <div class="bar">
+      <span class="chip">기준 <b>2026 3분기보고서</b> · 접수 2026-11-13 · <b>연결</b></span>
+      <span class="chip">기간 2021 ~ 2026 3분기</span>
+      <span class="chip">단위 억원</span>
+      <span class="sp"></span>
+      <span class="seg"><span class="on">분기</span><span>연간</span></span>
+    </div>
+
+    <div class="kpis" id="kpis"></div>
+
+    <div class="row2">
+      <div class="card">
+        <h3>분기 매출 · 영업이익률 <small>최근 5년 · 4분기는 연간 − 3분기 누적(빗금)</small></h3>
+        <div id="chart"></div>
+        <div class="legend"><span><i style="background:#7f9fd6"></i>매출</span><span><i style="background:var(--loss)"></i>영업적자 분기</span><span><i style="background:none;border-top:2px solid var(--accent);height:0;width:14px"></i>영업이익률</span></div>
+      </div>
+      <div class="card">
+        <h3>분기 실적 <small>최신 정정본 기준</small></h3>
+        <div class="scroll"><table id="qt"></table></div>
+      </div>
+    </div>
+
+    <div class="row2" style="margin-top:10px;grid-template-columns:1fr 1.25fr">
+      <div class="card">
+        <h3>사업부별 매출 비중 <small>연간 · 2026은 3분기 누적</small></h3>
+        <div id="segchart"></div>
+        <div class="legend" id="seglegend"></div>
+      </div>
+      <div class="card">
+        <h3>사업부별 매출 · 증감 <small>외부 매출 기준</small></h3>
+        <table id="st"></table>
+        <div class="foot">
+          2023년 사업부 개편: ‘반도체장비’ + ‘디스플레이장비’ → <b style="color:var(--muted)">장비</b> (segment_map으로 2021~2022도 묶어 표시)<br>
+          검산: 부문 합계 + 연결조정 vs 손익계산서 매출, 차이 1% 이내 = ok
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">† 4분기 = 사업보고서 연간값 − 3분기 누적(계산값). &nbsp;ⓡ 정정보고서 반영. &nbsp;YoY = 전년 동기 대비, QoQ = 직전 분기 대비. &nbsp;출처 OpenDART 정기공시, 접수일 기준 저장.</div>
+  </div>
+</div>
+
+<script>
+// ---- 가상 데이터 (억원) ----
+const Q = [];
+const rev = {2021:[420,480,510,560],2022:[530,600,640,580],2023:[450,410,430,470],2024:[520,610,660,720],2025:[700,780,820,900],2026:[880,960,1040]};
+const opm = {2021:[9.5,10.8,11.2,10.1],2022:[12.1,13.0,12.6,8.4],2023:[3.1,-4.2,-1.8,4.3],2024:[9.2,11.5,12.8,13.4],2025:[14.0,15.2,15.6,16.1],2026:[16.4,17.3,18.1]};
+const rdt = q => ({1:'05-14',2:'08-13',3:'11-13',4:'03-18'})[q];
+const yy = y => String(y).slice(2);
+for (const y of Object.keys(rev).map(Number)) rev[y].forEach((r,i)=>{
+  const op = Math.round(r*opm[y][i]/100);
+  const ni = Math.round(op*0.82 + (op<0?-3:4));
+  Q.push({y,q:i+1,rev:r,op,opm:opm[y][i],ni,derived:i===3,dt:yy(i===3?(y+1):y)+'-'+rdt(i+1),corr:(y===2024&&i===1)});
+});
+const get=(y,q)=>Q.find(o=>o.y===y&&o.q===q);
+const pct=(a,b)=>b?((a-b)/Math.abs(b)*100):null;
+const fmt=n=>n.toLocaleString('ko-KR');
+const sgn=(v,d=1)=>v==null?'<span class="fl">—</span>':`<span class="${v>0?'up':v<0?'dn':'fl'}">${v>0?'+':''}${v.toFixed(d)}%</span>`;
+
+// ---- KPI ----
+const last=Q[Q.length-1], prevQ=Q[Q.length-2], yAgo=get(last.y-1,last.q);
+const ttm=Q.slice(-4).reduce((a,o)=>a+o.rev,0), ttmPrev=Q.slice(-8,-4).reduce((a,o)=>a+o.rev,0);
+const k=[
+  ['매출 · 2026 3Q', fmt(last.rev), `YoY ${sgn(pct(last.rev,yAgo.rev))} · QoQ ${sgn(pct(last.rev,prevQ.rev))}`],
+  ['영업이익 · 2026 3Q', `${fmt(last.op)} <span style="font-size:12px;color:var(--muted)">(${last.opm.toFixed(1)}%)</span>`, `YoY ${sgn(pct(last.op,yAgo.op))} · 이익률 ${(last.opm-yAgo.opm>0?'+':'')}${(last.opm-yAgo.opm).toFixed(1)}%p`],
+  ['지배주주순이익 · 2026 3Q', fmt(last.ni), `YoY ${sgn(pct(last.ni,yAgo.ni))} · QoQ ${sgn(pct(last.ni,prevQ.ni))}`],
+  ['최근 4분기 합계 매출', fmt(ttm), `직전 4분기 대비 ${sgn(pct(ttm,ttmPrev))}`],
+];
+document.getElementById('kpis').innerHTML=k.map(([l,v,d])=>`<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join('');
+
+// ---- 분기 차트 ----
+(function(){
+  const W=600,H=230,L=40,R=40,T=12,B=34,n=Q.length,bw=(W-L-R)/n;
+  const maxR=1100, mnM=-10, mxM=20;
+  const yR=v=>T+(H-T-B)*(1-v/maxR), yM=v=>T+(H-T-B)*(1-(v-mnM)/(mxM-mnM));
+  let s=`<svg viewBox="0 0 ${W} ${H}" width="100%"><defs><pattern id="h" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" fill="#7f9fd6"/><line x1="0" y1="0" x2="0" y2="5" stroke="#3a4452" stroke-width="2"/></pattern><pattern id="hl" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" fill="#ffb1a8"/><line x1="0" y1="0" x2="0" y2="5" stroke="#3a4452" stroke-width="2"/></pattern></defs>`;
+  for(const v of [0,250,500,750,1000]){s+=`<line x1="${L}" x2="${W-R}" y1="${yR(v)}" y2="${yR(v)}" stroke="#4a5566"/><text x="${L-5}" y="${yR(v)+4}" fill="#9aa3b2" font-size="10" text-anchor="end">${fmt(v)}</text>`;}
+  for(const v of [-10,0,10,20]){s+=`<text x="${W-R+5}" y="${yM(v)+4}" fill="#c4b8f1" font-size="10">${v}%</text>`;}
+  s+=`<line x1="${L}" x2="${W-R}" y1="${yM(0)}" y2="${yM(0)}" stroke="#c4b8f1" stroke-dasharray="2 3" opacity=".5"/>`;
+  let pts=[];
+  Q.forEach((o,i)=>{
+    const x=L+i*bw+bw*0.15, w=bw*0.7, loss=o.op<0;
+    const fill=o.derived?(loss?'url(#hl)':'url(#h)'):(loss?'#ffb1a8':'#7f9fd6');
+    s+=`<rect x="${x}" y="${yR(o.rev)}" width="${w}" height="${yR(0)-yR(o.rev)}" fill="${fill}"><title>${o.y} ${o.q}Q 매출 ${fmt(o.rev)}억 · 영업이익률 ${o.opm}%${o.derived?' (계산값)':''}</title></rect>`;
+    pts.push([L+i*bw+bw/2,yM(o.opm)]);
+    if(o.q===1){s+=`<text x="${L+i*bw+bw*2}" y="${H-12}" fill="#c6ceda" font-size="11" text-anchor="middle">${o.y}</text>`; if(i) s+=`<line x1="${L+i*bw}" x2="${L+i*bw}" y1="${T}" y2="${H-B+4}" stroke="#5a6678"/>`;}
+  });
+  s+=`<polyline points="${pts.map(p=>p.join(',')).join(' ')}" fill="none" stroke="#c4b8f1" stroke-width="2"/>`;
+  pts.forEach(p=>s+=`<circle cx="${p[0]}" cy="${p[1]}" r="2.4" fill="#c4b8f1"/>`);
+  document.getElementById('chart').innerHTML=s+'</svg>';
+})();
+
+// ---- 분기 표 (최신순) ----
+(function(){
+  let h=`<tr><th>분기</th><th>매출</th><th>YoY</th><th>영업이익</th><th>이익률</th><th>지배순이익</th><th></th><th>접수일</th></tr>`;
+  [...Q].reverse().forEach(o=>{
+    const pq=get(o.q===1?o.y-1:o.y,o.q===1?4:o.q-1), ya=get(o.y-1,o.q);
+    let tag='';
+    if(pq&&pq.op<0&&o.op>=0) tag='<span class="badge b-turn">흑자전환</span>';
+    else if(pq&&pq.op>=0&&o.op<0) tag='<span class="badge b-lossturn">적자전환</span>';
+    else if(pq&&pq.op<0&&o.op<0) tag='<span class="badge b-lossturn">적자지속</span>';
+    if(o.corr) tag+=' <span class="badge b-na">ⓡ 정정</span>';
+    h+=`<tr class="${o.q===4?'yr':''}"><td class="c">${o.y} ${o.q}Q${o.derived?'†':''}</td><td>${fmt(o.rev)}</td><td>${ya?sgn(pct(o.rev,ya.rev)):'<span class="fl">—</span>'}</td><td class="${o.op<0?'dn':''}">${fmt(o.op)}</td><td class="${o.opm<0?'dn':''}">${o.opm.toFixed(1)}%</td><td class="${o.ni<0?'dn':''}">${fmt(o.ni)}</td><td class="lft">${tag}</td><td class="c" style="color:var(--muted)">${o.dt}</td></tr>`;
+  });
+  document.getElementById('qt').innerHTML=h;
+})();
+
+// ---- 사업부 ----
+const SEG={'장비':'#a5c9ff','부품':'#c4b8f1','서비스':'#8fd6b0'};
+const S={2021:{'장비':1300,'부품':480,'서비스':190},2022:{'장비':1590,'부품':540,'서비스':220},2023:{'장비':1020,'부품':500,'서비스':240},2024:{'장비':1640,'부품':600,'서비스':270},2025:{'장비':2180,'부품':690,'서비스':330},2026:{'장비':2010,'부품':600,'서비스':270}};
+const CHK={2021:['review','확인 필요'],2022:['ok','ok'],2023:['ok','ok'],2024:['warn','불일치 1.6%'],2025:['ok','ok'],2026:['ok','ok']};
+(function(){
+  const yrs=Object.keys(S).map(Number), W=430,H=190,L=34,T=10,B=28,bw=(W-L-10)/yrs.length;
+  const y=p=>T+(H-T-B)*(1-p);
+  let s=`<svg viewBox="0 0 ${W} ${H}" width="100%">`;
+  for(const p of [0,.25,.5,.75,1]) s+=`<line x1="${L}" x2="${W-10}" y1="${y(p)}" y2="${y(p)}" stroke="#4a5566"/><text x="${L-5}" y="${y(p)+4}" fill="#9aa3b2" font-size="10" text-anchor="end">${p*100}%</text>`;
+  yrs.forEach((yr,i)=>{
+    const tot=Object.values(S[yr]).reduce((a,b)=>a+b,0); let acc=0;
+    for(const [k,v] of Object.entries(S[yr])){const p0=acc/tot,p1=(acc+v)/tot;acc+=v;
+      s+=`<rect x="${L+i*bw+bw*.18}" y="${y(p1)}" width="${bw*.64}" height="${y(p0)-y(p1)}" fill="${SEG[k]}" stroke="#303844"><title>${yr} ${k} ${fmt(v)}억 (${(v/tot*100).toFixed(1)}%)</title></rect>`;
+      if(v/tot>0.09) s+=`<text x="${L+i*bw+bw/2}" y="${(y(p0)+y(p1))/2+4}" font-size="10" text-anchor="middle" fill="#1f2530">${Math.round(v/tot*100)}%</text>`;}
+    s+=`<text x="${L+i*bw+bw/2}" y="${H-10}" fill="#c6ceda" font-size="11" text-anchor="middle">${yr}${yr===2026?'*':''}</text>`;
+  });
+  document.getElementById('segchart').innerHTML=s+'</svg>';
+  document.getElementById('seglegend').innerHTML=Object.entries(SEG).map(([k,c])=>`<span><i style="background:${c}"></i>${k}</span>`).join('')+'<span>* 3분기 누적</span>';
+
+  let h=`<tr><th>부문</th>`+yrs.map(y=>`<th>${y}${y===2026?' 3Q누적':''}</th>`).join('')+`<th>5년 연평균</th></tr>`;
+  const S26p={'장비':1590,'부품':505,'서비스':240}; // 2025 3Q 누적 (YoY 비교용, 가상)
+  for(const k of Object.keys(SEG)){
+    h+=`<tr><td class="lft"><i style="display:inline-block;width:8px;height:8px;background:${SEG[k]};margin-right:5px"></i>${k}</td>`;
+    yrs.forEach((yr,i)=>{
+      const v=S[yr][k], pv=yr===2026?S26p[k]:(i?S[yrs[i-1]][k]:null);
+      h+=`<td>${fmt(v)}<br><span style="font-size:10.5px">${pv?sgn(pct(v,pv)):'<span class="fl">—</span>'}</span></td>`;
+    });
+    const cagr=(Math.pow(S[2025][k]/S[2021][k],1/4)-1)*100;
+    h+=`<td>${sgn(cagr)}</td></tr>`;
+  }
+  h+=`<tr><td class="lft" style="color:var(--muted)">검산</td>`+yrs.map(y=>{const [c,t]=CHK[y];return `<td class="c"><span class="badge ${c==='ok'?'b-ok':c==='warn'?'b-warn':'b-na'}">${t}</span></td>`}).join('')+`<td class="c fl">—</td></tr>`;
+  document.getElementById('st').innerHTML=h.replace(/<td>/g,'<td style="height:34px">');
+})();
+</script>
+</body>
+</html>
