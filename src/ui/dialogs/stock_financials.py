@@ -297,8 +297,14 @@ class StockFinancialsTab(QWidget):
         ax = fig.add_subplot(111)
         div, unit_ko, unit_en = fm.unit_of(rows[-1]["currency"] if rows else "KRW")
         xs = list(range(len(rows)))
+        # One axis, one unit: periods reported in another currency than the
+        # newest are left out of the bars (they are in the table, in their own
+        # unit) and the title says so (review_codex 2 P2).
+        other = [r for r in rows if rows and (r["currency"] or "KRW") != (rows[-1]["currency"] or "KRW")]
+        if other:
+            self._chart_title.setText(self._chart_title.text() + tr(" · 통화가 다른 기간 제외", " · other-currency periods left out"))
         for x, r in zip(xs, rows):
-            if r["revenue"] is None:
+            if r["revenue"] is None or r in other:
                 continue
             loss = (r["op_income"] or 0) < 0
             hatched = r.get("derived") if self._mode == "q" else bool(r.get("partial_q"))
@@ -340,8 +346,9 @@ class StockFinancialsTab(QWidget):
             t.setColumnCount(len(heads))
             t.setHorizontalHeaderLabels(heads)
             t.setRowCount(len(rows))
-            div, _k, _e = fm.unit_of(rows[-1]["currency"] if rows else "KRW")
+            base_currency = (rows[-1]["currency"] or "KRW") if rows else "KRW"
             for i, r in enumerate(reversed(rows)):
+                div, unit_ko, unit_en = fm.unit_of(r["currency"])       # each row in its own unit
                 label = self._period_label(r) + ("†" if r.get("derived") else "") + ("‡" if r.get("lookahead") else "")
                 cells = [
                     (label, None, Qt.AlignmentFlag.AlignCenter),
@@ -351,7 +358,8 @@ class StockFinancialsTab(QWidget):
                     ("—" if r["op_margin"] is None else f"{r['op_margin'] * 100:.1f}%",
                      LOSS if (r["op_margin"] or 0) < 0 else None, None),
                     (self._amt(r["net_income"], div), LOSS if (r["net_income"] or 0) < 0 else None, None),
-                    self._note(r),
+                    self._note(r, tr(f"단위 {unit_ko}", f"unit {unit_en}")
+                               if (r["currency"] or "KRW") != base_currency else ""),
                     (r["rcept_dt"], TEXT_MUTED, Qt.AlignmentFlag.AlignCenter),
                 ]
                 for j, (text, color, align) in enumerate(cells):
@@ -371,8 +379,10 @@ class StockFinancialsTab(QWidget):
         return "—" if v is None else f"{v / div:,.0f}"
 
     @staticmethod
-    def _note(r):
-        parts = []
+    def _note(r, unit_note: str = ""):
+        parts = [unit_note] if unit_note else []
+        if r.get("basis_changed"):
+            parts.append(tr("기준 변경", "basis changed"))
         turn = r.get("turn")
         color = None
         if turn in fm.TURN_LABELS:

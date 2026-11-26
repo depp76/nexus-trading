@@ -75,7 +75,7 @@ def _turn(metric, cur, prev_year):
 def get_financials(code: str, as_of=None, *, metrics=None, conn: sqlite3.Connection | None = None,
                    db_path: str | None = None) -> list[dict]:
     """Rows {fiscal_year, fiscal_q, metric, fs_div, currency, value_q, value_ytd,
-    derived, rcept_no, rcept_dt, avail_dt, period_end, cal_year, cal_q, yoy, qoq,
+    derived, rcept_no, rcept_dt, period_end, cal_year, cal_q, yoy, qoq,
     turn, fs_div_changed, currency_changed, lookahead} for a stock code (6
     digits) or corp code (8), oldest quarter first. `as_of` is a date or
     "YYYY-MM-DD".
@@ -86,12 +86,12 @@ def get_financials(code: str, as_of=None, *, metrics=None, conn: sqlite3.Connect
       quarter of another statement kind (OFS -> CFS) or reporting currency,
       yoy / qoq / turn are None and ``fs_div_changed`` / ``currency_changed``
       is True (review_agy M6, review_codex P1).
-    - A derived Q4 can rest on a Q3 received after the annual report
-      (``avail_dt`` later than ``rcept_dt``; ``lookahead`` True). With `as_of`
-      before that day the row is returned with its annual cumulative but
-      ``value_q`` None -- the quarter value was not knowable yet -- and from
-      that day on with the value (review_codex P1). Without `as_of` the value
-      is always there; ``lookahead`` tells a caller it is such a value."""
+    - A Q4 is the annual total minus the Q3 cumulative, one stored row per
+      version: under the annual receipt (with the Q3 known that day; value_q
+      None when there was none yet) and under each Q3 correction received
+      later (``lookahead`` True on those). The newest row received by `as_of`
+      is returned, so a past as-of answer never changes when later filings are
+      loaded (review_codex P1, review_codex 2 P1)."""
     with _reader(conn, db_path) as db:
         if db is None:
             return []
@@ -100,11 +100,9 @@ def get_financials(code: str, as_of=None, *, metrics=None, conn: sqlite3.Connect
             return []
         cols = {r[1] for r in db.execute("PRAGMA table_info(fin_std)")}
         currency = "COALESCE(currency, 'KRW') AS currency" if "currency" in cols else "'KRW' AS currency"
-        avail = "avail_dt" if "avail_dt" in cols else "NULL AS avail_dt"
         sql = (f"SELECT fiscal_year, fiscal_q, metric, fs_div, {currency}, value_q, value_ytd, derived, rcept_no, "
-               f"rcept_dt, {avail} FROM fin_std WHERE corp_code = ?")
+               "rcept_dt FROM fin_std WHERE corp_code = ?")
         args: list = [corp]
-        day = None
         if as_of is not None:
             day = (as_of.isoformat() if isinstance(as_of, (_dt.date, _dt.datetime)) else str(as_of))[:10]
             sql += " AND rcept_dt <= ?"
@@ -119,9 +117,7 @@ def get_financials(code: str, as_of=None, *, metrics=None, conn: sqlite3.Connect
         fiscal_month = fm_row[0] if fm_row else None
 
     for row in latest.values():
-        row["lookahead"] = bool(row["avail_dt"] and row["avail_dt"] > row["rcept_dt"])
-        if day is not None and row["avail_dt"] and row["avail_dt"] > day:
-            row["value_q"] = None           # not knowable on `as_of`; the cumulative is
+        row["lookahead"] = row["derived"] == 2      # a Q4 restated by a Q3 received after the annual report
 
     def base(key, row):
         """(the base quarter's value, statement kind differs, currency differs)."""
@@ -302,33 +298,65 @@ def get_segments(code: str, as_of=None, *, include_adjustments: bool = False,
                  conn: sqlite3.Connection | None = None, db_path: str | None = None) -> list[dict]:
     """Revenue by segment, oldest quarter first: {fiscal_year, fiscal_q,
     segment_raw, segment_code, revenue, op_income, basis, source,
-    check_status, rcept_no, rcept_dt}. For each fiscal quarter the newest
-    receipt received by `as_of`. ``basis`` says whether revenue is the
+    check_status, rcept_no, rcept_dt}. ``basis`` says whether revenue is the
     quarter's ('q') or the cumulative year-to-date amount ('ytd'). Adjustment
     rows (eliminations, the difference to the reported total) only with
-    `include_adjustments`."""
+    `include_adjustments`.
+
+    For each fiscal quarter the rows of the newest receipt *processed* by
+    `as_of` -- the newest in seg_fetch, not the newest that happens to have
+    amounts: when a correction was read and no segment table was found in it,
+    the period has no rows (its status says "review") instead of showing the
+    original report's amounts as if they were current (review_codex 2 P2).
+    ``segment_periods`` gives that receipt and status per period."""
     with _reader(conn, db_path) as db:
         if db is None:
             return []
         corp = _resolve_corp(db, code)
         if corp is None:
             return []
-        sql = "SELECT * FROM segment_rev WHERE corp_code = ?"
-        args: list = [corp]
-        if as_of is not None:
-            day = (as_of.isoformat() if isinstance(as_of, (_dt.date, _dt.datetime)) else str(as_of))[:10]
-            sql += " AND rcept_dt <= ?"
-            args.append(day)
-        rows = [dict(r) for r in db.execute(sql, args)]
-    newest: dict = {}
-    for r in rows:
-        key = (r["fiscal_year"], r["fiscal_q"])
-        if r["rcept_no"] > newest.get(key, ""):
-            newest[key] = r["rcept_no"]
-    out = [r for r in rows if r["rcept_no"] == newest[(r["fiscal_year"], r["fiscal_q"])]
+        newest = segment_periods(corp, as_of, conn=db)
+        rows = [dict(r) for r in db.execute("SELECT * FROM segment_rev WHERE corp_code = ?", (corp,))]
+    out = [r for r in rows
+           if newest.get((r["fiscal_year"], r["fiscal_q"]), {}).get("rcept_no") == r["rcept_no"]
            and (include_adjustments or not str(r["segment_code"] or "").startswith("_"))]
     out.sort(key=lambda r: (r["fiscal_year"], r["fiscal_q"], -(r["revenue"] or 0)))
     return out
+
+
+def segment_periods(code: str, as_of=None, *, conn: sqlite3.Connection | None = None,
+                    db_path: str | None = None) -> dict:
+    """{(fiscal_year, fiscal_q): {rcept_no, rcept_dt, status, source}}: per
+    period the newest receipt whose segments were processed and received by
+    `as_of` (a receipt with rows but no seg_fetch mark counts too)."""
+    with _reader(conn, db_path) as db:
+        if db is None:
+            return {}
+        corp = _resolve_corp(db, code)
+        if corp is None:
+            return {}
+        day = None
+        if as_of is not None:
+            day = (as_of.isoformat() if isinstance(as_of, (_dt.date, _dt.datetime)) else str(as_of))[:10]
+        q_of = {"11013": 1, "11012": 2, "11014": 3, "11011": 4}
+        out: dict = {}
+
+        def take(key, rcept_no, rcept_dt, status, source):
+            if day is not None and rcept_dt > day:
+                return
+            if rcept_no > out.get(key, {}).get("rcept_no", ""):
+                out[key] = {"rcept_no": rcept_no, "rcept_dt": rcept_dt, "status": status, "source": source}
+
+        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "seg_fetch" in tables:
+            for r in db.execute("SELECT f.bsns_year, f.reprt_code, s.rcept_no, f.rcept_dt, s.status, s.source "
+                                "FROM seg_fetch s JOIN filing f ON f.rcept_no = s.rcept_no WHERE f.corp_code = ?",
+                                (corp,)):
+                take((r[0], q_of.get(r[1], 0)), r[2], r[3], r[4], r[5])
+        for r in db.execute("SELECT DISTINCT fiscal_year, fiscal_q, rcept_no, rcept_dt, check_status, source "
+                            "FROM segment_rev WHERE corp_code = ?", (corp,)):
+            take((r[0], r[1]), r[2], r[3], r[4], r[5])
+        return out
 
 
 def segment_report(tickers=None, conn: sqlite3.Connection | None = None, db_path: str | None = None) -> dict:
@@ -422,13 +450,8 @@ def company_financials(code: str, conn: sqlite3.Connection | None = None,
             return None
         comp = db.execute("SELECT corp_code, stock_code, corp_name, market, fiscal_month FROM company "
                           "WHERE corp_code = ?", (corp,)).fetchone()
-        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        seg_status = {}
-        if "seg_fetch" in tables:
-            q_of = {"11013": 1, "11012": 2, "11014": 3, "11011": 4}
-            for r in db.execute("SELECT f.bsns_year, f.reprt_code, s.status, s.source FROM seg_fetch s "
-                                "JOIN filing f ON f.rcept_no = s.rcept_no WHERE f.corp_code = ?", (corp,)):
-                seg_status[(r[0], q_of.get(r[1], 0))] = (r[2], r[3])
+        # Amounts and status of one and the same receipt per period (review_codex 2 P2).
+        seg_status = {k: (v["status"], v["source"]) for k, v in segment_periods(corp, conn=db).items()}
         state = dict(db.execute("SELECT key, value FROM sync_state WHERE key IN ('last_run', 'last_run_status')"))
         out = {
             "company": dict(comp) if comp else {"corp_code": corp},

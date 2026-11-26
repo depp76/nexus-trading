@@ -301,37 +301,62 @@ def rederive_following(conn, corp_code: str, fiscal_year: int, q: int) -> None:
                              (prev + r["value_q"], corp_code, fiscal_year, nq, r["metric"], r["rcept_no"]))
 
 
-def derive_q4(conn, corp_code: str, fiscal_year: int) -> None:
-    """Q4 value = annual - Q3 cumulative for every annual receipt of the year
-    (same fs_div and reporting currency -- amounts of different currencies are
-    never subtracted; review_codex P1).
+DERIVED_BASE = 1          # Q4 under the annual report's receipt
+DERIVED_LATER_Q3 = 2      # Q4 restated under the receipt of a Q3 correction that came after the annual
 
-    The Q3 used is the newest one received on or before the annual's date. When
-    the only stored Q3 was received later (the API serves the newest version
-    only; KB금융 2023 Q3 was corrected in 2024-12), that one is used and the
-    row's ``avail_dt`` is its receipt date: the Q4 value was not knowable
-    before that day, and ``query.get_financials(as_of=...)`` returns it from
-    then on only (the annual cumulative is available from the annual's date).
-    Such a row also gets a ``q4_uses_later_q3`` issue. Both are rewritten on
-    every call, so the result does not depend on the order periods arrive in."""
-    for r in conn.execute(
-            "SELECT metric, fs_div, currency, value_ytd, rcept_no, rcept_dt FROM fin_std "
-            "WHERE corp_code = ? AND fiscal_year = ? AND fiscal_q = 4", (corp_code, fiscal_year)).fetchall():
-        conn.execute("DELETE FROM fin_issue WHERE rcept_no = ? AND kind = 'q4_uses_later_q3' AND detail = ?",
-                     (r["rcept_no"], r["metric"]))
-        avail = None
+
+def derive_q4(conn, corp_code: str, fiscal_year: int) -> None:
+    """Q4 value = annual - Q3 cumulative (same fs_div and reporting currency --
+    amounts of different currencies are never subtracted; review_codex P1).
+
+    Every version of the pair is kept as its own row, keyed by the receipt that
+    made it knowable, so an as-of query never changes when later filings are
+    loaded (review_codex 2 P1):
+
+    - the base row, under each annual receipt (``derived = 1``): the annual
+      total with the newest Q3 received on or before the annual's date; its
+      value_q is empty when no Q3 was known that day;
+    - one row per Q3 received after an annual report (``derived = 2``), under
+      that Q3's receipt number and date: the newest annual total known on that
+      day minus this Q3. Each gets a ``q4_uses_later_q3`` issue.
+
+    ``query.get_financials(as_of=...)`` then simply returns the newest row
+    received by that day: only the annual total before the first late Q3, each
+    restated Q4 from its own date on. Everything is rebuilt on every call, so
+    the result does not depend on the order periods arrive in."""
+    conn.execute("DELETE FROM fin_std WHERE corp_code = ? AND fiscal_year = ? AND fiscal_q = 4 AND derived = ?",
+                 (corp_code, fiscal_year, DERIVED_LATER_Q3))
+    conn.execute("DELETE FROM fin_issue WHERE corp_code = ? AND fiscal_year = ? AND fiscal_q = 4 "
+                 "AND kind = 'q4_uses_later_q3'", (corp_code, fiscal_year))
+    bases = conn.execute(
+        "SELECT metric, fs_div, COALESCE(currency, 'KRW') AS currency, value_ytd, rcept_no, rcept_dt FROM fin_std "
+        "WHERE corp_code = ? AND fiscal_year = ? AND fiscal_q = 4 ORDER BY rcept_no", (corp_code, fiscal_year)).fetchall()
+    for r in bases:
         q3 = _ytd_row(conn, corp_code, fiscal_year, 3, r["metric"], r["fs_div"], r["rcept_dt"], r["currency"])
-        if q3 is None:
-            q3 = _ytd_row(conn, corp_code, fiscal_year, 3, r["metric"], r["fs_div"], "9999-12-31", r["currency"])
-            if q3 is not None:
-                avail = q3["rcept_dt"]
-                record_issue(conn, r["rcept_no"], corp_code, fiscal_year, 4, "q4_uses_later_q3", r["metric"])
         q3_ytd = q3["value_ytd"] if q3 is not None else None
         value_q = r["value_ytd"] - q3_ytd if (r["value_ytd"] is not None and q3_ytd is not None) else None
         conn.execute(
-            "UPDATE fin_std SET value_q = ?, derived = 1, avail_dt = ? WHERE corp_code = ? AND fiscal_year = ? "
+            "UPDATE fin_std SET value_q = ?, derived = ?, avail_dt = NULL WHERE corp_code = ? AND fiscal_year = ? "
             "AND fiscal_q = 4 AND metric = ? AND rcept_no = ?",
-            (value_q, avail if value_q is not None else None, corp_code, fiscal_year, r["metric"], r["rcept_no"]))
+            (value_q, DERIVED_BASE, corp_code, fiscal_year, r["metric"], r["rcept_no"]))
+    later = conn.execute(
+        "SELECT metric, fs_div, COALESCE(currency, 'KRW') AS currency, value_ytd, rcept_no, rcept_dt FROM fin_std "
+        "WHERE corp_code = ? AND fiscal_year = ? AND fiscal_q = 3 AND value_ytd IS NOT NULL ORDER BY rcept_no",
+        (corp_code, fiscal_year)).fetchall()
+    for q in later:
+        annual = None
+        for r in bases:                 # the newest annual of the same kind received before this Q3
+            if (r["metric"], r["fs_div"], r["currency"]) == (q["metric"], q["fs_div"], q["currency"]) \
+                    and r["rcept_dt"] < q["rcept_dt"] and r["value_ytd"] is not None:
+                annual = r
+        if annual is None:
+            continue
+        conn.execute(
+            "INSERT OR REPLACE INTO fin_std(corp_code, fiscal_year, fiscal_q, fs_div, metric, value_q, value_ytd, "
+            "derived, rcept_no, rcept_dt, currency) VALUES (?, ?, 4, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (corp_code, fiscal_year, q["fs_div"], q["metric"], annual["value_ytd"] - q["value_ytd"],
+             annual["value_ytd"], DERIVED_LATER_Q3, q["rcept_no"], q["rcept_dt"], q["currency"]))
+        record_issue(conn, q["rcept_no"], corp_code, fiscal_year, 4, "q4_uses_later_q3", q["metric"])
 
 
 def _ytd_row(conn, corp_code, fiscal_year, q, metric, fs_div, as_of_dt, currency="KRW"):

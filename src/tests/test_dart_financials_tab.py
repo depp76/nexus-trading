@@ -109,6 +109,43 @@ class TestModel(unittest.TestCase):
         self.assertEqual(fm.unit_of("USD")[:2], (1e6, "백만 USD"))
 
 
+def _q(fy, fq, rev, currency="KRW", fs_div="CFS", op=None):
+    return {"fiscal_year": fy, "fiscal_q": fq, "revenue": rev, "op_income": op, "op_margin": None,
+            "currency": currency, "fs_div": fs_div, "ytd": {"revenue": rev, "op_income": op, "net_income": None},
+            "rcept_dt": "2026-01-01", "corrected": False}
+
+
+class TestReviewCodex2Model(unittest.TestCase):
+    """review_codex.md, second round: the tab's own sums and comparisons."""
+
+    def test_ttm_needs_four_consecutive_quarters(self):
+        qs = [_q(2024, 4, 100.0), _q(2025, 1, 100.0), _q(2025, 3, 100.0), _q(2025, 4, 100.0)]   # 2025 Q2 missing
+        self.assertIsNone(fm.kpis(qs)["ttm"])                                     # was 400
+        qs.insert(2, _q(2025, 2, 100.0))
+        self.assertEqual(fm.kpis(qs)["ttm"], 400.0)
+        self.assertIsNone(fm.kpis(qs)["ttm_growth"])                              # no four quarters before
+
+    def test_ttm_and_annual_change_stay_on_one_currency_and_statement(self):
+        qs = [_q(2025, q, 100.0) for q in (1, 2, 3)] + [_q(2025, 4, 100.0, currency="USD")]
+        self.assertIsNone(fm.kpis(qs)["ttm"])
+        a = fm.annual_rows([_q(2024, 4, 100.0), _q(2025, 4, 200.0, currency="USD")])
+        self.assertEqual((a[1]["revenue_yoy"], a[1]["basis_changed"]), (None, True))      # was +100 %
+        b = fm.annual_rows([_q(2024, 4, 100.0, fs_div="OFS"), _q(2025, 4, 150.0)])
+        self.assertEqual((b[1]["revenue_yoy"], b[1]["basis_changed"]), (None, True))
+        ok = fm.annual_rows([_q(2024, 4, 100.0), _q(2025, 4, 150.0)])
+        self.assertAlmostEqual(ok[1]["revenue_yoy"], 0.5)
+
+    def test_segment_yoy_needs_the_year_before(self):
+        def col(fy, v):
+            return {"fiscal_year": fy, "fiscal_q": 4, "segment_raw": "A", "segment_code": "A", "revenue": v,
+                    "basis": "ytd", "check_status": "ok", "source": "x"}
+        a = fm.segment_view({"segments": [col(2023, 100.0), col(2025, 150.0)]})["segments"][0]
+        self.assertEqual(a["yoy"], [None, None])                                  # was +50 % over two years
+        self.assertIsNone(a["cagr"])
+        b = fm.segment_view({"segments": [col(2023, 100.0), col(2024, 120.0), col(2025, 150.0)]})["segments"][0]
+        self.assertAlmostEqual(b["yoy"][2], 0.25)
+
+
 class TestTab(unittest.TestCase):
     def setUp(self):
         import paths
