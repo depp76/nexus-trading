@@ -117,6 +117,10 @@ class _ViewMixin:
         self.scrollbar.blockSignals(True)
         self.scrollbar.setRange(0, _SCROLL_MAX)
         self.scrollbar.setValue(max(0, min(_SCROLL_MAX, val)))
+        # Nothing to scroll to (the whole history in view, '전체'): greyed out
+        # but kept, so the chart does not jump when a zoom makes room again
+        # (ma_chart_ux_review 1).
+        self.scrollbar.setEnabled(bool(denom > (self._x_hi - self._x_lo) * 1e-6))
         self.scrollbar.blockSignals(False)
 
     def _on_scrollbar_change(self, val: int) -> None:

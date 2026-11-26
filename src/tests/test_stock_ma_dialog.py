@@ -46,6 +46,14 @@ def _rgb(hex_color):
     return tuple(round(int(hex_color[i:i + 2], 16) / 255, 2) for i in (1, 3, 5))
 
 
+def _pick_period(d, label):
+    """What a user's pick does: set the combo and emit `activated` (also for
+    the item already shown)."""
+    i = d._period_combo.findData(label)
+    d._period_combo.setCurrentIndex(i)
+    d._period_combo.activated.emit(i)
+
+
 def _show(d, keys):
     """Set every series toggle so exactly `keys` are on."""
     for key in d._series_buttons:
@@ -158,11 +166,86 @@ class TestStockChart(unittest.TestCase):
         d._apply_period("1M")
         self.assertAlmostEqual(ax.get_xlim()[1] - ax.get_xlim()[0], 31, delta=1)
         self.assertEqual(d._period_combo.currentData(), "1M")
-        d._period_combo.setCurrentIndex(d._period_combo.findData("3M"))   # picking from the combo
+        _pick_period(d, "3M")                                              # picking from the combo
         self.assertAlmostEqual(ax.get_xlim()[1] - ax.get_xlim()[0], 92, delta=1)
         d._apply_period("All")
         self.assertGreater(ax.get_xlim()[1] - ax.get_xlim()[0], 399)
         d._apply_period("1Y")
+
+    def test_picking_the_same_period_again_restores_it(self):
+        """ma_chart_ux_review 1: the combo answers `activated`, so 1Y -> zoom
+        (or pan) -> 1Y again brings back the latest year."""
+        d = StockMaDialog("005930", "Samsung", "KOSPI", _df())
+        ax = d._panel_axes["price"]
+        _pick_period(d, "1Y")
+        full = ax.get_xlim()
+        d._on_scroll(_Ev(ax, sum(full) / 2, button="up"))            # one wheel step in
+        self.assertLess(ax.get_xlim()[1] - ax.get_xlim()[0], full[1] - full[0] - 10)
+        _pick_period(d, "1Y")
+        self.assertEqual(ax.get_xlim(), full)
+        d._on_scrollbar_change(0)                                     # panned to the oldest bars
+        self.assertLess(ax.get_xlim()[1], full[1])
+        _pick_period(d, "1Y")
+        self.assertEqual(ax.get_xlim(), full)
+        self.assertIn("다시 선택", d._period_combo.toolTip())
+
+    def test_scrollbar_is_off_when_there_is_nothing_to_scroll(self):
+        d = StockMaDialog("005930", "Samsung", "KOSPI", _df())
+        ax = d._panel_axes["price"]
+        _pick_period(d, "All")
+        self.assertFalse(d.scrollbar.isEnabled())
+        d._on_scroll(_Ev(ax, sum(ax.get_xlim()) / 2, button="up"))
+        self.assertTrue(d.scrollbar.isEnabled())                      # a zoom makes room to scroll
+        before = ax.get_xlim()
+        d.scrollbar.setValue(0)
+        self.assertLess(ax.get_xlim()[0], before[0])
+
+    def test_price_line_menu_is_grouped(self):
+        """ma_chart_ux_review 2: '가격선' with 이동평균 · 비교선 · 채널 groups
+        (empty ones left out); the tooltip names every ticked line."""
+        d = StockMaDialog("005930", "Samsung", "KOSPI", _df(ew=True, index=True))
+        self.assertEqual(d._group_captions[0].text(), "가격선")
+        self.assertEqual([h.text() for h in d._ma_menu_groups], ["이동평균", "비교선"])   # no channel here
+        d._series_buttons["MA60"].click()
+        d._series_buttons["IDX"].click()                              # one menu, two picks in a row
+        self.assertEqual(d._ma_btn.text(), "MA60 외 1")
+        self.assertEqual(d._ma_btn.toolTip(), "가격선: MA60, 시장지수")
+        self.assertEqual(d._ma_btn.accessibleDescription(), d._ma_btn.toolTip())
+
+    def test_detail_panel_folds_and_unfolds(self):
+        """ma_chart_ux_review 3: '상세 접기 / 펼치기' hides the right panel and
+        brings it back at the split the user had; the chart state stays."""
+        rows = [{"Date": f"2025-04-{i:02d}", "Close": 59000, "Foreigner": 1234567 * (i % 3 - 1),
+                 "Institution": -500 * i, "Retail": -3 * i} for i in range(1, 11)]
+        d = StockMaDialog("005930", "Samsung", "KOSPI", _df(), investor_data=rows)
+        d.showNormal()
+        d.resize(1400, 800)
+        d.show()
+        QApplication.processEvents()
+        btn = d._detail_btn
+        width = btn.width()
+        self.assertEqual(btn.text(), "상세 접기")
+        sizes = d._splitter.sizes()
+        sizes = [sizes[0] - 60, sizes[1] + 60]                        # the user drags the split
+        d._splitter.setSizes(sizes)
+        QApplication.processEvents()
+        sizes = d._splitter.sizes()
+        _pick_period(d, "3M")
+        d._series_buttons["MA60"].click()
+        xlim = d._panel_axes["price"].get_xlim()
+        btn.click()
+        QApplication.processEvents()
+        self.assertFalse(d._right_panel.isVisible())
+        self.assertEqual(btn.text(), "상세 펼치기")
+        self.assertEqual(btn.width(), width)                          # the row does not move
+        btn.click()
+        QApplication.processEvents()
+        self.assertTrue(d._right_panel.isVisible())
+        self.assertEqual(d._splitter.sizes(), sizes)
+        self.assertEqual(d._period_combo.currentData(), "3M")
+        self.assertTrue(d._series_buttons["MA60"].isChecked())
+        self.assertEqual(d._panel_axes["price"].get_xlim(), xlim)
+        d.close()
 
     def test_view_row_is_one_line_with_drop_downs(self):
         """2026-11-18 (user direction): one line -- [이동평균 ▾] a check-box
@@ -177,10 +260,11 @@ class TestStockChart(unittest.TestCase):
 
         def text(w):
             return w.currentText() if isinstance(w, QComboBox) else w.text()
-        self.assertEqual([text(w) for w in ws[:-1]],
-                         ["이동평균", "없음", "보조지표", "이격도", "거래량", "RSI", "기간", "1년"])
+        self.assertEqual([text(w) for w in ws[:-2]],
+                         ["가격선", "없음", "보조지표", "이격도", "거래량", "RSI", "기간", "1년"])
         self.assertIs(ws[1], d._ma_btn)
-        self.assertIs(ws[-1], d._as_of_lbl)                           # the as-of date ends the row
+        self.assertIs(ws[-2], d._as_of_lbl)                           # the as-of date, then
+        self.assertIs(ws[-1], d._detail_btn)                          # the fold button end the row
         self.assertTrue(all(isinstance(w, QLabel) for w in d._group_captions))
         # MA drop-down: a check box per line, several on at once, the button names them
         self.assertIs(d._ma_btn.menu(), d._ma_menu)
@@ -308,7 +392,8 @@ class TestStockChart(unittest.TestCase):
 
     def test_simple_chart_row_has_no_series_group(self):
         d = StockMaDialog("KR3YT", "KR 3Y", "Index", _df(volume=False), change_mode="bp")
-        self.assertIsNone(d._ma_btn)                              # no 이동평균 drop-down
+        self.assertIsNone(d._ma_btn)                              # no 가격선 drop-down
+        self.assertIsNone(d._detail_btn)                          # no right panel, no fold button
         self.assertEqual(d._group_captions[0].text(), "보조지표")
 
     def test_panel_toggles_regrid(self):
