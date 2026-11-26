@@ -82,7 +82,10 @@ def main(argv=None) -> int:
         signal.signal(signal.SIGINT, previous)
     print(f"status={res.status} run={res.run_id} calls={res.calls} new_filings={res.filings_added} "
           f"periods={res.periods_fetched} segments={res.segments_done} pending={res.pending_left}"
+          + (f" failed={res.periods_failed}+{res.segments_failed}" if res.periods_failed or res.segments_failed else "")
           + (f" error={res.error}" if res.error else ""))
+    if res.unknown_tickers:
+        print("no DART company for: " + ", ".join(res.unknown_tickers) + " (not in the company list)")
     return 0 if res.status in ("done", "partial", "skipped") else 1
 
 

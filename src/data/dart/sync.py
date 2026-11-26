@@ -69,7 +69,13 @@ MAX_CONSECUTIVE_ERRORS = 5     # per-period request failures in a row before the
 # 013, or still the previous version's numbers) means "not loaded yet": nothing
 # is cached and the receipt stays pending (review_agy M4, review_codex P1).
 RECENT_FILING_DAYS = 7
-ATTACHMENT_ONLY_TAGS = frozenset({"첨부정정", "첨부추가"})   # corrections that change no statement
+# Past that wait, a correction the API still answers with an older receipt for
+# is not closed with the older numbers (review_codex 3 P1): it is kept as
+# ``awaiting_correction`` and asked again every CORRECTION_RETRY_DAYS, without
+# the reply cache, until CORRECTION_GIVE_UP_DAYS after its receipt.
+CORRECTION_RETRY_DAYS = 7
+CORRECTION_GIVE_UP_DAYS = 365
+ATTACHMENT_ONLY_TAGS = fil.ATTACHMENT_ONLY_TAGS
 FETCH_LOG_KEEP_DAYS = 90
 # Bumped when store_filings keeps more than before: the market-wide list is then
 # walked again (past windows come from the cache). 2: one fiscal year before
@@ -133,7 +139,8 @@ def collection_status(db_path: str | None = None, today: _dt.date | None = None,
                            "WHERE status NOT IN ('running', 'skipped') ORDER BY started_at DESC LIMIT 1").fetchone()
         total, pending = conn.execute(
             "SELECT COUNT(*), COALESCE(SUM(p.missing > 0), 0) FROM ("
-            " SELECT f.corp_code, f.bsns_year, f.reprt_code, SUM(x.rcept_no IS NULL) AS missing"
+            " SELECT f.corp_code, f.bsns_year, f.reprt_code,"
+            " SUM(x.rcept_no IS NULL OR x.status = 'awaiting_correction') AS missing"
             " FROM filing f LEFT JOIN fin_fetch x ON x.rcept_no = f.rcept_no WHERE f.bsns_year >= ?"
             " GROUP BY f.corp_code, f.bsns_year, f.reprt_code) p", (first,)).fetchone()
         used = calls_today(conn, today.isoformat())
@@ -173,6 +180,9 @@ class SyncResult:
     pending_left: int = 0
     error: str | None = None
     segments_done: int = 0
+    periods_failed: int = 0           # financial periods whose request failed (left pending)
+    segments_failed: int = 0          # segment periods whose request failed
+    unknown_tickers: tuple = ()       # tickers with no corp code even after the company list
 
 
 class _Cancelled(Exception):
@@ -243,6 +253,13 @@ def run_sync(mode: str = "auto", trigger: str = "cli", *, budget: int | None = N
                     logger.exception("DART sync failed (run %s)", run_id)
                     status, error = "failed", f"{type(e).__name__}: {e}"
                     conn.rollback()
+                if status == "done" and (job.periods_failed or job.segments_failed):
+                    # Requests that failed after their retries were skipped and left
+                    # pending: the run is not "done" (review_codex 3 P2). A report
+                    # whose statements DART has not loaded yet is a wait, not a failure.
+                    status = "partial"
+                    error = (f"request failures: {job.periods_failed} financial period(s), "
+                             f"{job.segments_failed} segment period(s); left pending")
                 calls = getattr(client, "calls", 0)
                 pending = job.pending_count()
                 set_state(conn, "last_run", kst_now().isoformat(timespec="seconds"))
@@ -250,7 +267,8 @@ def run_sync(mode: str = "auto", trigger: str = "cli", *, budget: int | None = N
                 _prune_fetch_log(conn)
                 _record_run(conn, run_id, trigger, mode, status, calls, job.filings_added, error, finished=True)
                 return SyncResult(status, run_id, calls, job.filings_added, job.periods_fetched, pending, error,
-                                  job.segments_done)
+                                  job.segments_done, job.periods_failed, job.segments_failed,
+                                  tuple(job.unknown_tickers))
             finally:
                 close = getattr(client, "close", None)
                 if callable(close):
@@ -293,6 +311,8 @@ class _Job:
         self.periods_fetched = 0
         self.periods_failed = 0
         self.segments_done = 0
+        self.segments_failed = 0
+        self.unknown_tickers: list[str] = []
         self.account_map = fin.load_account_map()
         self._order: list[str] | None = None      # backfill order, built once per run
         self._order_has_caps = False
@@ -356,11 +376,12 @@ class _Job:
             age = self.today - _dt.date.fromisoformat(last[:10])
             if age.days < corp_mod.CORP_LIST_MAX_AGE_DAYS:
                 return
-        if self.tickers is None or not last:
-            self._progress(0, 1, "corp list")
-            corp_mod.sync_corp_codes(self.client, self.conn)
-            set_state(self.conn, "corp_list_at", self.today.isoformat())
-            self.conn.commit()
+        # Also on a ticker run: a stock listed since the last list has no corp
+        # code in an old one (review_codex 3 P2).
+        self._progress(0, 1, "corp list")
+        corp_mod.sync_corp_codes(self.client, self.conn)
+        set_state(self.conn, "corp_list_at", self.today.isoformat())
+        self.conn.commit()
 
     # ---- filing lists ------------------------------------------------------------
 
@@ -423,17 +444,23 @@ class _Job:
                 out.append(row[0])
             else:
                 logger.warning("DART: no corp code for stock %s", t)
+                if t not in self.unknown_tickers:
+                    self.unknown_tickers.append(t)
         return out
 
     # ---- financials --------------------------------------------------------------
 
     def _pending_sql(self, since=None):
+        """Filings without financials, plus corrections awaiting their numbers
+        whose retry day has come (review_codex 3 P1)."""
+        give_up = (self.today - _dt.timedelta(days=CORRECTION_GIVE_UP_DAYS)).isoformat()
         sql = ("SELECT f.rcept_no, f.corp_code, f.reprt_code, f.bsns_year, f.rcept_dt, f.report_nm, c.stock_code, "
-               "c.fiscal_month "
+               "c.fiscal_month, x.status AS fetch_status "
                "FROM filing f JOIN company c ON c.corp_code = f.corp_code "
                "LEFT JOIN fin_fetch x ON x.rcept_no = f.rcept_no "
-               "WHERE x.rcept_no IS NULL AND f.bsns_year >= ?")
-        args: list = [self.first_year]
+               "WHERE (x.rcept_no IS NULL OR (x.status = 'awaiting_correction' "
+               "AND COALESCE(x.retry_after, '') <= ? AND f.rcept_dt >= ?)) AND f.bsns_year >= ?")
+        args: list = [self.today.isoformat(), give_up, self.first_year]
         if since:
             sql += " AND f.rcept_dt >= ?"
             args.append(since)
@@ -504,9 +531,16 @@ class _Job:
         fm = members[0]["fiscal_month"] or 12
         years = api_years(members, fy, fm)
         recent = any(self._is_recent(m) for m in members)
+        # No reply cache for a recent receipt, a correction that changes the
+        # statements (its first answers may still be the older numbers) or a
+        # retry of one awaiting them: a stale reply must not be served again
+        # (review_codex 3 P1).
+        fresh = recent or any(m.get("fetch_status") == "awaiting_correction"
+                              or (fil.parse_report_name(m.get("report_nm") or "") or (0, 0, 0, ()))[3]
+                              and not _attachment_only(m.get("report_nm")) for m in members)
         fs_div, rows = None, []
         for api_year in years:
-            fs_div, rows = fin.fetch_period(self.client, corp, api_year, reprt, cache_tag=None if recent else latest)
+            fs_div, rows = fin.fetch_period(self.client, corp, api_year, reprt, cache_tag=None if fresh else latest)
             if rows and (fm == 12 or self._period_matches(rows, corp, fy, reprt)):
                 break
             fs_div, rows = None, []
@@ -546,17 +580,27 @@ class _Job:
             fin.record_issue(self.conn, src, corp, fy, q, "from_document",
                              "API 013; read from the report's income statement table")
         status = "unmapped" if missing else ("document" if source == "document" else "ok")
-        # A recent correction newer than the receipt the API answered with is
-        # not in these numbers yet: it stays pending and the period is asked
-        # again next run (nothing was cached). An attachment-only correction
-        # changes no statement and is done with the rest (review_codex P1).
-        waiting = {m["rcept_no"] for m in members
-                   if source == "api" and m["rcept_no"] > src and self._is_recent(m)
-                   and not _attachment_only(m.get("report_nm"))}
-        done = ({m["rcept_no"] for m in members} - waiting) | {src}
+        # A correction newer than the receipt the API answered with is not in
+        # these numbers yet. Within RECENT_FILING_DAYS it simply stays pending
+        # (asked again next run); after that it is kept as awaiting_correction
+        # and asked again every CORRECTION_RETRY_DAYS -- never closed with the
+        # older numbers (review_codex P1, review_codex 3 P1). An attachment-only
+        # correction changes no statement and is done with the rest.
+        stale = [m for m in members
+                 if source == "api" and m["rcept_no"] > src and not _attachment_only(m.get("report_nm"))]
+        waiting = {m["rcept_no"] for m in stale if self._is_recent(m)}
+        awaiting = {m["rcept_no"] for m in stale} - waiting
+        done = ({m["rcept_no"] for m in members} - waiting - awaiting) | {src}
         self.conn.executemany(
             "INSERT OR REPLACE INTO fin_fetch(rcept_no, status, src_rcept_no, fs_div, fetched_at) VALUES (?, ?, ?, ?, ?)",
             [(r, status, src, fs_div, now) for r in sorted(done)])
+        retry = (self.today + _dt.timedelta(days=CORRECTION_RETRY_DAYS)).isoformat()
+        for r in sorted(awaiting):
+            self.conn.execute(
+                "INSERT OR REPLACE INTO fin_fetch(rcept_no, status, src_rcept_no, fs_div, fetched_at, retry_after) "
+                "VALUES (?, 'awaiting_correction', ?, ?, ?, ?)", (r, src, fs_div, now, retry))
+            fin.record_issue(self.conn, r, corp, fy, q, "correction_not_served",
+                             f"the API still answers with {src}; asked again from {retry}")
 
     # ---- segments (stage 4) -------------------------------------------------------
 
@@ -616,6 +660,7 @@ class _Job:
                 if is_fatal(e):
                     raise
                 errors_in_a_row += 1
+                self.segments_failed += 1
                 logger.warning("DART segments %s %s %s skipped: %s", p["stock_code"], p["bsns_year"],
                                p["reprt_code"], e)
                 if errors_in_a_row >= MAX_CONSECUTIVE_ERRORS:
@@ -707,10 +752,7 @@ class _Job:
         return lambda stock: pos.get(stock, n)
 
 
-def _attachment_only(report_nm: str | None) -> bool:
-    """Whether a report is a correction of attachments only ("[첨부정정]...")."""
-    parsed = fil.parse_report_name(report_nm or "")
-    return bool(parsed and parsed[3]) and set(parsed[3]) <= ATTACHMENT_ONLY_TAGS
+_attachment_only = fil.is_attachment_only
 
 
 def api_years(members, fiscal_year: int, fiscal_month: int) -> list[int]:
