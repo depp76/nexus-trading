@@ -114,7 +114,7 @@ class TestBreakoutChannel(unittest.TestCase):
         df = _ohlc()
         self.assertEqual(len(signal_api.chart_overlays("C1", "X", "KOSPI", df)), 2)
         self.assertEqual(len(signal_api.chart_overlays("A0", "X", "KOSDAQ", df)), 2)
-        self.assertEqual(signal_api.chart_overlays("C1", "AAPL", "NASDAQ 100", df), [])
+        self.assertEqual(signal_api.chart_overlays("C1", "AAPL", "NASDAQ 150", df), [])
 
 
 class TestRegimeSpans(unittest.TestCase):
@@ -183,7 +183,7 @@ class TestRegimeSpans(unittest.TestCase):
         days, close = self._index()
         self.assertTrue(signal_api.regime_spans("C1", "KOSPI", days, close))
         self.assertEqual(signal_api.regime_spans("A0", "KOSPI", days, close), [])
-        self.assertEqual(signal_api.regime_spans("C1", "NASDAQ 100", days, close), [])
+        self.assertEqual(signal_api.regime_spans("C1", "NASDAQ 150", days, close), [])
         self.assertTrue(signal_api.uses_regime("A1"))
         self.assertFalse(signal_api.uses_regime("A0"))
         label, tip = signal_api.regime_legend("C1")
@@ -284,7 +284,7 @@ class TestStockChartChannel(unittest.TestCase):
         d.close()
 
     def test_no_overlays_no_toggle(self):
-        d = StockMaDialog("AAPL", "Apple", "NASDAQ 100", self.df, overlays=[])
+        d = StockMaDialog("AAPL", "Apple", "NASDAQ 150", self.df, overlays=[])
         self.assertNotIn("CH", d._series_buttons)
         self.assertNotIn("CH_HI", d._lines)
         d.close()

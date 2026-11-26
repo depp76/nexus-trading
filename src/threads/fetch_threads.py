@@ -412,8 +412,8 @@ class AssetReportThread(QThread):
 # ---------------------------------------------------------------------------
 # The Trading Universe's markets and how many names each brings, in display
 # order (docs/ui.md 2.1). Only the markets switched on in the toolbar are
-# fetched; NASDAQ 100 and S&P500 are off by default.
-UNIVERSE_MARKET_SIZES = {"KOSPI": 350, "KOSDAQ": 300, "NASDAQ 100": 150, "S&P500": 510}
+# fetched; NASDAQ 150 and S&P500 are off by default.
+UNIVERSE_MARKET_SIZES = {"KOSPI": 500, "KOSDAQ": 700, "NASDAQ 150": 150, "S&P500": 510}
 DEFAULT_UNIVERSE_MARKETS = ("KOSPI", "KOSDAQ")
 
 
@@ -482,7 +482,7 @@ class AllDataFetchThread(QThread):
                         market_results[part] = data
             all_data.extend(indices_data)
 
-            # A name in both NASDAQ 100 and S&P500 (AAPL, MSFT, ...) is one
+            # A name in both NASDAQ 150 and S&P500 (AAPL, MSFT, ...) is one
             # row, under the first market in display order; `also_in` lists
             # its other markets, so switching the first one off keeps the row
             # under the other (UniverseTab._rows_for_markets).

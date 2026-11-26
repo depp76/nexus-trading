@@ -435,7 +435,7 @@ class TestStrategyCheckSection(unittest.TestCase):
         d.close()
 
     def test_no_section_where_no_strategy_applies(self):
-        d = StockMaDialog("AAPL", "Apple", "NASDAQ 100", _df(), signal_ctx=_ctx(_c_picks()))
+        d = StockMaDialog("AAPL", "Apple", "NASDAQ 150", _df(), signal_ctx=_ctx(_c_picks()))
         self.assertIsNone(d.strategy_section)
         d.close()
 
@@ -498,7 +498,7 @@ class TestStrategyCheckSection(unittest.TestCase):
         from unittest.mock import patch
         picks = _c_picks("C2")
         ctx = _ctx(items=[{"ticker": "X", "name": "X", "market": "KOSPI"},
-                          {"ticker": "AAPL", "name": "A", "market": "NASDAQ 100"}], default="C2")
+                          {"ticker": "AAPL", "name": "A", "market": "NASDAQ 150"}], default="C2")
         d = StockMaDialog(picks.detail.top[0].ticker, "X", "KOSPI", _df(), signal_ctx=ctx)
         sec = d.strategy_section
         self.assertEqual(sec.variant(), "C2")

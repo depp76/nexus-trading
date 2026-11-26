@@ -125,7 +125,7 @@ class TestPerFollowsPrice(unittest.TestCase):
 
     def test_lightweight_tick_updates_the_us_dollar_price(self):
         """The USD quote goes to usd_price (shown in the Price cell) and price stays KRW."""
-        rows = [{"ticker": "AAPL", "market": "NASDAQ 100", "price": 349.21 * 1400, "usd_price": 349.21,
+        rows = [{"ticker": "AAPL", "market": "NASDAQ 150", "price": 349.21 * 1400, "usd_price": 349.21,
                  "currency": "$", "trailing_per": 39.2, "forward_per": 33.0,
                  "eps_trailing": 8.9, "eps_forward": 10.57273, "changes": {}}]
         out = self._run(rows, us={"AAPL": 356.0})["AAPL"]

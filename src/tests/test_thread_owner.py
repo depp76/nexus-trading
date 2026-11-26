@@ -90,14 +90,14 @@ class TestSignalSlotArity(unittest.TestCase):
     def test_stock_ma_signal_carries_market_and_change_mode(self):
         from threads.fetch_threads import StockMaThread
         got = []
-        t = StockMaThread("AAPL", "Apple", "NASDAQ 100", change_mode="pct")
+        t = StockMaThread("AAPL", "Apple", "NASDAQ 150", change_mode="pct")
         t.finished.connect(lambda *a: got.append(a))
         with patch("threads.fetch_threads.fetch_stock_ma_multi", return_value=(None, "boom")):
             t.run()
         self.assertEqual(len(got), 1)
         ticker, name, df, err, inv, market, cm, overlays = got[0]
         self.assertEqual((ticker, name, df, err, inv, market, cm, overlays),
-                         ("AAPL", "Apple", None, "boom", [], "NASDAQ 100", "pct", []))
+                         ("AAPL", "Apple", None, "boom", [], "NASDAQ 150", "pct", []))
 
     def test_auto_backup_covers_every_hand_entered_state_file(self):
         # Everything typed in by hand lives in portfolio.db (trades + asset

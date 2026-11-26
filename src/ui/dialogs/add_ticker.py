@@ -13,7 +13,7 @@ from ui.common import button_row, make_button
 
 # Markets a single name can be added from: (stored value, label). One US
 # choice (user decision 2026-11-15): the US lookup does not depend on the
-# exchange, and "NASDAQ"/"NYSE" next to the NASDAQ 100 / S&P 500 toggles read
+# exchange, and "NASDAQ"/"NYSE" next to the NASDAQ 150 / S&P 500 toggles read
 # as the same thing. Rows added earlier as "NASDAQ"/"NYSE" still load (any
 # market without a toggle always shows, universe_views.matches).
 ADD_TICKER_MARKETS = (("KOSPI", "KOSPI"), ("KOSDAQ", "KOSDAQ"), ("US", tr("미국", "US")))

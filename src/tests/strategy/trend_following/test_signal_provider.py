@@ -170,7 +170,7 @@ class TestSignalApi(unittest.TestCase):
         from strategy import signal_api
         self.assertEqual(signal_api.variants(), list(VARIANTS))
         self.assertEqual(signal_api.variants("KOSDAQ"), list(VARIANTS))
-        self.assertEqual(signal_api.variants("NASDAQ 100"), [])          # KR-only strategy
+        self.assertEqual(signal_api.variants("NASDAQ 150"), [])          # KR-only strategy
         self.assertEqual(signal_api.default_variant(), "C1")
         self.assertEqual(signal_api.title("A0"), "돌파만")
         self.assertTrue(signal_api.needs_universe("C2"))
@@ -186,7 +186,7 @@ class TestSignalApi(unittest.TestCase):
 
     def test_universe_rows_follow_the_variant_markets(self):
         from strategy import signal_api
-        rows = [{"ticker": "A", "market": "KOSPI"}, {"ticker": "B", "market": "NASDAQ 100"},
+        rows = [{"ticker": "A", "market": "KOSPI"}, {"ticker": "B", "market": "NASDAQ 150"},
                 {"ticker": "KS11", "market": "KOSPI", "is_index": True}]
         self.assertEqual([r["ticker"] for r in signal_api.universe_rows(rows, "A0")], ["A"])
 
@@ -203,7 +203,7 @@ class TestSignalApi(unittest.TestCase):
         self.assertEqual(picks.variant_id, "A5")
         self.assertEqual(check.verdict, "exit")
         with self.assertRaises(ValueError):
-            signal_api.run_picks([{"ticker": "AAPL", "market": "NASDAQ 100"}], "A0")
+            signal_api.run_picks([{"ticker": "AAPL", "market": "NASDAQ 150"}], "A0")
         with patch("strategy.trend_following.signal_provider.load_daily_inputs") as load:
             c = signal_api.run_check({"ticker": "X", "market": "KOSPI"}, "C1")   # C needs no prices
         load.assert_not_called()

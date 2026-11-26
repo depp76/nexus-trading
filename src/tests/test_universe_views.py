@@ -35,7 +35,7 @@ class TestMatches(unittest.TestCase):
         toggle, so the toggles never hide them; toggled markets still filter."""
         for m in ("NASDAQ", "NYSE"):
             self.assertTrue(matches(_row(market=m), {"market": ["KOSPI", "KOSDAQ"]}), m)
-        self.assertFalse(matches(_row(market="NASDAQ 100"), {"market": ["KOSPI", "KOSDAQ"]}))
+        self.assertFalse(matches(_row(market="NASDAQ 150"), {"market": ["KOSPI", "KOSDAQ"]}))
         self.assertFalse(matches(_row(market="S&P500"), {"market": ["KOSPI"]}))
 
     def test_ranges_and_units(self):
@@ -252,9 +252,9 @@ class TestMarketLists(unittest.TestCase):
     """docs/ui.md 2.1 (2026-11-14): `market` is the list of markets that are on."""
 
     def test_list_matches_and_index_rows_always_pass(self):
-        state = {"market": ["KOSPI", "NASDAQ 100"]}
+        state = {"market": ["KOSPI", "NASDAQ 150"]}
         self.assertTrue(matches(_row(market="KOSPI"), state))
-        self.assertTrue(matches(_row(market="NASDAQ 100"), state))
+        self.assertTrue(matches(_row(market="NASDAQ 150"), state))
         self.assertFalse(matches(_row(market="S&P500"), state))
         self.assertTrue(matches(_row(market="Index"), state))
         self.assertTrue(matches(_row(market="Index"), {"market": "KOSDAQ"}))   # an old single-market view
@@ -301,7 +301,7 @@ class TestMarketToggles(_TabCase):
     def test_defaults_kospi_and_kosdaq_only(self):
         tab = self._tab([_stock("A")])
         checked = {m: b.isChecked() for m, b in tab._market_buttons.items()}
-        self.assertEqual(checked, {"KOSPI": True, "KOSDAQ": True, "NASDAQ 100": False, "S&P500": False})
+        self.assertEqual(checked, {"KOSPI": True, "KOSDAQ": True, "NASDAQ 150": False, "S&P500": False})
         self.assertEqual(tab._market_buttons["S&P500"].text(), "S&&P 500")     # shows "S&P 500", no mnemonic
         self.assertEqual(tab.selected_markets(), ["KOSPI", "KOSDAQ"])
 
@@ -327,12 +327,12 @@ class TestMarketToggles(_TabCase):
         tab = self._tab([_stock("A"), _stock("B", market="KOSDAQ")])
         tab.custom_settings["deleted"] = ["GONE"]
         with self._patched():
-            tab._market_buttons["NASDAQ 100"].click()
-        self.assertEqual(tab.custom_settings["markets"], ["KOSPI", "KOSDAQ", "NASDAQ 100"])
+            tab._market_buttons["NASDAQ 150"].click()
+        self.assertEqual(tab.custom_settings["markets"], ["KOSPI", "KOSDAQ", "NASDAQ 150"])
         (fetch,) = _FakeFetch.instances
-        self.assertEqual((fetch.markets, fetch.include_indices, fetch.started), (["NASDAQ 100"], False, True))
-        tab._on_markets_fetched([_stock("AAPL", market="NASDAQ 100"), _stock("GONE", market="NASDAQ 100"),
-                                 _stock("A", market="NASDAQ 100")])          # deleted / already here: skipped
+        self.assertEqual((fetch.markets, fetch.include_indices, fetch.started), (["NASDAQ 150"], False, True))
+        tab._on_markets_fetched([_stock("AAPL", market="NASDAQ 150"), _stock("GONE", market="NASDAQ 150"),
+                                 _stock("A", market="NASDAQ 150")])          # deleted / already here: skipped
         self.assertEqual(self._visible(tab), ["A", "AAPL", "B"])
 
     def test_switching_a_market_off_drops_its_rows_but_keeps_added_tickers(self):
@@ -360,18 +360,18 @@ class TestMarketToggles(_TabCase):
         self.assertEqual(len(tab.all_data), 2)
 
     def test_a_name_in_two_us_markets_moves_when_one_goes_off(self):
-        """AAPL is in NASDAQ 100 and S&P500: switching NASDAQ off with S&P500
+        """AAPL is in NASDAQ 150 and S&P500: switching NASDAQ off with S&P500
         on keeps it, under S&P500 (found by the 2026-11-14 toggle check)."""
         tab = self._tab([_stock("A")])
         with self._patched():
-            tab._market_buttons["NASDAQ 100"].click()
-            tab._on_markets_fetched([_stock("AAPL", market="NASDAQ 100"), _stock("NVDA", market="NASDAQ 100")])
+            tab._market_buttons["NASDAQ 150"].click()
+            tab._on_markets_fetched([_stock("AAPL", market="NASDAQ 150"), _stock("NVDA", market="NASDAQ 150")])
             tab._market_buttons["S&P500"].click()
             tab._on_markets_fetched([_stock("AAPL", market="S&P500"), _stock("JPM", market="S&P500")])
             aapl = next(x for x in tab.all_data if x["ticker"] == "AAPL")
-            self.assertEqual((aapl["market"], aapl["also_in"]), ("NASDAQ 100", ["S&P500"]))
-            tab._market_buttons["NASDAQ 100"].click()
-        self.assertEqual((aapl["market"], aapl["also_in"]), ("S&P500", ["NASDAQ 100"]))
+            self.assertEqual((aapl["market"], aapl["also_in"]), ("NASDAQ 150", ["S&P500"]))
+            tab._market_buttons["NASDAQ 150"].click()
+        self.assertEqual((aapl["market"], aapl["also_in"]), ("S&P500", ["NASDAQ 150"]))
         self.assertEqual(self._visible(tab), ["A", "AAPL", "JPM"])
 
     def test_an_added_ticker_does_not_count_as_its_market_being_loaded(self):
@@ -387,11 +387,11 @@ class TestMarketToggles(_TabCase):
         still reports isRunning(); the waiting market must not wait forever."""
         tab = self._tab([_stock("A"), _stock("B", market="KOSDAQ")])
         with self._patched():
-            tab._market_buttons["NASDAQ 100"].click()
+            tab._market_buttons["NASDAQ 150"].click()
             tab._market_buttons["S&P500"].click()                  # first fetch still "running"
             self.assertEqual(len(_FakeFetch.instances), 1)
-            tab._on_markets_fetched([_stock("NVDA", market="NASDAQ 100")])
-        self.assertEqual([f.markets for f in _FakeFetch.instances], [["NASDAQ 100"], ["S&P500"]])
+            tab._on_markets_fetched([_stock("NVDA", market="NASDAQ 150")])
+        self.assertEqual([f.markets for f in _FakeFetch.instances], [["NASDAQ 150"], ["S&P500"]])
 
 
 def empty_view_state():

@@ -138,9 +138,9 @@ class TestAddTickerRow(unittest.TestCase):
         tab = self.tab
         labels = {m: b.text().replace("&&", "&") for m, b in tab._market_buttons.items()}
         # 2026-11-18 (docs/ui.md 8.32): the NASDAQ toggle is the 150 largest NASDAQ-listed
-        # names, not the Nasdaq-100 index; the stored key stays "NASDAQ 100".
-        self.assertEqual(labels, {"KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ", "NASDAQ 100": "NASDAQ 150", "S&P500": "S&P 500"})
-        tip = tab._market_buttons["NASDAQ 100"].toolTip()
+        # names, not the Nasdaq-100 index; its stored key is "NASDAQ 150" since 2026-11-26.
+        self.assertEqual(labels, {"KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ", "NASDAQ 150": "NASDAQ 150", "S&P500": "S&P 500"})
+        tip = tab._market_buttons["NASDAQ 150"].toolTip()
         self.assertTrue(tip.startswith("NASDAQ:"))
         self.assertIn("상위 150종목", tip)
         self.assertIn("ADR", tip)
@@ -358,7 +358,7 @@ class TestSignalButton(unittest.TestCase):
             tab = UniverseTab()
         tab.all_data = [
             _stock("005930", 500), {**_stock("035720", 50), "market": "KOSDAQ"},
-            {**_stock("AAPL", 900), "market": "NASDAQ 100"},
+            {**_stock("AAPL", 900), "market": "NASDAQ 150"},
             {**_stock("KS11", 0), "market": "Index", "is_index": True},
         ]
         return tab
@@ -395,7 +395,7 @@ class TestSignalButton(unittest.TestCase):
         """docs/ui.md 8.5: an informational result goes to the tab's status
         line, not a modal box."""
         tab = self._tab()
-        tab.all_data = [{**_stock("AAPL", 900), "market": "NASDAQ 100"}]
+        tab.all_data = [{**_stock("AAPL", 900), "market": "NASDAQ 150"}]
         statuses = []
         tab.status_text_changed.connect(statuses.append)
         with patch("ui.universe_tab.SignalPicksThread", _FakeScoreThread), \
@@ -591,15 +591,36 @@ class TestStrategySignalMenu(unittest.TestCase):
 
 
 class TestNasdaqDisplayName(unittest.TestCase):
-    """2026-11-18 (user direction, docs/ui.md 8.32): the stored key "NASDAQ 100"
-    shows as "NASDAQ" in row meta and status lines; the key itself is unchanged."""
+    """2026-11-18 (user direction, docs/ui.md 8.32): the stored key "NASDAQ 150"
+    (was "NASDAQ 100" until 2026-11-26) shows as "NASDAQ" in row meta and status lines."""
 
     def test_row_meta_and_status_show_nasdaq(self):
         from ui.universe_columns import _market_label
         from ui.universe_tab import _part_label
         from ui.universe_views import MARKETS, market_display
-        self.assertEqual(_market_label("NASDAQ 100"), "NASDAQ")
-        self.assertEqual(_part_label("NASDAQ 100"), "NASDAQ")
+        self.assertEqual(_market_label("NASDAQ 150"), "NASDAQ")
+        self.assertEqual(_part_label("NASDAQ 150"), "NASDAQ")
         self.assertEqual((_market_label("KOSPI"), _market_label("S&P500")), ("KOSPI", "S&P500"))
         self.assertEqual(market_display("NYSE"), "NYSE")
-        self.assertIn("NASDAQ 100", MARKETS)                      # the stored key
+        self.assertIn("NASDAQ 150", MARKETS)                      # the stored key
+
+
+class TestNasdaqKeyMigration(unittest.TestCase):
+    """2026-11-26 (user direction): the NASDAQ market key was renamed "NASDAQ 100"
+    -> "NASDAQ 150"; saved settings and cached rows are migrated on load."""
+
+    def test_migrate_replaces_whole_values_only(self):
+        from ui.universe_views import migrate_market_keys
+        settings = {"markets": ["KOSPI", "NASDAQ 100"], "signals": [{"market": ["NASDAQ 100"]}],
+                    "added": [{"ticker": "QQQ", "name": "Invesco NASDAQ 100 ETF", "market": "NASDAQ 100"}]}
+        out, changed = migrate_market_keys(settings)
+        self.assertTrue(changed)
+        self.assertEqual(out["markets"], ["KOSPI", "NASDAQ 150"])
+        self.assertEqual(out["signals"], [{"market": ["NASDAQ 150"]}])
+        self.assertEqual(out["added"][0], {"ticker": "QQQ", "name": "Invesco NASDAQ 100 ETF", "market": "NASDAQ 150"})
+        index_row = {"name": "Nasdaq 100", "market": "Index", "ticker": "^NDX"}
+        self.assertEqual(migrate_market_keys([index_row]), ([index_row], False))
+
+    def test_market_index_overlay_maps_to_ndx(self):
+        from data.market import INDEX_TICKERS, MARKET_INDEX_LABELS
+        self.assertEqual(INDEX_TICKERS[MARKET_INDEX_LABELS["NASDAQ 150"]][0], "^NDX")

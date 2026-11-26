@@ -92,7 +92,7 @@ class TestUsMarketLabels(unittest.TestCase):
     (review_codex.md R1)."""
 
     DAY = "2026-02-02"
-    US_LABELS = ("US", "us", "NASDAQ", "NASDAQ 100", "NYSE", "AMEX")
+    US_LABELS = ("US", "us", "NASDAQ", "NASDAQ 150", "NASDAQ 100", "NYSE", "AMEX")
 
     def _row(self, market, usd_krw):
         trades = [_trade("qqq", "2026-01-02", 10, 1000.0, market=market)]

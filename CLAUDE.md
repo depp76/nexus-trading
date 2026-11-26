@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A single-user PyQt6 desktop app for tracking a Korean/US equity portfolio, with four
 top-level tabs: "Trading Universe" (KOSPI/KOSDAQ watchlist with live prices and indicators;
 NASDAQ and S&P500 can be switched on in its market toggles, off by default; docs/ui.md 2.1. The NASDAQ toggle
-("NASDAQ 150", stored key `NASDAQ 100`) is the 150 largest NASDAQ-listed names, ADRs included, not the Nasdaq-100 index; docs/ui.md 8.32), "Trading History"
+("NASDAQ 150", stored key `NASDAQ 150` since 2026-11-26, `NASDAQ 100` before and migrated on load) is the 150 largest NASDAQ-listed names, ADRs included, not the Nasdaq-100 index; docs/ui.md 8.32), "Trading History"
 (manually-entered trade log backed by SQLite), "Total Assets" (weekly asset snapshots vs.
 KOSPI and USD) and "Strategy" (research backtests; one sub-tab per strategy package, currently
 only Trend Following). Nothing places orders.

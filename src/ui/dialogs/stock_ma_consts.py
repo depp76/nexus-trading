@@ -12,7 +12,7 @@ from ui.common import BTN_H, FONT_BODY
 from ui.theme import TEXT_EMPTY
 
 
-_STOCK_MARKETS = ("KOSPI", "KOSDAQ", "NASDAQ 100", "S&P500")
+_STOCK_MARKETS = ("KOSPI", "KOSDAQ", "NASDAQ 150", "S&P500")
 _SIMPLE_CHART_TICKERS = ("CL=F", "^VIX", "VKOSPI")
 _SCROLL_MAX = 10000
 _TICK_PT = FONT_BODY          # issue #12: nothing on the chart below 9pt

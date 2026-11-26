@@ -649,8 +649,10 @@ def fetch_stock_ma_multi(ticker, market, windows=(10, 20, 60), days=3650, target
 
 
 # Stock markets whose MA chart can overlay the market's index (user direction
-# 2026-11-17); each name is also its INDEX_TICKERS label.
-MARKET_INDEX_MARKETS = ("KOSPI", "KOSDAQ", "NASDAQ 100", "S&P500")
+# 2026-11-17): market key -> its INDEX_TICKERS label. The NASDAQ 150 list is
+# compared with the Nasdaq-100 index (^NDX).
+MARKET_INDEX_LABELS = {"KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ", "NASDAQ 150": "NASDAQ 100", "S&P500": "S&P500"}
+MARKET_INDEX_MARKETS = tuple(MARKET_INDEX_LABELS)
 
 
 def attach_market_index(df: pl.DataFrame, market: str) -> pl.DataFrame:
@@ -660,7 +662,7 @@ def attach_market_index(df: pl.DataFrame, market: str) -> pl.DataFrame:
     loaded -- the chart then simply has no index line."""
     if market not in MARKET_INDEX_MARKETS or df is None or df.is_empty() or "Date" not in df.columns:
         return df
-    fdr_ticker = INDEX_TICKERS[market][0]
+    fdr_ticker = INDEX_TICKERS[MARKET_INDEX_LABELS[market]][0]
     try:
         first = df.get_column("Date")[0]
         idx = _load_ohlcv_window(fdr_ticker, first.strftime("%Y-%m-%d"))

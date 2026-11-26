@@ -466,29 +466,13 @@ def fetch_us_stock_data_bulk(symbols_with_names, market_name, fx_rate, progress_
     return results
 
 
-def fetch_us_market_data(market="NASDAQ 100", top_n=200, progress_callback=None):
+def fetch_us_market_data(market="NASDAQ 150", top_n=200, progress_callback=None):
+    """The `top_n` names of a US universe market. "NASDAQ 150" is the head of the
+    NASDAQ exchange listing, not the Nasdaq-100 index (its Wikipedia
+    constituents table, unreachable for a while, was dropped with the key
+    rename on 2026-11-26, docs/ui.md 8.32); any other market its own listing."""
     try:
-        df_list = pd.DataFrame()
-        if market == "NASDAQ 100":
-            try:
-                import io
-                res = requests.get('https://en.wikipedia.org/wiki/Nasdaq-100', headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-                tables = pd.read_html(io.StringIO(res.text), flavor='lxml')
-                for tbl in tables:
-                    if 'Ticker' in tbl.columns:
-                        df_list = tbl.rename(columns={'Ticker': 'Symbol', 'Company': 'Name'})
-                        break
-                    elif 'Symbol' in tbl.columns:
-                        df_list = tbl.rename(columns={'Company': 'Name'})
-                        break
-            except Exception:
-                # kept broad: pd.read_html/lxml raise assorted types (ValueError, ImportError, parser errors).
-                logger.debug("Wikipedia NASDAQ-100 table fetch error, falling back to NASDAQ listing", exc_info=True)
-
-            if df_list.empty:
-                df_list = get_stock_listing('NASDAQ')
-        else:
-            df_list = get_stock_listing(market)
+        df_list = get_stock_listing("NASDAQ" if market == "NASDAQ 150" else market)
 
         if df_list.empty:
             return []

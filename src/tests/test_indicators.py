@@ -181,7 +181,7 @@ class TestCacheHelpers(unittest.TestCase):
         self.assertFalse(is_kr_code(""))
 
     def test_is_us_market(self):
-        for m in ("US", "NASDAQ", "NYSE", "AMEX", "NASDAQ 100", "S&P500", "S&P 500"):
+        for m in ("US", "NASDAQ", "NYSE", "AMEX", "NASDAQ 150", "NASDAQ 100", "S&P500", "S&P 500"):
             self.assertTrue(is_us_market(m), m)
         for m in ("KOSPI", "KOSDAQ", "KRX", "ETF", "", None, "Index"):
             self.assertFalse(is_us_market(m), repr(m))
