@@ -1,4 +1,4 @@
-"""The MA chart's 재무 tab (docs/dart_db_plan_2026-11-26.md 13, stage 5;
+"""The MA chart's 기업 정보 (company info) tab (docs/dart_db_plan_2026-11-26.md 13, stage 5;
 docs/ui.md 8.34): DART quarterly results and revenue by segment of one KOSPI /
 KOSDAQ stock, laid out as the approved mockup
 (docs/ui_mockups/dart_financials_mockup.html):
@@ -335,23 +335,30 @@ class StockFinancialsTab(QWidget):
         self._canvas.draw_idle()
 
     def _fill_results_table(self, rows) -> None:
-        heads = [tr("분기", "Quarter") if self._mode == "q" else tr("연도", "Year"), tr("매출", "Revenue"), "YoY",
-                 tr("영업이익", "Op. income"), tr("이익률", "Margin"),
+        """Items down the side, periods across (newest on the left), like the
+        segment table below it."""
+        items = [tr("매출", "Revenue"), "YoY", tr("영업이익", "Op. income"), tr("이익률", "Margin"),
                  tr("지배순이익", "Owners' NI") if any(r.get("net_is_owners") for r in self._quarters)
                  else tr("순이익", "Net income"), tr("비고", "Notes"), tr("접수일", "Received")]
+        corner = tr("분기", "Quarter") if self._mode == "q" else tr("연도", "Year")
+        periods = list(reversed(rows))
         t = self._table
         t.setUpdatesEnabled(False)
         try:
             t.clear()
-            t.setColumnCount(len(heads))
-            t.setHorizontalHeaderLabels(heads)
-            t.setRowCount(len(rows))
+            t.setColumnCount(len(periods) + 1)
+            t.setHorizontalHeaderLabels([corner, *[
+                self._period_label(r) + ("†" if r.get("derived") else "") + ("‡" if r.get("lookahead") else "")
+                for r in periods]])
+            t.setRowCount(len(items))
+            for i, name in enumerate(items):
+                item = QTableWidgetItem(name)
+                item.setForeground(QColor(TEXT_MUTED))
+                t.setItem(i, 0, item)
             base_currency = (rows[-1]["currency"] or "KRW") if rows else "KRW"
-            for i, r in enumerate(reversed(rows)):
-                div, unit_ko, unit_en = fm.unit_of(r["currency"])       # each row in its own unit
-                label = self._period_label(r) + ("†" if r.get("derived") else "") + ("‡" if r.get("lookahead") else "")
+            for j, r in enumerate(periods, start=1):
+                div, unit_ko, unit_en = fm.unit_of(r["currency"])       # each period in its own unit
                 cells = [
-                    (label, None, Qt.AlignmentFlag.AlignCenter),
                     (self._amt(r["revenue"], div), None, None),
                     (_pct(r["revenue_yoy"], 0), _color(r["revenue_yoy"]), None),
                     (self._amt(r["op_income"], div), LOSS if (r["op_income"] or 0) < 0 else None, None),
@@ -362,15 +369,14 @@ class StockFinancialsTab(QWidget):
                                if (r["currency"] or "KRW") != base_currency else ""),
                     (r["rcept_dt"], TEXT_MUTED, Qt.AlignmentFlag.AlignCenter),
                 ]
-                for j, (text, color, align) in enumerate(cells):
+                for i, (text, color, align) in enumerate(cells):
                     item = QTableWidgetItem(text)
                     item.setTextAlignment(int(align or (Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)))
                     if color:
                         item.setForeground(QColor(color))
                     t.setItem(i, j, item)
-            hh = t.horizontalHeader()
-            hh.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-            hh.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
+            t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+            t.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectColumns)
         finally:
             t.setUpdatesEnabled(True)
 

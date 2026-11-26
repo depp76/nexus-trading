@@ -186,7 +186,7 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         self.tabs = None
         self.financials_tab = None
         if self._market in ("KOSPI", "KOSDAQ"):
-            # 차트 | 재무 (docs/dart_db_plan_2026-11-26.md 13, docs/ui.md 8.34): DART
+            # 차트 | 기업 정보 (docs/dart_db_plan_2026-11-26.md 13, docs/ui.md 8.34): DART
             # financials for a Korean stock; read the first time the tab is shown.
             self.tabs = QTabWidget()
             chart_page = QWidget()
@@ -195,7 +195,7 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
             page_v.addWidget(splitter)
             self.tabs.addTab(chart_page, tr("차트", "Chart"))
             self.financials_tab = StockFinancialsTab(self._ticker, self._name, self._market)
-            self.tabs.addTab(self.financials_tab, tr("재무", "Financials"))
+            self.tabs.addTab(self.financials_tab, tr("기업 정보", "Company info"))
             self.tabs.currentChanged.connect(self._on_tab_changed)
             root.addWidget(self.tabs)
         else:
