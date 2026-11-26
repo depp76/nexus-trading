@@ -22,7 +22,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.patches import Patch
 from matplotlib.ticker import FuncFormatter
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QItemSelectionModel, Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QPushButton, QScrollArea, QScrollBar,
@@ -168,6 +168,8 @@ class StockFinancialsTab(QWidget):
         self._canvas = FigureCanvas(self._fig)
         self._canvas.setStyleSheet("border: none;")
         self._canvas.setMinimumHeight(260)
+        self._canvas.mpl_connect("motion_notify_event", self._on_chart_motion)
+        self._canvas.mpl_connect("figure_leave_event", lambda _e: self._set_chart_marker(None))
         body.addWidget(self._canvas, 5)
         self._table = QTableWidget()
         setup_table(self._table)
@@ -347,7 +349,79 @@ class StockFinancialsTab(QWidget):
         ax.legend(handles=[Patch(color=BAR_COLOR, label=tr("매출", "Revenue")),
                            Patch(color=LOSS, label=tr("영업적자", "Operating loss"))],
                   loc="upper left", fontsize=FONT_CAPTION, frameon=False)
+        self._build_chart_marker(ax, ax2 if margins else None, rows, div)
         fig.tight_layout()
+        self._canvas.draw_idle()
+
+    # ---- marker (hover) on the results chart ---------------------------------------
+
+    def _build_chart_marker(self, ax, ax2, rows, div) -> None:
+        """The hover marker: a band over the period's bar, a dot on the margin
+        line and a box with the period's numbers; the table's column for the
+        same period is selected too. Hidden until the mouse is over a bar."""
+        self._marker_rows, self._marker_div, self._marker_idx = rows, div, None
+        self._marker_ax = ax
+        top = ax2 if ax2 is not None else ax     # the twin axes is drawn over the bars
+        self._marker_band = top.axvspan(-0.45, 0.45, color=TEXT_MUTED, alpha=0.28, linewidth=0, visible=False)
+        self._marker_dot = None
+        if ax2 is not None:
+            (self._marker_dot,) = ax2.plot([0], [0], linestyle="none", marker="o", markersize=7,
+                                           color=ACCENT, markeredgecolor=SURFACE, markeredgewidth=1.5,
+                                           visible=False, zorder=5)
+        self._marker_box = top.annotate(
+            "", xy=(0, 1), xycoords=("data", "axes fraction"), xytext=(10, -8), textcoords="offset points",
+            ha="left", va="top", multialignment="left", fontsize=FONT_CAPTION, color=TEXT, visible=False, zorder=10,
+            bbox=dict(boxstyle="round,pad=0.4", facecolor=SURFACE, edgecolor=LINE, alpha=0.95))
+
+    def _on_chart_motion(self, event) -> None:
+        rows = getattr(self, "_marker_rows", None)
+        if not rows or event.inaxes is None or event.xdata is None:
+            self._set_chart_marker(None)
+            return
+        idx = int(round(event.xdata))
+        self._set_chart_marker(idx if 0 <= idx < len(rows) and abs(event.xdata - idx) <= 0.45 else None)
+
+    def _set_chart_marker(self, idx) -> None:
+        """Show the marker on period ``idx`` (an index into the chart's rows,
+        oldest first -- the same order as the table's columns), or hide it."""
+        if getattr(self, "_marker_rows", None) is None or idx == self._marker_idx:
+            return
+        self._marker_idx = idx
+        artists = [a for a in (self._marker_band, self._marker_dot, self._marker_box) if a is not None]
+        if idx is None:
+            for a in artists:
+                a.set_visible(False)
+            self._table.clearSelection()
+            self._canvas.draw_idle()
+            return
+        r, div = self._marker_rows[idx], self._marker_div
+        self._marker_band.set_x(idx - 0.45)
+        self._marker_band.set_visible(True)
+        if self._marker_dot is not None:
+            on_line = r["op_margin"] is not None
+            if on_line:
+                self._marker_dot.set_data([idx], [r["op_margin"] * 100])
+            self._marker_dot.set_visible(on_line)
+        lines = [self._period_label(r) + ("†" if r.get("derived") else "")]
+        lines.append(tr("매출 ", "Revenue ") + self._amt(r["revenue"], div) + f"  YoY {_pct(r['revenue_yoy'], 0)}")
+        lines.append(tr("영업이익 ", "Op. income ") + self._amt(r["op_income"], div)
+                     + f"  YoY {_pct(r['op_yoy'], 0)}")
+        if r["op_margin"] is not None:
+            lines.append(tr("영업이익률 ", "Op. margin ") + f"{r['op_margin'] * 100:.1f}%")
+        box = self._marker_box
+        box.set_text("\n".join(lines))
+        box.xy = (idx, 1)
+        right = idx > (len(self._marker_rows) - 1) * 0.6        # flip to the left near the right edge
+        box.set_horizontalalignment("right" if right else "left")
+        box.set_position((-10 if right else 10, -8))
+        box.set_visible(True)
+        # The same period in the table (selection only: no scroll, no current cell).
+        t = self._table
+        model = t.selectionModel()
+        if model is not None and idx < t.columnCount():
+            t.clearSelection()
+            model.select(t.model().index(0, idx),
+                         QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Columns)
         self._canvas.draw_idle()
 
     def _fill_results_table(self, rows) -> None:

@@ -200,6 +200,21 @@ class TestTab(unittest.TestCase):
         QApplication.processEvents()
         self.assertEqual(inner.value(), 0)
         self.assertFalse(t._hbar_at_end)
+        # Marker: hovering a bar shows the band, the margin dot and the value
+        # box, and selects the same period's column in the table.
+        class _Ev:
+            def __init__(self, ax, x):
+                self.inaxes, self.xdata = ax, x
+        t._on_chart_motion(_Ev(t._marker_ax, 6.1))                          # the newest bar, 2025 3Q
+        self.assertTrue(t._marker_band.get_visible())
+        self.assertTrue(t._marker_box.get_visible())
+        self.assertTrue(t._marker_box.get_text().startswith("2025 3Q"))
+        self.assertIn("영업이익률", t._marker_box.get_text())
+        self.assertEqual({i.column() for i in tb.selectedIndexes()}, {6})
+        self.assertEqual(inner.value(), 0)                                  # selecting does not scroll
+        t._on_chart_motion(_Ev(t._marker_ax, 5.5))                          # between two bars
+        self.assertFalse(t._marker_box.get_visible())
+        self.assertFalse(tb.selectedIndexes())
         t.set_mode("y")
         self.assertEqual(tb.columnCount(), 2)
         self.assertEqual(tb.horizontalHeaderItem(1).text(), "2025 3Q누적")
