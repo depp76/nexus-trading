@@ -99,9 +99,9 @@ def is_kr_code(ticker) -> bool:
 
 # Market labels that denote a US-listed position. "US" is the generic label
 # PositionPriceFetchThread assigns after a Yahoo lookup; the exchange names are
-# what TradeEntryDialog's combo offers; "NASDAQ 100" / "S&P500" are the
-# universe labels used while the US universe paths were active.
-_US_MARKETS = frozenset({"US", "NASDAQ", "NYSE", "AMEX", "NASDAQ 100", "S&P500", "S&P 500"})
+# what TradeEntryDialog's combo offers; "NASDAQ 150" / "S&P500" are the
+# Trading Universe market keys ("NASDAQ 100" is that key before 2026-11-26).
+_US_MARKETS = frozenset({"US", "NASDAQ", "NYSE", "AMEX", "NASDAQ 150", "NASDAQ 100", "S&P500", "S&P 500"})
 
 
 def is_us_market(market) -> bool:

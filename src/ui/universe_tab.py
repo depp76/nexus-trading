@@ -46,7 +46,8 @@ from ui.universe_table import StockTable
 from ui.heat_legend import HeatLegend
 from ui.filter_popups import SignalScanPopup
 from ui.universe_views import (
-    MARKETS, count_matches, market_display, describe_ranges, market_list, normalize as normalize_view,
+    MARKETS, count_matches, market_display, describe_ranges, market_list, migrate_market_keys,
+    normalize as normalize_view,
 )
 from i18n import tr
 from ui.dialogs.stock_report import show_stock_report_result
@@ -138,6 +139,9 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         # Try to load cached universe data to make startup instant, but always refresh to latest afterwards.
         cached = safe_load_json(paths.UNIVERSE_CACHE_FILE, default=None)
         if cached:
+            # Rows saved before a market-key rename (NASDAQ 100 -> 150) take
+            # the current key; the next save writes it back.
+            cached, _ = migrate_market_keys(cached)
             self.all_data = cached
             self._reload_table()
             self.filter_table()
@@ -270,13 +274,14 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
     _GROUP_GAP = 12   # between toolbar groups (docs/ui.md 8.17: 12~16px)
     # Toggle text that differs from the MARKETS display name: the NASDAQ toggle
     # fetches the 150 largest NASDAQ-listed names, so it reads "NASDAQ 150"
-    # (user direction 2026-11-18, docs/ui.md 8.32; was "NASDAQ", 2026-11-16).
+    # (user direction 2026-11-18, docs/ui.md 8.32; was "NASDAQ", 2026-11-16)
+    # while its rows' meta shows "NASDAQ".
     # Every toolbar button takes the widest registered label's width
     # (_unify_button_widths), so the other buttons follow this label.
-    _MARKET_BUTTON_TEXT = {"NASDAQ 100": "NASDAQ 150"}
+    _MARKET_BUTTON_TEXT = {"NASDAQ 150": "NASDAQ 150"}
     # Toggle tooltips that need more than the generic sentence.
     _MARKET_TOOLTIP_NOTE = {
-        "NASDAQ 100": tr(" 나스닥100 지수 구성이 아니라 NASDAQ 상장 종목 중 시총 상위이며 해외 기업 ADR(SKHY, ASML 등)도 포함합니다.",
+        "NASDAQ 150": tr(" 나스닥100 지수 구성이 아니라 NASDAQ 상장 종목 중 시총 상위이며 해외 기업 ADR(SKHY, ASML 등)도 포함합니다.",
                          " Not the Nasdaq-100 index: the largest NASDAQ-listed names, foreign ADRs (SKHY, ASML, ...) included."),
     }
     # (highlight status to show, button label): "" = no status filter. The
@@ -380,7 +385,7 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         """The rows the switched-on markets keep: index rows, rows of an
         on-market, and user-added tickers (hidden while their market is off).
         A row of an off-market that also belongs to an on-market (`also_in`:
-        AAPL in NASDAQ 100 and S&P500) moves under that market instead of
+        AAPL in NASDAQ 150 and S&P500) moves under that market instead of
         going."""
         added = self._added_tickers()
         out = []
@@ -449,7 +454,10 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         self.custom_settings = {"added": [], "deleted": [], "highlights": {}}
         data = safe_load_json(CUSTOM_SETTINGS_FILE, default={})
         if data:
+            data, renamed = migrate_market_keys(data)   # NASDAQ 100 -> 150 (2026-11-26)
             self.custom_settings.update(data)
+            if renamed:
+                self.save_custom_settings()
             # Column-group and density toggles were removed on 2026-09-19
             # (user direction); drop their saved state so it does not linger.
             # The saved views were removed on 2026-11-19 (docs/ui.md 8.9);

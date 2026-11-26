@@ -82,7 +82,7 @@ def apply_matplotlib_font() -> None:
 # Styling constants
 # ---------------------------------------------------------------------------
 _HIST_KEYS = ["3d", "5d", "10d", "20d", "60d", "120d"]
-_MARKET_ORDER = {"KOSPI": 0, "KOSDAQ": 1, "NASDAQ 100": 2, "S&P500": 3}
+_MARKET_ORDER = {"KOSPI": 0, "KOSDAQ": 1, "NASDAQ 150": 2, "S&P500": 3}
 _FIELD_ERROR_STYLE = f"border: 1px solid {DANGER}; background-color: {DANGER_BG};"
 
 # Shared font-family declaration for inline stylesheets (roadmap 6-2e); the

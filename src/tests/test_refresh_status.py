@@ -199,22 +199,22 @@ class TestFullRefreshFailure(unittest.TestCase):
 
     def test_thread_fetches_only_the_given_markets_and_dedupes_us_names(self):
         """docs/ui.md 2.1: only switched-on markets are fetched; a name in
-        both NASDAQ 100 and S&P500 is one row, under NASDAQ 100."""
+        both NASDAQ 150 and S&P500 is one row, under NASDAQ 150."""
         from threads.fetch_threads import AllDataFetchThread
-        t = AllDataFetchThread(markets=["S&P500", "NASDAQ 100"], include_indices=False)
+        t = AllDataFetchThread(markets=["S&P500", "NASDAQ 150"], include_indices=False)
         asked = []
         done = []
         t.finished_all.connect(done.append)
-        rows = {"NASDAQ 100": [{"ticker": "AAPL", "market": "NASDAQ 100"}],
+        rows = {"NASDAQ 150": [{"ticker": "AAPL", "market": "NASDAQ 150"}],
                 "S&P500": [{"ticker": "AAPL", "market": "S&P500"}, {"ticker": "JPM", "market": "S&P500"}]}
         with patch("data_fetcher.fetch_major_indices_as_stocks") as indices, \
              patch("threads.fetch_threads.fetch_market_data",
                    side_effect=lambda m, n, cb: asked.append(m) or rows[m]):
             t.run()
         indices.assert_not_called()
-        self.assertEqual(sorted(asked), ["NASDAQ 100", "S&P500"])
+        self.assertEqual(sorted(asked), ["NASDAQ 150", "S&P500"])
         self.assertEqual([(x["ticker"], x["market"]) for x in done[0]],
-                         [("AAPL", "NASDAQ 100"), ("JPM", "S&P500")])
+                         [("AAPL", "NASDAQ 150"), ("JPM", "S&P500")])
         self.assertEqual(done[0][0]["also_in"], ["S&P500"])                  # its other market, kept
         self.assertEqual(AllDataFetchThread().markets, ("KOSPI", "KOSDAQ"))   # default: KR only
 

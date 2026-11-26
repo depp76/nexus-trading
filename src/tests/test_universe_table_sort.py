@@ -182,7 +182,7 @@ class TestIndexRowsFormatByChangeMode(unittest.TestCase):
         USD; the sort key stays the KRW cap (억) so mixed markets keep one scale."""
         from ui.widgets import COL_CAP
         table = StockTable()
-        us = {"ticker": "AAPL", "name": "Apple", "market": "NASDAQ 100", "price": 280_000.0, "usd_price": 200.0,
+        us = {"ticker": "AAPL", "name": "Apple", "market": "NASDAQ 150", "price": 280_000.0, "usd_price": 200.0,
               "currency": "$", "market_cap": 3.0e12 * 1400, "usd_market_cap": 3.0e12, "changes": {}}
         old = {**us, "ticker": "MSFT", "name": "Microsoft", "market_cap": 512.3e9 * 1400}
         del old["usd_market_cap"]                          # a row cached before the field existed
@@ -204,7 +204,7 @@ class TestIndexRowsFormatByChangeMode(unittest.TestCase):
         table = StockTable()
 
         def us(t, usd):
-            return {"ticker": t, "name": t, "market": "NASDAQ 100", "price": 1400.0, "usd_price": 1.0,
+            return {"ticker": t, "name": t, "market": "NASDAQ 150", "price": 1400.0, "usd_price": 1.0,
                     "currency": "$", "market_cap": usd * 1400, "usd_market_cap": usd, "changes": {}}
 
         # The US caps in KRW (4,200조 / 70조) straddle and exceed the Korean ones.

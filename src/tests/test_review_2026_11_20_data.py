@@ -211,11 +211,11 @@ class TestYfBulkStaging(unittest.TestCase):
         with patch.object(yahoo, "_prefetch_naver_us_market_caps", return_value={}), \
                 patch.object(yahoo, "_process_us_chunk", side_effect=boom):
             with self.assertRaises(RuntimeError):
-                yahoo.fetch_us_stock_data_bulk([("AAPL", "Apple")], "NASDAQ 100", 1400.0)
+                yahoo.fetch_us_stock_data_bulk([("AAPL", "Apple")], "NASDAQ 150", 1400.0)
         self.assertEqual(dcache._YF_BULK_CACHE, {})
 
     def test_run_uses_one_start_for_download_key_and_lookup(self):
-        run = yahoo._UsBulkRun(market_name="NASDAQ 100", fx_rate=1.0, total=1, progress_callback=None,
+        run = yahoo._UsBulkRun(market_name="NASDAQ 150", fx_rate=1.0, total=1, progress_callback=None,
                                naver_mcaps={}, lock=threading.Lock(), yf_semaphore=threading.Semaphore(1),
                                start="2025-10-06")
         frame = pd.DataFrame({"Close": [1.0, 2.0]}, index=pd.to_datetime(["2026-11-18", "2026-11-19"]))

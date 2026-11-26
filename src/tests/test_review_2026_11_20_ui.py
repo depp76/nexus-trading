@@ -201,11 +201,11 @@ class TestUniverseTab(unittest.TestCase):
     def test_language_switch_state_keeps_the_add_market_and_unpinned_picks(self):
         tab = self._tab()
         picks = object()
-        tab._add_market, tab._last_picks = "NASDAQ 100", picks
+        tab._add_market, tab._last_picks = "NASDAQ 150", picks
         state = tab.export_state()
         new = self._tab()
         new.import_state(state)
-        self.assertEqual(new._add_market, "NASDAQ 100")
+        self.assertEqual(new._add_market, "NASDAQ 150")
         self.assertIs(new._last_picks, picks)
 
     def test_english_failure_line_uses_the_display_name(self):
@@ -216,10 +216,10 @@ class TestUniverseTab(unittest.TestCase):
         lang = language()
         set_language("en")
         try:
-            tab._on_market_fetch_failed("x", ["NASDAQ 100"])
+            tab._on_market_fetch_failed("x", ["NASDAQ 150"])
         finally:
             set_language(lang)
-        self.assertNotIn("NASDAQ 100", msgs[-1])
+        self.assertNotIn("NASDAQ 150", msgs[-1])
 
 
 # ---------------------------------------------------------------------------

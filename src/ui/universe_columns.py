@@ -108,7 +108,7 @@ _BP_HEAT_SCALE = 25.0   # 25 bp is "full" heat, in place of a pct column's scale
 
 def _market_label(market: str) -> str:
     """A row's market as shown in its identity meta: the index rows'
-    "Index" value in the UI language, "NASDAQ 100" as "NASDAQ" (docs/ui.md
+    "Index" value in the UI language, "NASDAQ 150" as "NASDAQ" (docs/ui.md
     8.32), other market names as-is."""
     return tr("지수", "Index") if market == "Index" else market_display(market)
 

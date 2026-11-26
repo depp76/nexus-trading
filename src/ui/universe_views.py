@@ -66,19 +66,39 @@ def migrate_ranges(ranges: dict) -> tuple[dict, bool]:
     return out, moved
 
 
-# The toolbar's markets in display order: key (stored in rows, settings and
-# saved views; never changed) -> display name (row meta, status lines, view
-# summaries, tooltips). "NASDAQ 100" shows as "NASDAQ" since 2026-11-18 (user
-# direction, docs/ui.md 8.32): the list is not the Nasdaq-100 index but the 150
-# largest NASDAQ-listed names (ADRs included) -- data.collectors.yahoo's
-# Wikipedia constituents table is gone, so it falls back to the FDR exchange
-# listing. The toggle button reads "NASDAQ 150" (UniverseTab._MARKET_BUTTON_TEXT).
-MARKETS = {"KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ", "NASDAQ 100": "NASDAQ", "S&P500": "S&P 500"}
+# The toolbar's markets in display order: key (stored in rows and settings)
+# -> display name (row meta, status lines, view summaries, tooltips). The
+# NASDAQ key was "NASDAQ 100" until 2026-11-26 (user direction: renamed to
+# match the 150 names it holds; LEGACY_MARKET_KEYS migrates saved values).
+# It shows as "NASDAQ" since 2026-11-18 (user direction, docs/ui.md 8.32): the
+# list is not the Nasdaq-100 index but the 150 largest NASDAQ-listed names
+# (ADRs included), the head of the FDR exchange listing. The toggle button reads "NASDAQ 150" (UniverseTab._MARKET_BUTTON_TEXT).
+MARKETS = {"KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ", "NASDAQ 150": "NASDAQ", "S&P500": "S&P 500"}
+
+# Market keys renamed since they were saved: old key -> current key.
+LEGACY_MARKET_KEYS = {"NASDAQ 100": "NASDAQ 150"}
+
+
+def migrate_market_keys(obj):
+    """(`obj` with every string equal to a LEGACY_MARKET_KEYS key replaced by
+    its current key, whether anything changed), for custom settings and cached
+    universe rows. Only whole string values are compared, so the "Nasdaq 100"
+    index row's name and other texts are untouched."""
+    if isinstance(obj, str):
+        new = LEGACY_MARKET_KEYS.get(obj, obj)
+        return new, new != obj
+    if isinstance(obj, list):
+        pairs = [migrate_market_keys(x) for x in obj]
+        return [p[0] for p in pairs], any(p[1] for p in pairs)
+    if isinstance(obj, dict):
+        pairs = {k: migrate_market_keys(v) for k, v in obj.items()}
+        return {k: p[0] for k, p in pairs.items()}, any(p[1] for p in pairs.values())
+    return obj, False
 
 
 def market_display(market: str) -> str:
-    """A stored market key as shown on screen ("NASDAQ 100" -> "NASDAQ"); other values as-is."""
-    return MARKETS.get(market, market) if market == "NASDAQ 100" else market
+    """A stored market key as shown on screen ("NASDAQ 150" -> "NASDAQ"); other values as-is."""
+    return MARKETS.get(market, market) if market == "NASDAQ 150" else market
 
 
 def market_list(market) -> list | str:

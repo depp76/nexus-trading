@@ -162,7 +162,7 @@ def update_changed_rows(self, data, changed_rows, highlights=None):
 
 - (2026-11-14) **시장 토글**: KOSPI·KOSDAQ·NASDAQ(NASDAQ 100)·S&P500 네 개, 여러 개를 함께 켤 수 있고 최소 하나는 켜져 있어야 한다
   (사용자 지시, ALL 버튼 제거). **기본은 KOSPI + KOSDAQ**, 미국 두 시장은 꺼져 있다. 켜진 시장이 곧 새로고침이 받아 오는 시장
-  (`AllDataFetchThread(markets=...)`, 시장별 상위 KOSPI 350 · KOSDAQ 300 · NASDAQ 100 150 · S&P500 510)이자 표에 보이는 시장이다.
+  (`AllDataFetchThread(markets=...)`, 시장별 상위 KOSPI 500 · KOSDAQ 700 (2026-11-26, 350·300에서 확대) · NASDAQ 150 150 · S&P500 510)이자 표에 보이는 시장이다.
   새로고침 뒤에 시장을 켜면 그 시장만(지수 제외) 받아 와 표에 합치고, 끄면 그 시장 행을 내린다(직접 추가한 종목은 남기고 숨김).
   새로고침 중에 켠 시장은 새로고침이 끝난 뒤 받는다. 선택은 `custom_settings.json`의 `markets`에 저장돼 다음 실행에도 유지된다.
   지수·금리·원자재 행은 시장 선택과 관계없이 늘 보인다. NASDAQ 100과 S&P500에 모두 있는 종목(AAPL 등)은 NASDAQ 100 행 하나로 두고
@@ -1155,6 +1155,12 @@ Phase 0~6 계획표는 `docs/history/ui_archive_2026-09_10.md`로 옮겼다. Pha
   (대략 시총 순)의 앞 150개 — 로 넘어간다. 그래서 SK hynix ADR(SKHY, 12번째), ASML·ARM 같은 해외 기업 ADR도 들어온다. 사용자 결정: ADR을 빼지 않으므로 목록은 그대로 두고 이름만 맞춘다.
 - **표시**(사용자 지시): 행의 종목 정보·상태 줄·저장된 보기 요약에서 "NASDAQ 100" → **"NASDAQ"**(`universe_views.market_display`, `MARKETS`의 표시 이름).
   토글 버튼은 **"NASDAQ 150"**(`UniverseTab._MARKET_BUTTON_TEXT`, 2026-11-16의 "NASDAQ"에서 변경), 툴팁에 "나스닥100 지수 구성이 아니라 NASDAQ 상장 종목 중 시총 상위, ADR 포함".
-- **저장 값은 그대로**: 행·설정·저장된 보기·캐시의 시장 키는 `"NASDAQ 100"` 유지(이전 저장분과 호환). 주요 지수 행의 실제 나스닥100 지수(^NDX)와 MA 차트 시장지수도 그대로.
+- ~~**저장 값은 그대로**: 행·설정·저장된 보기·캐시의 시장 키는 `"NASDAQ 100"` 유지(이전 저장분과 호환).~~ → 2026-11-26 변경, 아래.
+  주요 지수 행의 실제 나스닥100 지수(^NDX)와 MA 차트 시장지수도 그대로.
+- **(2026-11-26) 저장 키를 `"NASDAQ 150"`으로**(사용자 지시, 종목 수에 맞춤): 행·설정·캐시·코드의 시장 키가 `"NASDAQ 150"`.
+  예전 값은 읽을 때 바뀐다 — `universe_views.LEGACY_MARKET_KEYS` / `migrate_market_keys`가 `custom_settings.json`(바뀌면 바로 다시 저장)과
+  `universe_cache.json`(다음 저장 때 반영)의 문자열 값 중 정확히 `"NASDAQ 100"`인 것만 바꾼다(지수 행 이름 "Nasdaq 100"·ETF 이름은 그대로).
+  MA 차트 시장지수는 `data.market.MARKET_INDEX_LABELS`로 `"NASDAQ 150"` → 지수 라벨 `"NASDAQ 100"`(^NDX). 거래 기록 등에 남은 `"NASDAQ 100"`은
+  `is_us_market`이 계속 미국으로 본다. 위키백과 Nasdaq-100 표를 찾던 경로는 지웠다 — 목록은 FDR NASDAQ 상장 목록 앞 150개뿐이다.
 - **버튼 폭**: 세 탭(Universe · Trading History · Total Assets) 툴바 버튼은 한 폭(등록된 가장 긴 라벨, 8.17)이라 "NASDAQ 150"(101px)에 맞춰 모두 94 → **101px**.
   Universe 툴바 최소 폭 약 1,411px.
