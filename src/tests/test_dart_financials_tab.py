@@ -171,16 +171,18 @@ class TestTab(unittest.TestCase):
         t = self._tab()
         self.assertEqual([c.value.text() for c in t.kpi_cards], ["0", "0 (10.0%)", "0", "0"])   # 억원 of tiny values
         self.assertIn("2025 3Q", t.kpi_cards[0].label.text())
-        # Transposed: items down the side, periods across (newest first).
+        # Transposed: items down the side (the vertical header, frozen while
+        # scrolling sideways), periods across (newest first).
         self.assertEqual(t._table.rowCount(), 7)
-        self.assertEqual(t._table.columnCount(), 8)
-        self.assertEqual(t._table.item(0, 0).text(), "매출")
-        self.assertEqual(t._table.horizontalHeaderItem(1).text(), "2025 3Q")
-        self.assertEqual(t._table.horizontalHeaderItem(4).text(), "2024 4Q†")
-        self.assertIn("ⓡ", t._table.item(5, 2).text())
+        self.assertEqual(t._table.columnCount(), 7)
+        self.assertTrue(t._table.verticalHeader().isVisibleTo(t._table))
+        self.assertEqual(t._table.verticalHeaderItem(0).text(), "매출")
+        self.assertEqual(t._table.horizontalHeaderItem(0).text(), "2025 3Q")
+        self.assertEqual(t._table.horizontalHeaderItem(3).text(), "2024 4Q†")
+        self.assertIn("ⓡ", t._table.item(5, 1).text())
         t.set_mode("y")
-        self.assertEqual(t._table.columnCount(), 3)
-        self.assertEqual(t._table.horizontalHeaderItem(1).text(), "2025 3Q누적")
+        self.assertEqual(t._table.columnCount(), 2)
+        self.assertEqual(t._table.horizontalHeaderItem(0).text(), "2025 3Q누적")
         self.assertTrue(t.mode_buttons["y"].isChecked())
         self.assertEqual(t.segment_table.rowCount(), 3)                       # DX, DS, check
         self.assertEqual(t.segment_table.horizontalHeaderItem(2).text(), "2025 3Q*")

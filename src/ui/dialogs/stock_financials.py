@@ -336,27 +336,29 @@ class StockFinancialsTab(QWidget):
 
     def _fill_results_table(self, rows) -> None:
         """Items down the side, periods across (newest on the left), like the
-        segment table below it."""
+        segment table below it. The item names are the vertical header, so
+        they stay put while the periods scroll sideways."""
         items = [tr("매출", "Revenue"), "YoY", tr("영업이익", "Op. income"), tr("이익률", "Margin"),
                  tr("지배순이익", "Owners' NI") if any(r.get("net_is_owners") for r in self._quarters)
                  else tr("순이익", "Net income"), tr("비고", "Notes"), tr("접수일", "Received")]
-        corner = tr("분기", "Quarter") if self._mode == "q" else tr("연도", "Year")
         periods = list(reversed(rows))
         t = self._table
         t.setUpdatesEnabled(False)
         try:
             t.clear()
-            t.setColumnCount(len(periods) + 1)
-            t.setHorizontalHeaderLabels([corner, *[
+            t.setColumnCount(len(periods))
+            t.setHorizontalHeaderLabels([
                 self._period_label(r) + ("†" if r.get("derived") else "") + ("‡" if r.get("lookahead") else "")
-                for r in periods]])
+                for r in periods])
             t.setRowCount(len(items))
+            vh = t.verticalHeader()
             for i, name in enumerate(items):
-                item = QTableWidgetItem(name)
-                item.setForeground(QColor(TEXT_MUTED))
-                t.setItem(i, 0, item)
+                head = QTableWidgetItem(name)
+                head.setTextAlignment(int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter))
+                t.setVerticalHeaderItem(i, head)
+            vh.setVisible(True)                      # setup_table hides it; here it is the frozen column
             base_currency = (rows[-1]["currency"] or "KRW") if rows else "KRW"
-            for j, r in enumerate(periods, start=1):
+            for j, r in enumerate(periods):
                 div, unit_ko, unit_en = fm.unit_of(r["currency"])       # each period in its own unit
                 cells = [
                     (self._amt(r["revenue"], div), None, None),
