@@ -1,7 +1,7 @@
 """ui/dialogs/stock_ma_side.py — the MA chart dialog's right panel
 (ui/dialogs/stock_ma.py StockMaDialog): the investor net-buying table (KR
-stocks) or the WTI futures curve, the "전략 점검" block, the 'Company Info'
-button, and the geometry pass that lines the panel up with the dialog's
+stocks) or the WTI futures curve, the "전략 점검" block, and the geometry
+pass that lines the panel up with the dialog's
 button row and chart.
 
 Moved out of ui/dialogs/stock_ma.py (2026-11-15, code review #5). The dialog
@@ -9,7 +9,7 @@ still exposes the pieces under its old attribute names (_right_panel,
 _right_layout, _right_title, _right_table, _right_gap, strategy_section) and
 keeps _align_right_panel as a thin wrapper around StockMaSidePanel.align.
 """
-from PyQt6.QtWidgets import QVBoxLayout, QPushButton, QLabel, QTableWidget, QTableWidgetItem, QHeaderView, QWidget
+from PyQt6.QtWidgets import QVBoxLayout, QLabel, QTableWidget, QTableWidgetItem, QHeaderView, QWidget
 from PyQt6.QtCore import Qt, QPoint, QObject, QEvent
 from PyQt6.QtGui import QColor, QFont, QFontMetrics
 
@@ -176,7 +176,7 @@ class StockMaSidePanel:
     `widget` is the plain QWidget the dialog adds to its splitter (the widget
     tree is the one the dialog used to build inline)."""
 
-    def __init__(self, ticker, market, investor_data, is_stock: bool, name: str = "", signal_ctx=None):
+    def __init__(self, ticker, market, investor_data, name: str = "", signal_ctx=None):
         self._ticker = ticker
         self._market = market
         self._name = name or ticker
@@ -185,14 +185,16 @@ class StockMaSidePanel:
         self.title = None       # first line of the panel, level with the button row
         self.table = None       # starts level with the chart's top edge
         self.gap = None         # spacer between the two, sized by align()
-        self.widget, self.layout = self._build(investor_data or [], is_stock)
+        self.widget, self.layout = self._build(investor_data or [])
 
-    def _build(self, inv: list, is_stock: bool):
+    def _build(self, inv: list):
         """Top to bottom (user direction 2026-11-15): the table's title level
         with the button row, the investor-flow table (KR stocks) or futures
         curve (WTI) starting level with the chart's top edge, the "전략 점검"
-        block (markets some registered strategy applies to), the 'Company Info' button. `align` keeps the two alignments as
-        the button row wraps or the dialog resizes."""
+        block (markets some registered strategy applies to). `align` keeps the two
+        alignments as the button row wraps or the dialog resizes. The 'Company Info'
+        button (Naver / Google Finance link) was removed on 2026-11-26: the dialog's
+        재무 tab (stock_financials.py) replaces it."""
         panel = QWidget()
         v = QVBoxLayout(panel)
         v.setContentsMargins(0, 0, 0, 0)
@@ -223,12 +225,6 @@ class StockMaSidePanel:
             else:
                 self.title = self.strategy_section     # its title line goes level with the buttons
             v.addWidget(self.strategy_section)
-
-        if is_stock:
-            fin_btn = QPushButton(tr("기업 정보", "Company Info"))
-            fin_btn.clicked.connect(self._open_company_page)
-            v.addSpacing(10)
-            v.addWidget(fin_btn)
 
         if not inv:
             v.addStretch()
@@ -268,11 +264,3 @@ class StockMaSidePanel:
             if self.gap.height() != gap:
                 self.gap.setFixedHeight(gap)
                 v.activate()
-
-    def _open_company_page(self, *_):
-        import webbrowser
-        if self._market in ("KOSPI", "KOSDAQ"):
-            url = f"https://finance.naver.com/item/main.naver?code={str(self._ticker).zfill(6)}"
-        else:
-            url = f"https://www.google.com/finance?q={str(self._ticker).replace('.', '-')}"
-        webbrowser.open(url)

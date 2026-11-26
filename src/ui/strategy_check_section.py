@@ -132,7 +132,7 @@ class StrategyCheckSection(QWidget):
         start = self._ctx.default_variant or signal_api.default_variant()
         self._select(start if start in self._variants else (self._variants[0] if self._variants else None))
         # Only what it needs: the space below the investor table goes to the
-        # table, and this block sits right above the "기업 정보" button.
+        # table, and this block sits at the bottom of the panel.
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self._show()
 
