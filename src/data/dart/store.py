@@ -31,7 +31,8 @@ import sqlite3
 # 5 (2026-11-26, review_codex): fin_std.avail_dt -- the day a derived value became
 #   knowable (a Q4 resting on a Q3 received after the annual report); growth only
 #   between equal currencies.
-SCHEMA_VERSION = 5
+# 6 (2026-11-26, stage 4): seg_fetch -- which filings' segment revenue was read.
+SCHEMA_VERSION = 6
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS company (
@@ -141,6 +142,17 @@ CREATE TABLE IF NOT EXISTS fin_fetch (
   fs_div TEXT,
   fetched_at TEXT
 );
+
+-- Segment revenue requests (stage 4): one row per filing (the newest receipt
+-- of a period) whose segments were read, so a run resumes with the rest.
+CREATE TABLE IF NOT EXISTS seg_fetch (
+  rcept_no TEXT PRIMARY KEY,
+  status TEXT NOT NULL,              -- ok / sum_mismatch / review / na (no revenue to check against)
+  source TEXT,                       -- xbrl / html_segment / html_product / single
+  detail TEXT,
+  fetched_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_segment_rev_period ON segment_rev(corp_code, fiscal_year, fiscal_q);
 
 CREATE TABLE IF NOT EXISTS fin_unmapped (
   rcept_no TEXT NOT NULL,

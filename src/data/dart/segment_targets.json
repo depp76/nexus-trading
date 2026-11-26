@@ -1,0 +1,4 @@
+{
+  "_comment": "Stocks whose segment revenue is collected besides the Universe's KOSPI/KOSDAQ stocks (docs/dart_db_plan_2026-11-26.md 5-5). The plan's verification stocks are listed.",
+  "stocks": ["005930", "000660", "005380", "043260", "036930"]
+}

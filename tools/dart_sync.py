@@ -9,6 +9,8 @@ Only parses arguments and calls ``data.dart.sync.run_sync`` (collection) or
     python tools/dart_sync.py --auto                 # scheduler entry (plan 12)
     python tools/dart_sync.py --show 005930 [--as-of 2025-11-10]   # quarterly growth table
     python tools/dart_sync.py --issues               # unmapped accounts, fs_div changes, ...
+    python tools/dart_sync.py --segments [--tickers 005930 ...]   # revenue by segment (stage 4)
+    python tools/dart_sync.py --segment-report [--tickers ...]    # check results + names to map
 """
 import argparse
 import logging
@@ -29,6 +31,8 @@ def main(argv=None) -> int:
     g.add_argument("--backfill", action="store_const", const="backfill", dest="mode")
     g.add_argument("--daily", action="store_const", const="daily", dest="mode")
     g.add_argument("--auto", action="store_const", const="auto", dest="mode")
+    g.add_argument("--segments", action="store_const", const="segments", dest="mode")
+    g.add_argument("--segment-report", action="store_true", help="print the segment check per stock")
     g.add_argument("--show", metavar="CODE", help="print the quarterly growth table of a stock")
     g.add_argument("--issues", action="store_true", help="print what collection could not do cleanly")
     ap.add_argument("--as-of", help="with --show: only filings received by this date (YYYY-MM-DD)")
@@ -41,10 +45,14 @@ def main(argv=None) -> int:
 
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    if args.show or args.issues:
+    if args.show or args.issues or args.segment_report:
         from data.dart import query
-        print(query.format_growth_table(args.show, args.as_of, quarters=args.quarters) if args.show
-              else query.format_issues(args.limit))
+        if args.show:
+            print(query.format_growth_table(args.show, args.as_of, quarters=args.quarters))
+        elif args.issues:
+            print(query.format_issues(args.limit))
+        else:
+            print(query.format_segment_report(args.tickers))
         return 0
 
     last = {"msg": None}
@@ -73,7 +81,8 @@ def main(argv=None) -> int:
     finally:
         signal.signal(signal.SIGINT, previous)
     print(f"status={res.status} run={res.run_id} calls={res.calls} new_filings={res.filings_added} "
-          f"periods={res.periods_fetched} pending={res.pending_left}" + (f" error={res.error}" if res.error else ""))
+          f"periods={res.periods_fetched} segments={res.segments_done} pending={res.pending_left}"
+          + (f" error={res.error}" if res.error else ""))
     return 0 if res.status in ("done", "partial", "skipped") else 1
 
 
