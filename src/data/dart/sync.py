@@ -186,6 +186,10 @@ class SyncResult:
     periods_failed: int = 0           # financial periods whose request failed (left pending)
     segments_failed: int = 0          # segment periods whose request failed
     unknown_tickers: tuple = ()       # tickers with no corp code even after the company list
+    periods_waiting: int = 0          # financial periods DART has not loaded yet (left pending, not progress)
+    # Why a partial run stopped: daily_limit (our api_usage count), server_limit
+    # (DART's 020), budget (this run's), cancelled; None otherwise (review_codex 4 P2).
+    stop_reason: str | None = None
 
 
 class _Cancelled(Exception):
@@ -245,11 +249,14 @@ def run_sync(mode: str = "auto", trigger: str = "cli", *, budget: int | None = N
                 client = DartClient(conn, key, cache_dir, run_id=run_id, budget=budget, cancel=cancel)
             try:
                 job = _Job(conn, client, today, years, cancel, on_progress, tickers, priority)
-                status, error = "done", None
+                status, error, stop_reason = "done", None, None
                 try:
                     job.run(mode)
-                except (DartBudgetExceeded, DartCancelled, _Cancelled) as e:
-                    status, error = "partial", str(e) or "cancelled"
+                except DartBudgetExceeded as e:
+                    status, error, stop_reason = "partial", str(e), getattr(e, "reason", "daily_limit")
+                    conn.rollback()
+                except (DartCancelled, _Cancelled) as e:
+                    status, error, stop_reason = "partial", str(e) or "cancelled", "cancelled"
                     conn.rollback()
                 except Exception as e:
                     # boundary: a run records any failure in sync_run instead of raising into the caller's thread.
@@ -271,7 +278,7 @@ def run_sync(mode: str = "auto", trigger: str = "cli", *, budget: int | None = N
                 _record_run(conn, run_id, trigger, mode, status, calls, job.filings_added, error, finished=True)
                 return SyncResult(status, run_id, calls, job.filings_added, job.periods_fetched, pending, error,
                                   job.segments_done, job.periods_failed, job.segments_failed,
-                                  tuple(job.unknown_tickers))
+                                  tuple(job.unknown_tickers), job.periods_waiting, stop_reason)
             finally:
                 close = getattr(client, "close", None)
                 if callable(close):
@@ -313,6 +320,8 @@ class _Job:
         self.filings_added = 0
         self.periods_fetched = 0
         self.periods_failed = 0
+        self.periods_waiting = 0
+        self._still_pending: set = set()  # receipts asked in this run that stayed pending (not picked again)
         self.segments_done = 0
         self.segments_failed = 0
         self.unknown_tickers: list[str] = []
@@ -494,13 +503,9 @@ class _Job:
         is logged and left pending for the next run; the run stops only on a
         fatal status (key / service problems) or MAX_CONSECUTIVE_ERRORS failures
         in a row (review_agy H3)."""
-        sql, args = self._pending_sql(since)
-        pending = [dict(r) for r in self.conn.execute(sql, args)]
-        if not pending:
+        groups = self._pending_groups(since)
+        if not groups:
             return                      # nothing to order: no Universe / market-cap lookup (review_agy M1)
-        groups: dict = {}
-        for r in pending:
-            groups.setdefault((r["corp_code"], r["bsns_year"], r["reprt_code"]), []).append(r)
         rank = self._rank({g[0]["stock_code"] for g in groups.values()})
         q_of = fil.Q_BY_REPRT
         order = sorted(groups, key=lambda k: (rank(groups[k][0]["stock_code"]), k[0], k[1], q_of[k[2]]))
@@ -518,7 +523,8 @@ class _Job:
         groups: dict = {}
         for r in self.conn.execute(sql, args):
             r = dict(r)
-            groups.setdefault((r["corp_code"], r["bsns_year"], r["reprt_code"]), []).append(r)
+            if r["rcept_no"] not in self._still_pending:
+                groups.setdefault((r["corp_code"], r["bsns_year"], r["reprt_code"]), []).append(r)
         return groups
 
     def _financial_step(self, key, members, errors) -> None:
@@ -528,7 +534,7 @@ class _Job:
         self._check()
         corp, fy, reprt = key
         try:
-            self._fetch_group(corp, fy, reprt, members)
+            closed = self._fetch_group(corp, fy, reprt, members)
         except DartApiError as e:
             self.conn.rollback()
             if is_fatal(e):
@@ -541,7 +547,14 @@ class _Job:
             return
         errors["fin"] = 0
         self.conn.commit()
-        self.periods_fetched += 1
+        # Only a period whose pending receipts got their numbers is progress; one
+        # DART has not loaded yet is a wait -- counting it made the app start
+        # another run a minute later for nothing (review_codex 4 P1).
+        self._still_pending |= {m["rcept_no"] for m in members} - closed
+        if closed:
+            self.periods_fetched += 1
+        else:
+            self.periods_waiting += 1
 
     def _segment_step(self, p, errors) -> None:
         """One period's segments; failures handled like a financial period's."""
@@ -600,7 +613,9 @@ class _Job:
                     self._segment_step(p, errors)
         self._progress(total, total, "financials done")
 
-    def _fetch_group(self, corp, fy, reprt, members):
+    def _fetch_group(self, corp, fy, reprt, members) -> set:
+        """Fetch and store one period; returns the receipts among `members` (the
+        pending ones) that were closed -- empty when they all still wait."""
         latest = max(m["rcept_no"] for m in members)
         fm = members[0]["fiscal_month"] or 12
         years = api_years(members, fy, fm)
@@ -621,7 +636,7 @@ class _Job:
         if not rows and recent:
             # DART lists a report at once but loads its statements hours later:
             # leave it pending (nothing cached or marked) and ask again next run.
-            return
+            return set()
         now = now_iso()
         kw = {}
         source = "api"
@@ -647,7 +662,7 @@ class _Job:
                 "VALUES (?, 'no_data', NULL, NULL, ?)", [(m["rcept_no"], now) for m in members])
             fin.record_issue(self.conn, latest, corp, fy, q, "no_data",
                              "no API data and no income statement found in the document")
-            return
+            return {m["rcept_no"] for m in members}
         src, missing = fin.store_period(self.conn, corp, fy, reprt, fs_div, rows, self.account_map,
                                         fallback_rcept=latest, **kw)
         if source == "document":
@@ -675,6 +690,7 @@ class _Job:
                 "VALUES (?, 'awaiting_correction', ?, ?, ?, ?)", (r, src, fs_div, now, retry))
             fin.record_issue(self.conn, r, corp, fy, q, "correction_not_served",
                              f"the API still answers with {src}; asked again from {retry}")
+        return done & {m["rcept_no"] for m in members}
 
     # ---- segments (stage 4) -------------------------------------------------------
 
@@ -741,7 +757,12 @@ class _Job:
         # stored for this receipt (fin_fetch.src_rcept_no; an attachment-only
         # correction points at the original).
         ff = self.conn.execute("SELECT status, src_rcept_no FROM fin_fetch WHERE rcept_no = ?", (rcept,)).fetchone()
-        if ff is None:
+        if ff is None or ff["status"] == "awaiting_correction":
+            # Not in yet, or the API still serves the original's statements for
+            # this correction: checking the correction's segment table against
+            # the original's revenue would settle a false result for good
+            # (review_codex 4 P1). An attachment-only correction is "ok" with the
+            # original's receipt and goes ahead.
             return False
         rev = None
         if ff["src_rcept_no"]:

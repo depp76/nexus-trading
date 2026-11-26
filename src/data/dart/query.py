@@ -91,7 +91,12 @@ def get_financials(code: str, as_of=None, *, metrics=None, conn: sqlite3.Connect
       None when there was none yet) and under each Q3 correction received
       later (``lookahead`` True on those). The newest row received by `as_of`
       is returned, so a past as-of answer never changes when later filings are
-      loaded (review_codex P1, review_codex 2 P1)."""
+      loaded (review_codex P1, review_codex 2 P1).
+    - One statement version per quarter: the newest receipt received by
+      `as_of` that stored the quarter's own rows, and only its metrics -- a
+      metric missing from a correction is missing, not the original's amount
+      next to the correction's others (review_codex 4 P1). A later Q3's
+      restated Q4 (derived 2) still replaces its metric when newer."""
     with _reader(conn, db_path) as db:
         if db is None:
             return []
@@ -110,9 +115,21 @@ def get_financials(code: str, as_of=None, *, metrics=None, conn: sqlite3.Connect
         if metrics:
             sql += f" AND metric IN ({','.join('?' * len(metrics))})"
             args.extend(metrics)
+        rows = [dict(r) for r in db.execute(sql + " ORDER BY rcept_no", args)]
+        version: dict = {}              # (fy, fq) -> the newest receipt with the quarter's own rows
+        for r in rows:
+            if (r["derived"] or 0) != 2:
+                version[(r["fiscal_year"], r["fiscal_q"])] = r["rcept_no"]
         latest: dict = {}
-        for r in db.execute(sql + " ORDER BY rcept_no", args):
-            latest[(r["fiscal_year"], r["fiscal_q"], r["metric"])] = dict(r)
+        for r in rows:                  # rcept_no order: a newer restated Q4 overrides the base row
+            ver = version.get((r["fiscal_year"], r["fiscal_q"]))
+            if ver is None:
+                continue
+            if (r["derived"] or 0) == 2:
+                if r["rcept_no"] > ver:
+                    latest[(r["fiscal_year"], r["fiscal_q"], r["metric"])] = r
+            elif r["rcept_no"] == ver:
+                latest[(r["fiscal_year"], r["fiscal_q"], r["metric"])] = r
         fm_row = db.execute("SELECT fiscal_month FROM company WHERE corp_code = ?", (corp,)).fetchone()
         fiscal_month = fm_row[0] if fm_row else None
 

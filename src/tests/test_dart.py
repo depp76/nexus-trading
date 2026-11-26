@@ -675,7 +675,8 @@ class TestReviewStore(_TmpMixin, unittest.TestCase):
     def test_older_schema_is_migrated_once(self):
         conn = sqlite3.connect(self.db)                         # a version-3 file: no currency, old views
         old_schema = "\n".join(line for line in store._SCHEMA.splitlines()
-                               if not line.startswith(("  currency TEXT DEFAULT", "  avail_dt TEXT")))
+                               if not line.startswith(("  currency TEXT DEFAULT", "  avail_dt TEXT",
+                                                       "  ytd_derived INTEGER")))
         conn.executescript(old_schema)
         conn.execute("INSERT INTO sync_state(key, value) VALUES ('schema_version', '3')")
         conn.execute("INSERT INTO fin_std VALUES ('C1', 2025, 1, 'CFS', 'revenue', 5, 5, 0, 'r1', '2025-05-15')")
@@ -1129,7 +1130,8 @@ class TestReviewCodex(_TmpMixin, unittest.TestCase):
         got = dict(conn.execute("SELECT rcept_no, status FROM fin_fetch "
                                 "WHERE rcept_no IN ('20251125000030', '20251125000031')").fetchall())
         self.assertEqual(got, {"20251125000030": "awaiting_correction", "20251125000031": "ok"})
-        self.assertEqual(self._run("auto", dt.date(2025, 12, 6)).periods_fetched, 1)   # due at once
+        res = self._run("auto", dt.date(2025, 12, 6))                  # due at once: asked, still the original
+        self.assertEqual((res.periods_fetched, res.periods_waiting), (0, 1))
 
     # ---- P1: a Q4 resting on a later Q3 ----
     def test_q4_is_available_from_the_day_its_q3_was_received(self):
@@ -1586,3 +1588,130 @@ class TestUniverseOrder(_TmpMixin, unittest.TestCase):
         with open(paths.UNIVERSE_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(rows, f)
         self.assertEqual(dsync.universe_priority(), ["005930", "000660", "247540"])
+
+
+class TestReviewCodex4(_TmpMixin, unittest.TestCase):
+    """review_codex.md (2026-11-26, fourth review, base e4518f7)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtWidgets import QApplication
+        cls._app = QApplication.instance() or QApplication([])     # DartAutoSync builds labels
+
+    def _conn(self):
+        conn = connect(self.db)
+        self.addCleanup(conn.close)
+        return conn
+
+    def _run(self, mode, today, **kw):
+        kw.setdefault("client_factory", self.factory())
+        return run_sync(mode, "cli", api_key="k" * 40, db_path=self.db, cache_dir=self.cache, lock_path=self.lock,
+                        today=today, priority=[], **kw)
+
+    # ---- P1: one statement version per quarter ----
+    def test_a_metric_missing_from_a_correction_is_not_taken_from_the_original(self):
+        conn = self._conn()
+        fin.store_period(conn, SAMSUNG, 2025, "11013", "CFS", _is_rows("100", "10", "8", "7", "20250515000001"))
+        corr = [r for r in _is_rows("100", "11", "8", "7", "20250601000009") if r["account_id"] != "ifrs-full_Revenue"]
+        fin.store_period(conn, SAMSUNG, 2025, "11013", "CFS", corr)
+        conn.commit()
+
+        def q1(as_of=None):
+            return {r["metric"]: (r["value_q"], r["rcept_no"])
+                    for r in query.get_financials(SAMSUNG, as_of=as_of, conn=conn) if r["fiscal_q"] == 1}
+        before, after = q1("2025-05-20"), q1()
+        self.assertEqual(before["revenue"], (100.0, "20250515000001"))       # the original, before the correction
+        self.assertNotIn("revenue", after)                                   # not 100 next to the correction's 11
+        self.assertEqual(after["op_income"], (11.0, "20250601000009"))
+        view = dict(conn.execute("SELECT metric, rcept_no FROM v_fin_latest WHERE fiscal_q = 1").fetchall())
+        self.assertNotIn("revenue", view)
+        self.assertEqual(view["op_income"], "20250601000009")
+        conn.execute("INSERT INTO company(corp_code, stock_code, corp_name) VALUES (?, '005930', 'x')", (SAMSUNG,))
+        row = query.growth_table("005930", conn=conn)[-1]
+        self.assertEqual((row["revenue"], row["op_margin"]), (None, None))
+
+    def test_restated_q4_from_a_later_q3_is_still_used(self):
+        conn = self._conn()
+        fin.store_period(conn, SAMSUNG, 2025, "11014", "CFS",
+                         _is_rows("300", "30", "24", "21", "20251114000001",
+                                  add={"rev": "600", "op": "60", "ni": "48", "own": "42"}))
+        fin.store_period(conn, SAMSUNG, 2025, "11011", "CFS", _is_rows("1000", "100", "80", "70", "20260320000001"))
+        fin.store_period(conn, SAMSUNG, 2025, "11014", "CFS",
+                         _is_rows("320", "30", "24", "21", "20260401000002",
+                                  add={"rev": "620", "op": "60", "ni": "48", "own": "42"}))
+        q4 = {r["metric"]: r for r in query.get_financials(SAMSUNG, conn=conn) if r["fiscal_q"] == 4}
+        self.assertEqual((q4["revenue"]["value_q"], q4["revenue"]["lookahead"]), (380.0, True))
+        view = conn.execute("SELECT value_q FROM v_fin_latest WHERE fiscal_q = 4 AND metric = 'revenue'").fetchone()
+        self.assertEqual(view[0], 380.0)
+
+    # ---- P1: a report DART has not loaded is not progress ----
+    def test_unloaded_new_report_is_asked_once_per_run_and_not_counted(self):
+        self.fake.list_rows.append(FakeDart._lr(BANK, "105560", "은행지주", "Y", "분기보고서 (2025.09)",
+                                                "20251124000040"))
+        self._run("init", dt.date(2025, 11, 23))
+        n = len(self.fake.requests)
+        res = self._run("auto", dt.date(2025, 11, 26))
+        asked = [p["fs_div"] for ep, p in self.fake.requests[n:]
+                 if ep == "fnlttSinglAcntAll.json" and p["corp_code"] == BANK]
+        self.assertEqual(sorted(asked), ["CFS", "OFS"])                      # daily phase only, not again in backfill
+        self.assertEqual(res.status, "done")
+        self.assertGreaterEqual(res.periods_waiting, 1)
+        from ui.dart_sync_thread import DartAutoSync
+        s = DartAutoSync(enabled=True, continue_ms=10_000)
+        self.addCleanup(s.stop)
+        s._on_done({"status": "done", "info": {"calls_left": 100}, "result": dsync.SyncResult(
+            "done", "r", periods_fetched=0, periods_waiting=1)})
+        self.assertFalse(s._continue_timer.isActive())                       # no run a minute later for it
+
+    # ---- P1: segments wait while the financials await a correction ----
+    def test_segments_wait_while_the_correction_is_awaited(self):
+        fake = self.fake
+        fake.list_rows.append(FakeDart._lr(SAMSUNG, "005930", "삼성전자", "Y", "[기재정정]분기보고서 (2025.09)",
+                                           "20251125000030"))
+        table = ("<P>(단위 : 원)</P><TABLE><TR><TH>구분</TH><TH>매출액</TH></TR>"
+                 "<TR><TD>가부문</TD><TD>100</TD></TR><TR><TD>나부문</TD><TD>51</TD></TR>"
+                 "<TR><TD>합계</TD><TD>151</TD></TR></TABLE>")
+        fake.documents["20251125000030"] = ("<DOCUMENT><TITLE>3. 연결재무제표 주석</TITLE><TITLE>4. 영업부문(연결)</TITLE>"
+                                            + table + "<TITLE>4. 재무제표</TITLE></DOCUMENT>")
+        self._run("segments", dt.date(2025, 12, 5), tickers=["005930"])        # 10 days on: awaiting_correction
+        conn = self._conn()
+        self.assertEqual(conn.execute("SELECT status FROM fin_fetch WHERE rcept_no = '20251125000030'").fetchone()[0],
+                         "awaiting_correction")
+        self.assertIsNone(conn.execute("SELECT 1 FROM seg_fetch WHERE rcept_no = '20251125000030'").fetchone())
+        fake.fin[(SAMSUNG, "2025", "11014", "CFS")] = _is_rows(
+            "151", "-5", "-3", "-2", "20251125000030", add={"rev": "371", "op": "17", "ni": "14", "own": "13"})
+        self._run("segments", dt.date(2025, 12, 12), tickers=["005930"])       # the retry gets the correction
+        self.assertEqual(tuple(conn.execute("SELECT status, source FROM seg_fetch WHERE rcept_no = '20251125000030'")
+                               .fetchone()), ("ok", "html_segment"))
+
+    # ---- P2: a summed cumulative follows the quarter before ----
+    def test_summed_cumulative_is_recomputed_when_the_quarter_before_is_restored(self):
+        conn = self._conn()
+        fin.store_period(conn, SAMSUNG, 2025, "11013", "CFS", _is_rows("100", "10", "8", "7", "20250515000001"))
+        fin.store_period(conn, SAMSUNG, 2025, "11012", "CFS", _is_rows("50", "5", "4", "3", "20250814000002"))
+        h1 = conn.execute("SELECT value_q, value_ytd, ytd_derived FROM fin_std WHERE fiscal_q = 2 "
+                          "AND metric = 'revenue'").fetchone()
+        self.assertEqual(tuple(h1), (50.0, 150.0, 1))
+        fin.store_period(conn, SAMSUNG, 2025, "11013", "CFS", _is_rows("110", "10", "8", "7", "20250515000001"))
+        h1 = conn.execute("SELECT value_q, value_ytd FROM fin_std WHERE fiscal_q = 2 AND metric = 'revenue'").fetchone()
+        self.assertEqual(tuple(h1), (50.0, 160.0))                           # the reported 50 kept, the sum redone
+
+    # ---- P2: DART's own 020 is a limit stop ----
+    def test_server_limit_is_a_structured_limit_stop(self):
+        def hook(ep, params):
+            if ep == "fnlttSinglAcntAll.json":
+                return FakeResp({"status": "020", "message": "limit"})
+        self.fake.hook = hook
+        res = self.sync("auto")
+        self.assertEqual((res.status, res.stop_reason), ("partial", "server_limit"))
+        st = dsync.collection_status(self.db, today=dt.date.fromisoformat(dsync.kst_today()))
+        self.assertEqual(st["calls_left"], 0)                                # every collector now waits for tomorrow
+        from ui.dart_sync_thread import DartAutoSync
+        s = DartAutoSync(enabled=True, continue_ms=10_000, reset_ms=lambda: 60_000)
+        self.addCleanup(s.stop)
+        s._on_done({"status": "partial", "error": res.error, "info": {"calls_left": 500}, "result": dsync.SyncResult(
+            "partial", "r", periods_fetched=3, stop_reason="server_limit")})
+        self.assertFalse(s._continue_timer.isActive())
+        self.assertTrue(s._reset_timer.isActive())
+        self.assertEqual(s.label.text(), "DART 한도 소진")
+        self.assertIn("020", s.limit_label.text())
