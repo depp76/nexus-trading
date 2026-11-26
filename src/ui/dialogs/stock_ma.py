@@ -39,7 +39,7 @@ Layout
     |   (2026-11-18: one line; MA check-box drop-down, period combo box) |
     |   FigureCanvas: price (+MA ramp)      | right panel (optional)   |
     |                 volume                |   investor / futures tbl |
-    |                 divergence            |   "Company Info ↗"        |
+    |                 divergence            |   "전략 점검" block       |
     |                 rsi                   |                          |
     |   horizontal scrollbar                |                          |
     +------------------------------------------------------------------+
@@ -50,7 +50,8 @@ period buttons; bonds also get the Y-axis +/- buttons.
 
 2026-11-15 (code review #5): the right panel (side tables, Trend Score block,
 Company Info, alignment) moved to ui/dialogs/stock_ma_side.py and the pure
-volume-bar / number helpers to ui/dialogs/stock_ma_helpers.py.
+volume-bar / number helpers to ui/dialogs/stock_ma_helpers.py. The Company
+Info button was removed on 2026-11-26 (the 재무 tab replaces it).
 
 2026-11-15 (later): the rest of the chart code moved into three mixins that
 StockMaDialog inherits; the dialog keeps construction, the header / button
@@ -86,6 +87,7 @@ from ui.dialogs.stock_ma_consts import (  # noqa: F401 -- re-exported for caller
 from ui.dialogs.stock_ma_hover import _HoverMixin
 from ui.dialogs.stock_ma_plot import _PlotMixin
 from ui.dialogs.stock_ma_side import StockMaSidePanel
+from ui.strategy_check_section import has_section
 from ui.dialogs.stock_ma_view import _ViewMixin
 from ui.dialogs.stock_financials import StockFinancialsTab
 from ui.common import create_font, FONT_HEADING, FONT_BODY, FONT_CAPTION, fit_to_screen
@@ -212,8 +214,12 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         self._right_table = None      # starts level with the chart's top edge
         self._right_gap = None        # spacer between the two, sized by _align_right_panel
         self._side = None             # StockMaSidePanel when the dialog has a right panel
-        if self._investor_data or is_stock:
-            panel = self._build_right_panel(is_stock)
+        self.strategy_section = None  # the panel's "전략 점검" block, when there is one
+        # Only something to show opens the panel: the investor/futures table or
+        # the "전략 점검" block (the Company Info button that every stock used to
+        # get was removed on 2026-11-26).
+        if self._investor_data or (is_stock and has_section(self._market)):
+            panel = self._build_right_panel()
             splitter.addWidget(panel)
             splitter.setStretchFactor(0, 10)
             splitter.setStretchFactor(1, 0)          # the panel keeps its content width; the chart flexes
@@ -437,10 +443,10 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
             return
         self._on_period_clicked(label, dict(_PERIODS).get(label))
 
-    def _build_right_panel(self, is_stock: bool) -> QWidget:
+    def _build_right_panel(self) -> QWidget:
         """The right panel (ui/dialogs/stock_ma_side.py); its pieces stay
         reachable under the attribute names the dialog has always used."""
-        self._side = StockMaSidePanel(self._ticker, self._market, self._investor_data, is_stock,
+        self._side = StockMaSidePanel(self._ticker, self._market, self._investor_data,
                                       name=self._name, signal_ctx=self._signal_ctx)
         self._right_panel = self._side.widget
         self._right_layout = self._side.layout
