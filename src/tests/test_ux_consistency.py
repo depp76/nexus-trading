@@ -226,7 +226,7 @@ class TestUniverseRowFitsRangeBar(unittest.TestCase):
     def test_52w_range_cell_fits_the_universe_row(self):
         """The 52W Range cell's bar + label line must fit the Universe row
         (user report 2026-10-25: at the app-wide 24 px the labels were cut)."""
-        from ui.widgets import StockTable
+        from ui.universe_table import StockTable
         from ui.delegates import RangeBarDelegate
         tbl = StockTable()
         self.assertGreaterEqual(tbl.verticalHeader().defaultSectionSize(),

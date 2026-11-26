@@ -138,7 +138,8 @@ class TestPerCellColor(unittest.TestCase):
     def test_negative_tper_is_warning_not_cheap(self):
         from PyQt6.QtGui import QColor
         from ui.colors import OK, WARN
-        from ui.widgets import COL_TPER, StockTable
+        from ui.universe_columns import COL_TPER
+        from ui.universe_table import StockTable
         table = StockTable()
         table.setRowCount(3)
         for row, val in enumerate((-8.2, 5.0, 80.0)):

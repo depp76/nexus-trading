@@ -4,7 +4,7 @@ and NumericItem (a QTableWidgetItem whose sort key is independent of its text).
 
 Moved out of ui/widgets.py (2026-11-15, code review #5); used by the Universe
 table (ui/universe_columns.py), the History grid (ui/history_table.py), Total
-Assets and the dialogs' numeric tables. ui.widgets still re-exports both.
+Assets and the dialogs' numeric tables.
 """
 from collections import namedtuple
 
