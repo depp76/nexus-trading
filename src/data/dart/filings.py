@@ -162,8 +162,9 @@ def store_filings(conn, rows: list[dict], first_year: int) -> int:
 def reclassify_company(conn, corp_code: str) -> None:
     """Recompute bsns_year / reprt_code of a company's filings after its fiscal
     month changed. A filing whose period moved loses what was standardised
-    under the old period (fin_std, issues, the fetch mark), so the next run
-    stores it again under the right fiscal year / quarter (review_agy H4)."""
+    under the old period (fin_std, issues, segment rows, the fetch marks), so
+    the next run stores it again under the right fiscal year / quarter
+    (review_agy H4)."""
     fm = _fiscal_month(conn, corp_code)
     for row in conn.execute("SELECT rcept_no, report_nm, bsns_year, reprt_code FROM filing WHERE corp_code = ?",
                             (corp_code,)).fetchall():
@@ -179,6 +180,10 @@ def reclassify_company(conn, corp_code: str) -> None:
         conn.execute("DELETE FROM fin_issue WHERE rcept_no = ?", (r,))
         conn.execute("DELETE FROM fin_unmapped WHERE rcept_no = ?", (r,))
         conn.execute("DELETE FROM fin_fetch WHERE rcept_no = ? OR src_rcept_no = ?", (r, r))
+        # Segment amounts sit under the old fiscal quarter and their fetch mark
+        # would keep the right quarter from ever being read (review_codex 2 P2).
+        conn.execute("DELETE FROM segment_rev WHERE rcept_no = ?", (r,))
+        conn.execute("DELETE FROM seg_fetch WHERE rcept_no = ?", (r,))
 
 
 def link_corrections(conn, corp_code: str) -> None:

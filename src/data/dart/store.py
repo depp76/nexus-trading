@@ -32,7 +32,9 @@ import sqlite3
 #   knowable (a Q4 resting on a Q3 received after the annual report); growth only
 #   between equal currencies.
 # 6 (2026-11-26, stage 4): seg_fetch -- which filings' segment revenue was read.
-SCHEMA_VERSION = 6
+# 7 (2026-11-26, review_codex 2): a Q4 row per Q3 version (fin_std.derived = 2 under the
+#   late Q3's receipt) instead of one value with an availability day; Q4 rows re-derived.
+SCHEMA_VERSION = 7
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS company (
@@ -76,11 +78,12 @@ CREATE TABLE IF NOT EXISTS fin_std (
   metric TEXT NOT NULL,
   value_q REAL,
   value_ytd REAL,
-  derived INTEGER DEFAULT 0,
+  derived INTEGER DEFAULT 0,         -- 1: computed (Q4 = annual - Q3, a quarter from cumulatives);
+                                     -- 2: Q4 restated under a Q3 correction received after the annual
   rcept_no TEXT NOT NULL,
   rcept_dt TEXT NOT NULL,
   currency TEXT DEFAULT 'KRW',       -- reporting currency (plan 4-6); amounts are never converted
-  avail_dt TEXT,                     -- value_q knowable from this day when later than rcept_dt (NULL: rcept_dt)
+  avail_dt TEXT,                     -- unused since schema 7 (a late Q3 gives its own Q4 row, derived = 2)
   PRIMARY KEY (corp_code, fiscal_year, fiscal_q, metric, rcept_no)
 );
 
@@ -255,8 +258,13 @@ def _migrate(conn: sqlite3.Connection, old: int | None) -> None:
             "WHERE r.rcept_no = fin_std.rcept_no AND r.currency IS NOT NULL AND r.currency <> '' LIMIT 1), 'KRW')")
     if "avail_dt" not in {r[1] for r in conn.execute("PRAGMA table_info(fin_std)")}:
         conn.execute("ALTER TABLE fin_std ADD COLUMN avail_dt TEXT")
-    if old is not None and old < 5:
-        # Q4 values get their availability day (and currency-aware bases).
+    if old is not None and old < 7:
+        # Periods closed as "no data" / "review" may have been closed by a failed
+        # request (review_codex 2 P1): look at them once more. A confirmed "no
+        # file" answer is in the negative cache, so this costs (almost) no calls.
+        conn.execute("DELETE FROM fin_fetch WHERE status = 'no_data'")
+        conn.execute("DELETE FROM seg_fetch WHERE status = 'review'")
+        # Q4 rows are rebuilt (currency-aware bases; one row per later Q3 version).
         from data.dart.financials import derive_q4
         for corp, year in conn.execute(
                 "SELECT DISTINCT corp_code, fiscal_year FROM fin_std WHERE fiscal_q = 4").fetchall():

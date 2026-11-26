@@ -302,6 +302,8 @@ class TestSegmentSync(_TmpMixin, unittest.TestCase):
                      "('20260310000001', 'B1', '11011', 2025, '2026-03-10')")
         conn.execute("INSERT INTO fin_issue(rcept_no, corp_code, fiscal_year, fiscal_q, kind) VALUES "
                      "('20260310000001', 'B1', 2025, 4, 'revenue_na')")
+        conn.execute("INSERT INTO fin_fetch(rcept_no, status, src_rcept_no) VALUES "
+                     "('20260310000001', 'ok', '20260310000001')")          # its financials are in (no revenue line)
         conn.commit()
         res = run_sync("segments", "cli", api_key="k" * 40, db_path=self.db, cache_dir=self.cache,
                        lock_path=self.lock, today=dt.date(2026, 11, 26), client_factory=self.factory(),

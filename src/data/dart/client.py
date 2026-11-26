@@ -66,6 +66,17 @@ class DartCancelled(Exception):
 FATAL_STATUSES = frozenset({"010", "011", "012", "800", "900", "901", "http_401", "http_403"})
 
 
+# DART's own "nothing there" answers to a file request (013 no data, 014 no
+# file). Only these may be remembered as "none" (a negative cache, a done mark);
+# any other failure -- network, a service status, a broken zip -- says nothing
+# about the file and must leave the receipt pending (review_codex 2 P1).
+NO_FILE_STATUSES = frozenset({"013", "014"})
+
+
+def is_no_file(error: DartApiError) -> bool:
+    return str(error.status) in NO_FILE_STATUSES
+
+
 def is_fatal(error: DartApiError) -> bool:
     return str(error.status) in FATAL_STATUSES
 

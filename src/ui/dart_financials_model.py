@@ -79,24 +79,44 @@ def quarter_rows(data: dict) -> list[dict]:
     return out
 
 
+def same_basis(a: dict, b: dict) -> bool:
+    """Whether two rows may be added or compared: the same reporting currency
+    and the same statement kind (consolidated / separate). The data layer
+    applies this to YoY / QoQ; the tab's own sums and annual comparisons must
+    too (review_codex 2 P2)."""
+    return (a.get("currency") or "KRW") == (b.get("currency") or "KRW") and a.get("fs_div") == b.get("fs_div")
+
+
+def _quarter_before(key: tuple[int, int], n: int) -> tuple[int, int]:
+    idx = key[0] * 4 + key[1] - 1 - n
+    return idx // 4, idx % 4 + 1
+
+
 def kpis(quarters: list[dict]) -> dict:
-    """The four cards' numbers from quarter_rows (latest quarter first)."""
+    """The four cards' numbers from quarter_rows. The trailing-four-quarter
+    revenue needs the four *consecutive* fiscal quarters ending at the latest
+    one, all with a revenue on the same basis -- with a quarter missing (an
+    initial load under way, one filing failed) there is no sum, rather than a
+    sum of whatever four rows come last; the comparison likewise needs the
+    four quarters before them (review_codex 2 P2)."""
     if not quarters:
         return {}
     last = quarters[-1]
     by = {(q["fiscal_year"], q["fiscal_q"]): q for q in quarters}
+    key = (last["fiscal_year"], last["fiscal_q"])
     ago = by.get((last["fiscal_year"] - 1, last["fiscal_q"]))
     margin_change = None
-    if last["op_margin"] is not None and ago and ago["op_margin"] is not None:
+    if last["op_margin"] is not None and ago and ago["op_margin"] is not None and same_basis(ago, last):
         margin_change = last["op_margin"] - ago["op_margin"]
-    revs = [q["revenue"] for q in quarters]
-    ttm = ttm_prev = None
-    if len(revs) >= 4 and all(v is not None for v in revs[-4:]):
-        ttm = sum(revs[-4:])
-        if len(revs) >= 8 and all(v is not None for v in revs[-8:-4]):
-            ttm_prev = sum(revs[-8:-4])
-    return {"quarter": (last["fiscal_year"], last["fiscal_q"]), "last": last,
-            "margin_change": margin_change, "ttm": ttm, "ttm_growth": growth(ttm, ttm_prev)}
+
+    def window(start: int):
+        rows = [by.get(_quarter_before(key, start + i)) for i in range(4)]
+        if all(r is not None and r["revenue"] is not None and same_basis(r, last) for r in rows):
+            return sum(r["revenue"] for r in rows)
+        return None
+    ttm, ttm_prev = window(0), window(4)
+    return {"quarter": key, "last": last, "margin_change": margin_change, "ttm": ttm,
+            "ttm_growth": growth(ttm, ttm_prev) if ttm is not None else None}
 
 
 def annual_rows(quarters: list[dict]) -> list[dict]:
@@ -106,12 +126,15 @@ def annual_rows(quarters: list[dict]) -> list[dict]:
     by_year: dict = {}
     for q in quarters:
         by_year.setdefault(q["fiscal_year"], []).append(q)
-    ytd_at = {(q["fiscal_year"], q["fiscal_q"]): q["ytd"] for q in quarters}
+    at = {(q["fiscal_year"], q["fiscal_q"]): q for q in quarters}
     out = []
     for fy in sorted(by_year):
         last = max(by_year[fy], key=lambda q: q["fiscal_q"])
         vals = {k: last["ytd"].get(k) for k in ("revenue", "op_income", "net_income")}
-        prev = ytd_at.get((fy - 1, last["fiscal_q"]), {})
+        # The same cumulative a year before, only on the same currency and statement kind.
+        before = at.get((fy - 1, last["fiscal_q"]))
+        changed = before is not None and not same_basis(before, last)
+        prev = before["ytd"] if (before is not None and not changed) else {}
         out.append({
             "fiscal_year": fy, "partial_q": None if last["fiscal_q"] == 4 else last["fiscal_q"],
             "revenue": vals["revenue"], "op_income": vals["op_income"], "net_income": vals["net_income"],
@@ -122,7 +145,7 @@ def annual_rows(quarters: list[dict]) -> list[dict]:
                                                                   and vals["revenue"]) else None,
             "turn": _turn(vals["op_income"], prev.get("op_income")),
             "rcept_dt": last["rcept_dt"], "derived": False, "corrected": last["corrected"],
-            "currency": last["currency"], "fs_div": last["fs_div"],
+            "currency": last["currency"], "fs_div": last["fs_div"], "basis_changed": changed,
         })
     return out
 
@@ -200,16 +223,18 @@ def segment_view(data: dict, max_years: int = 6) -> dict:
         yoy = [None]
         for i in range(1, len(cols)):
             prev, cur = cols[i - 1], cols[i]
+            # Exactly the year before: with a year missing in between, the change
+            # over two years is not a year-on-year figure (review_codex 2 P2).
             comparable = (prev["fiscal_q"] == 4 and cur["fiscal_q"] == 4 and prev["basis"] == cur["basis"]
-                          and prev["gross"] == cur["gross"])
+                          and prev["gross"] == cur["gross"] and prev["fiscal_year"] == cur["fiscal_year"] - 1)
             yoy.append(growth(values[i], values[i - 1]) if comparable else None)
         # CAGR over the newest run of full years on one basis (gross or external).
         full = []
         for c, v in reversed(list(zip(cols, values))):
             if c["fiscal_q"] != 4:
                 continue
-            if full and c["gross"] != full[-1][2]:
-                break
+            if full and (c["gross"] != full[-1][2] or c["fiscal_year"] != full[-1][0] - 1):
+                break                          # another basis, or a year missing: the run ends
             if v:
                 full.append((c["fiscal_year"], v, c["gross"]))
         full.reverse()

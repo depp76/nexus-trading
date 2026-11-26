@@ -44,7 +44,7 @@ import re
 import zipfile
 
 from data.dart import documents as docs
-from data.dart.client import DartApiError
+from data.dart.client import DartApiError, is_no_file
 from data.dart.store import now_iso
 
 logger = logging.getLogger(__name__)
@@ -606,11 +606,11 @@ def fetch_xbrl(client, rcept_no: str, reprt_code: str, fs_div: str, cache_dir: s
             body = client.get_bytes("fnlttXbrl.xml", {"rcept_no": rcept_no, "reprt_code": reprt_code})
             data = _to_json(xbrl_candidates(body, fs_div))
         except DartApiError as e:
-            if e.status in ("network_error",) or str(e.status).startswith("http"):
-                raise
+            if not is_no_file(e):
+                raise                      # not an answer about the file: nothing cached, the period stays pending
             data = []
-        except zipfile.BadZipFile:
-            data = []
+        except zipfile.BadZipFile as e:
+            raise DartApiError("bad_reply", f"fnlttXbrl.xml of {rcept_no} is not a readable zip") from e
         _save(path, data)
     return _from_json(data)
 
@@ -634,11 +634,11 @@ def fetch_document(client, rcept_no: str, fs_div: str, cache_dir: str) -> tuple[
                 single = single or rs
             data = {"cands": _to_json(cands), "single": single}
         except DartApiError as e:
-            if e.status in ("network_error",) or str(e.status).startswith("http"):
+            if not is_no_file(e):
                 raise
             data = {"cands": [], "single": False}
-        except (zipfile.BadZipFile, IndexError, KeyError):
-            data = {"cands": [], "single": False}
+        except (zipfile.BadZipFile, IndexError, KeyError) as e:
+            raise DartApiError("bad_reply", f"document.xml of {rcept_no} is not a readable zip") from e
         _save(path, data)
     return _from_json(data["cands"]), bool(data["single"])
 

@@ -29,7 +29,7 @@ import os
 import re
 import zipfile
 
-from data.dart.client import DartApiError
+from data.dart.client import DartApiError, is_no_file
 from data.dart.financials import ACCOUNT_IDS, ACCOUNT_NAMES, account_name, is_net_income_name, is_owners_name
 
 logger = logging.getLogger(__name__)
@@ -294,7 +294,9 @@ _MARK = re.compile(r"^<!--fs_div=(CFS|OFS)-->")
 
 def fetch_document_income(client, rcept_no: str, reprt_code: str, cache_dir: str):
     """income_rows() of a filing's document. The statement section is cached
-    with its fs_div in a leading comment (an empty file: no statement found)."""
+    with its fs_div in a leading comment (an empty file: no statement found,
+    or DART answered that there is no document). Any other failure raises
+    DartApiError -- it is not "no statement" and nothing is cached for it."""
     path = os.path.join(cache_dir, "document", rcept_no[:4], f"{rcept_no}_is.xml")
     cached = None
     if os.path.exists(path):
@@ -315,12 +317,13 @@ def fetch_document_income(client, rcept_no: str, reprt_code: str, cache_dir: str
             names = zf.namelist()
             main = next((n for n in names if n == f"{rcept_no}.xml"), names[0])
             raw = zf.read(main)
-    except (DartApiError, zipfile.BadZipFile, IndexError, KeyError) as e:
-        logger.warning("DART document %s unavailable", rcept_no, exc_info=True)
-        status = getattr(e, "status", "")
-        if not (status == "network_error" or str(status).startswith("http")):
-            _write_section(path, None)     # DART's own answer (e.g. 014 no file): not asked again
-        return None
+    except DartApiError as e:
+        if is_no_file(e):
+            _write_section(path, None)     # DART says there is no document: not asked again
+            return None
+        raise                              # network / service failure: the caller keeps the receipt pending
+    except (zipfile.BadZipFile, IndexError, KeyError) as e:
+        raise DartApiError("bad_reply", f"document.xml of {rcept_no} is not a readable zip") from e
     found = find_income_section(decode_document(raw))
     _write_section(path, found)
     return section_rows(*found, rcept_no, reprt_code) if found else None

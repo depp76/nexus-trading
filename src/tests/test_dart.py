@@ -15,6 +15,7 @@ from unittest import mock
 from data.dart import filings as fil
 from data.dart import financials as fin
 from data.dart import query
+from data.dart import segments as seg
 from data.dart.client import DartBudgetExceeded, DartCancelled, DartClient, calls_today
 from data.dart.lock import SyncLock
 from data.dart.store import connect
@@ -134,6 +135,8 @@ class FakeDart:
                 zf.writestr(params["rcept_no"] + ".xml", self.documents[params["rcept_no"]])
             return FakeResp(content=buf.getvalue())
         if ep == "document.xml":
+            return FakeResp({"status": "014", "message": "file not found"})
+        if ep == "fnlttXbrl.xml":
             return FakeResp({"status": "014", "message": "file not found"})
         return FakeResp({"status": "100", "message": "bad endpoint"})
 
@@ -996,10 +999,10 @@ class TestReviewSync(_TmpMixin, unittest.TestCase):
                          _is_rows("30", "3", "2", "2", "20250620000009",
                                   add={"rev": "90", "op": "9", "ni": "6", "own": "5"}))
         early = [r for r in query.get_financials(SAMSUNG, as_of="2025-04-01", conn=conn) if r["metric"] == "revenue"][0]
-        self.assertEqual((early["value_q"], early["value_ytd"], early["lookahead"]), (None, 130.0, True))
+        self.assertEqual((early["value_q"], early["value_ytd"], early["lookahead"]), (None, 130.0, False))
         late = [r for r in query.get_financials(SAMSUNG, as_of="2025-06-20", conn=conn)
                 if r["metric"] == "revenue" and r["fiscal_q"] == 4][0]
-        self.assertEqual((late["value_q"], late["avail_dt"]), (40.0, "2025-06-20"))
+        self.assertEqual((late["value_q"], late["rcept_dt"], late["lookahead"]), (40.0, "2025-06-20", True))
 
     def test_half_year_value_is_filled_when_q1_arrives_later(self):
         conn = self._conn()
@@ -1097,18 +1100,19 @@ class TestReviewCodex(_TmpMixin, unittest.TestCase):
             r = [x for x in query.get_financials(SAMSUNG, as_of=as_of, conn=conn)
                  if x["fiscal_q"] == 4 and x["metric"] == "revenue"][0]
             return r["value_q"], r["value_ytd"], r["lookahead"]
-        self.assertEqual(q4("2026-03-21"), (None, 1000.0, True))        # only the annual total is known
+        self.assertEqual(q4("2026-03-21"), (None, 1000.0, False))       # only the annual total is known
         self.assertEqual(q4("2026-04-02"), (400.0, 1000.0, True))
         self.assertEqual(q4(), (400.0, 1000.0, True))
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM fin_issue WHERE kind = 'q4_uses_later_q3'").fetchone()[0],
                          4)
-        # The original Q3 turns up later: the Q4 known on the annual's day uses it, and the warning goes.
+        # The original Q3 turns up later: the Q4 known on the annual's day uses it; the restated one stays.
         fin.store_period(conn, SAMSUNG, 2025, "11014", "CFS",
                          _is_rows("250", "25", "20", "18", "20251114000003",
                                   add={"rev": "650", "op": "65", "ni": "52", "own": "46"}))
         self.assertEqual(q4("2026-03-21"), (350.0, 1000.0, False))
+        self.assertEqual(q4("2026-04-02"), (400.0, 1000.0, True))
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM fin_issue WHERE kind = 'q4_uses_later_q3'").fetchone()[0],
-                         0)
+                         4)
 
     def test_q4_does_not_depend_on_arrival_order(self):
         made = []
@@ -1130,8 +1134,9 @@ class TestReviewCodex(_TmpMixin, unittest.TestCase):
             }
             for k in order:
                 steps[k]()
-            return [(r["fiscal_q"], r["metric"], r["value_q"], r["avail_dt"])
-                    for r in query.get_financials(SAMSUNG, as_of="2026-03-25", conn=conn)]
+            return [(day, r["fiscal_q"], r["metric"], r["value_q"], r["rcept_no"])
+                    for day in ("2026-03-25", "2026-04-02", None)
+                    for r in query.get_financials(SAMSUNG, as_of=day, conn=conn)]
         self.assertEqual(load((1, 2, 3)), load((3, 2, 1)))
         self.assertEqual(load((1, 2, 3)), load((2, 3, 1)))
 
@@ -1217,6 +1222,151 @@ class TestReviewCodex(_TmpMixin, unittest.TestCase):
         self.addCleanup(check.close)
         self.assertEqual(check.execute("SELECT value FROM sync_state WHERE key = 'schema_version'").fetchone()[0], "2")
         self.assertEqual(check.execute("SELECT COUNT(*) FROM fin_fetch").fetchone()[0], 1)   # v3 would delete it
+
+class TestReviewCodex2(_TmpMixin, unittest.TestCase):
+    """review_codex.md, second round (2026-11-26, at commit 3a0a741)."""
+
+    def _conn(self):
+        conn = connect(self.db)
+        self.addCleanup(conn.close)
+        return conn
+
+    def _bank_half(self):
+        self.fake.list_rows.append(FakeDart._lr(BANK, "105560", "은행지주", "Y", "반기보고서 (2025.06)",
+                                                "20250814000020"))
+
+    # ---- P1: a document failure is not "no data" ----
+    def test_document_error_keeps_the_period_pending_until_it_can_be_read(self):
+        for failure in ("network", "800"):
+            with self.subTest(failure=failure):
+                self.setUp()
+                self._bank_half()
+                self.fake.documents["20250814000020"] = _doc()
+
+                def hook(ep, params, failure=failure):
+                    if ep == "document.xml":
+                        if failure == "network":
+                            raise requests.ConnectionError("down")
+                        return FakeResp({"status": "800", "message": "maintenance"})
+                self.fake.hook = hook
+                res = self.sync("backfill", tickers=["105560"])
+                conn = connect(self.db)
+                self.assertIsNone(conn.execute("SELECT 1 FROM fin_fetch WHERE rcept_no = '20250814000020'").fetchone())
+                self.assertEqual(res.pending_left, 1)
+                self.assertEqual(res.status, "failed" if failure == "800" else "done")      # 800 stops the run
+                self.fake.hook = None
+                res = self.sync("backfill", tickers=["105560"])                          # no cache to clear by hand
+                self.assertEqual((res.status, res.pending_left), ("done", 0))
+                self.assertEqual(conn.execute("SELECT status FROM fin_fetch WHERE rcept_no = '20250814000020'")
+                                 .fetchone()[0], "document")
+                conn.close()
+
+    def test_no_file_answer_is_still_remembered(self):
+        self._bank_half()                              # no document registered: the fake answers 014
+        self.sync("backfill", tickers=["105560"])
+        conn = self._conn()
+        self.assertEqual(conn.execute("SELECT status FROM fin_fetch WHERE rcept_no = '20250814000020'").fetchone()[0],
+                         "no_data")
+        n = len(self.fake.requests)
+        conn.execute("DELETE FROM fin_fetch")
+        conn.commit()
+        self.sync("backfill", tickers=["105560"])
+        self.assertEqual([ep for ep, _ in self.fake.requests[n:] if ep == "document.xml"], [])
+
+    # ---- P1: a second Q3 correction must not rewrite an earlier as-of answer ----
+    def test_each_q3_version_keeps_its_own_q4(self):
+        conn = self._conn()
+        fin.store_period(conn, SAMSUNG, 2025, "11011", "CFS", _is_rows("1000", "100", "80", "70", "20260320000001"))
+        fin.store_period(conn, SAMSUNG, 2025, "11014", "CFS",
+                         _is_rows("200", "20", "16", "14", "20260401000002",
+                                  add={"rev": "600", "op": "60", "ni": "48", "own": "42"}))
+
+        def q4(as_of):
+            r = [x for x in query.get_financials(SAMSUNG, as_of=as_of, conn=conn)
+                 if x["fiscal_q"] == 4 and x["metric"] == "revenue"][0]
+            return r["value_q"]
+        self.assertEqual((q4("2026-03-21"), q4("2026-04-02")), (None, 400.0))
+        fin.store_period(conn, SAMSUNG, 2025, "11014", "CFS",           # a second correction, 2026-05-01
+                         _is_rows("250", "25", "20", "18", "20260501000003",
+                                  add={"rev": "650", "op": "65", "ni": "52", "own": "46"}))
+        self.assertEqual((q4("2026-03-21"), q4("2026-04-02"), q4("2026-05-02"), q4(None)),
+                         (None, 400.0, 350.0, 350.0))             # 04-02 used to turn into None
+        view = conn.execute("SELECT value_q FROM v_fin_growth WHERE fiscal_year = 2025 AND fiscal_q = 4 "
+                            "AND metric = 'revenue'").fetchall()
+        self.assertEqual([r[0] for r in view], [350.0])
+
+    def test_a_corrected_annual_report_restates_q4_too(self):
+        conn = self._conn()
+        fin.store_period(conn, SAMSUNG, 2025, "11014", "CFS",
+                         _is_rows("200", "20", "16", "14", "20251114000001",
+                                  add={"rev": "600", "op": "60", "ni": "48", "own": "42"}))
+        fin.store_period(conn, SAMSUNG, 2025, "11011", "CFS", _is_rows("1000", "100", "80", "70", "20260320000001"))
+        fin.store_period(conn, SAMSUNG, 2025, "11014", "CFS",
+                         _is_rows("200", "20", "16", "14", "20260401000002",
+                                  add={"rev": "620", "op": "60", "ni": "48", "own": "42"}))
+        fin.store_period(conn, SAMSUNG, 2025, "11011", "CFS", _is_rows("1010", "100", "80", "70", "20260601000003"))
+        got = [(r["rcept_no"], r["value_q"], r["derived"]) for r in conn.execute(
+            "SELECT rcept_no, value_q, derived FROM fin_std WHERE fiscal_q = 4 AND metric = 'revenue' ORDER BY rcept_no")]
+        self.assertEqual(got, [("20260320000001", 400.0, 1),     # annual - the Q3 known that day
+                               ("20260401000002", 380.0, 2),     # the corrected Q3 against that annual
+                               ("20260601000003", 390.0, 1)])    # the corrected annual - the newest Q3
+
+    # ---- P1: segments wait for the correction's own revenue ----
+    def test_segments_wait_for_a_corrections_financials(self):
+        fake = self.fake
+        fake.list_rows.append(FakeDart._lr(SAMSUNG, "005930", "삼성전자", "Y", "[기재정정]분기보고서 (2025.09)",
+                                           "20251125000030"))
+        table = ("<P>(단위 : 원)</P><TABLE><TR><TH>구분</TH><TH>매출액</TH></TR>"
+                 "<TR><TD>가부문</TD><TD>100</TD></TR><TR><TD>나부문</TD><TD>51</TD></TR>"
+                 "<TR><TD>합계</TD><TD>151</TD></TR></TABLE>")
+        fake.documents["20251125000030"] = ('<DOCUMENT><TITLE>3. 연결재무제표 주석</TITLE><TITLE>4. 영업부문(연결)</TITLE>'
+                                            + table + "<TITLE>4. 재무제표</TITLE></DOCUMENT>")
+        res = run_sync("segments", "cli", api_key="k" * 40, db_path=self.db, cache_dir=self.cache,
+                       lock_path=self.lock, today=dt.date(2025, 11, 26), client_factory=self.factory(),
+                       tickers=["005930"])
+        self.assertEqual(res.status, "done", res.error)
+        conn = self._conn()
+        # The API still serves the original (revenue 130): the correction's segments are not judged yet.
+        self.assertIsNone(conn.execute("SELECT 1 FROM seg_fetch WHERE rcept_no = '20251125000030'").fetchone())
+        fake.fin[(SAMSUNG, "2025", "11014", "CFS")] = _is_rows(
+            "151", "-5", "-3", "-2", "20251125000030", add={"rev": "371", "op": "17", "ni": "14", "own": "13"})
+        run_sync("segments", "cli", api_key="k" * 40, db_path=self.db, cache_dir=self.cache, lock_path=self.lock,
+                 today=dt.date(2025, 11, 26), client_factory=self.factory(), tickers=["005930"])
+        self.assertEqual(tuple(conn.execute("SELECT status, source FROM seg_fetch WHERE rcept_no = '20251125000030'")
+                               .fetchone()), ("ok", "html_segment"))
+
+    # ---- P2: amounts and status of the same receipt ----
+    def test_segments_of_a_correction_without_a_table_do_not_show_the_original(self):
+        conn = self._conn()
+        conn.execute("INSERT INTO company(corp_code, stock_code, corp_name) VALUES (?, '005930', 'x')", (SAMSUNG,))
+        for rc, day in (("20250814000001", "2025-08-14"), ("20250901000002", "2025-09-01")):
+            conn.execute("INSERT INTO filing(rcept_no, corp_code, reprt_code, bsns_year, rcept_dt) VALUES "
+                         "(?, ?, '11012', 2025, ?)", (rc, SAMSUNG, day))
+        c = seg.Candidate("html_segment", [("가", 60.0), ("나", 40.0)])
+        seg.store_segments(conn, SAMSUNG, 2025, 2, "20250814000001", "2025-08-14", c, "q", 0.0, "ok", "html_segment")
+        seg.record_fetch(conn, "20250814000001", "ok", "html_segment")
+        seg.record_fetch(conn, "20250901000002", "review", None)          # the correction: no table found
+        conn.commit()
+        self.assertEqual(len(query.get_segments("005930", as_of="2025-08-20", conn=conn)), 2)
+        self.assertEqual(query.get_segments("005930", as_of="2025-09-01", conn=conn), [])
+        self.assertEqual(query.get_segments("005930", conn=conn), [])
+        per = query.segment_periods("005930", conn=conn)[(2025, 2)]
+        self.assertEqual((per["rcept_no"], per["status"]), ("20250901000002", "review"))
+        data = query.company_financials("005930", conn=conn)
+        self.assertEqual((data["segments"], data["segment_status"][(2025, 2)]), ([], ("review", None)))
+
+    # ---- P2: a re-classified filing loses its segment data ----
+    def test_reclassify_drops_segment_rows_and_marks(self):
+        conn = self._conn()
+        lr = FakeDart._lr
+        q3 = lr(MARCH, "067010", "x", "K", "분기보고서 (2020.12)", "20210215000001")
+        fil.store_filings(conn, [q3], 2021)
+        c = seg.Candidate("html_segment", [("가", 60.0), ("나", 40.0)])
+        seg.store_segments(conn, MARCH, 2020, 3, "20210215000001", "2021-02-15", c, "q", 0.0, "ok", "html_segment")
+        seg.record_fetch(conn, "20210215000001", "ok", "html_segment")
+        fil.store_filings(conn, [lr(MARCH, "067010", "x", "K", "사업보고서 (2021.03)", "20210610000002")], 2021)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM segment_rev").fetchone()[0], 0)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM seg_fetch").fetchone()[0], 0)
 
 # 2025 quarterly revenue / operating income (KRW, consolidated) of the plan-7
 # verification stocks, checked on 2026-11-26 against each report's own income

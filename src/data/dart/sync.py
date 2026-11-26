@@ -631,9 +631,20 @@ class _Job:
         wait for its financials."""
         corp, fy, reprt, rcept = p["corp_code"], p["bsns_year"], p["reprt_code"], p["rcept_no"]
         q = fil.Q_BY_REPRT[reprt]
-        rev = self.conn.execute(
-            "SELECT value_q, value_ytd, fs_div FROM fin_std WHERE corp_code = ? AND fiscal_year = ? AND fiscal_q = ? "
-            "AND metric = 'revenue' ORDER BY rcept_no DESC LIMIT 1", (corp, fy, q)).fetchone()
+        # The receipt's own financials must be in: a correction whose statements
+        # DART has not loaded yet is still pending in fin_fetch, and checking its
+        # segment table against the *previous* version's revenue would settle a
+        # false mismatch for good (review_codex 2 P1). The revenue is the one
+        # stored for this receipt (fin_fetch.src_rcept_no; an attachment-only
+        # correction points at the original).
+        ff = self.conn.execute("SELECT status, src_rcept_no FROM fin_fetch WHERE rcept_no = ?", (rcept,)).fetchone()
+        if ff is None:
+            return False
+        rev = None
+        if ff["src_rcept_no"]:
+            rev = self.conn.execute(
+                "SELECT value_q, value_ytd, fs_div FROM fin_std WHERE corp_code = ? AND fiscal_year = ? "
+                "AND fiscal_q = ? AND metric = 'revenue' AND rcept_no = ?", (corp, fy, q, ff["src_rcept_no"])).fetchone()
         rcept_dt = self.conn.execute("SELECT rcept_dt FROM filing WHERE rcept_no = ?", (rcept,)).fetchone()[0]
         if rev is None:
             na = self.conn.execute(
