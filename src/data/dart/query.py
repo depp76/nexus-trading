@@ -401,3 +401,47 @@ def format_segment_report(tickers=None, **kw) -> str:
             lines.append(f"  {code} {name}: '{it['segment_raw']}' (코드 {it['segment_code']}) "
                          f"있는 해 {','.join(map(str, it['years']))} / 없는 해 {','.join(map(str, it['missing']))}")
     return "\n".join(lines)
+
+
+# ---- the MA chart's 재무 tab (stage 5, plan 13) --------------------------------------
+
+def company_financials(code: str, conn: sqlite3.Connection | None = None,
+                       db_path: str | None = None) -> dict | None:
+    """Everything the 재무 tab shows for one stock, read in one go (read-only):
+    the company, its quarterly rows (get_financials, all metrics), its segment
+    rows, the segment check status per period, segment names that do not run
+    through the years and the user's own segment_map rows, the receipts that
+    are corrections, and the last collection run. None when the stock is not
+    in dart.db (or there is no dart.db yet)."""
+    from data.dart.segments import unmatched_codes
+    with _reader(conn, db_path) as db:
+        if db is None:
+            return None
+        corp = _resolve_corp(db, code)
+        if corp is None:
+            return None
+        comp = db.execute("SELECT corp_code, stock_code, corp_name, market, fiscal_month FROM company "
+                          "WHERE corp_code = ?", (corp,)).fetchone()
+        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        seg_status = {}
+        if "seg_fetch" in tables:
+            q_of = {"11013": 1, "11012": 2, "11014": 3, "11011": 4}
+            for r in db.execute("SELECT f.bsns_year, f.reprt_code, s.status, s.source FROM seg_fetch s "
+                                "JOIN filing f ON f.rcept_no = s.rcept_no WHERE f.corp_code = ?", (corp,)):
+                seg_status[(r[0], q_of.get(r[1], 0))] = (r[2], r[3])
+        state = dict(db.execute("SELECT key, value FROM sync_state WHERE key IN ('last_run', 'last_run_status')"))
+        out = {
+            "company": dict(comp) if comp else {"corp_code": corp},
+            "rows": get_financials(corp, conn=db),
+            "segments": get_segments(corp, include_adjustments=True, conn=db),
+            "segment_status": seg_status,
+            "unmatched": unmatched_codes(db, corp),
+            "user_maps": [dict(r) for r in db.execute(
+                "SELECT segment_raw, segment_code, valid_from, valid_to, note FROM segment_map "
+                "WHERE corp_code = ? AND note <> 'auto' ORDER BY segment_code, valid_from", (corp,))],
+            "corrections": {r[0] for r in db.execute(
+                "SELECT rcept_no FROM filing WHERE corp_code = ? AND is_correction = 1", (corp,))},
+            "last_run": state.get("last_run"),
+            "last_run_status": state.get("last_run_status"),
+        }
+    return out

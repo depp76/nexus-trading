@@ -72,7 +72,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QButtonGroup,
-    QSplitter, QWidget, QComboBox, QMenu, QCheckBox, QWidgetAction,
+    QSplitter, QWidget, QComboBox, QMenu, QCheckBox, QWidgetAction, QTabWidget,
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont
@@ -87,6 +87,7 @@ from ui.dialogs.stock_ma_hover import _HoverMixin
 from ui.dialogs.stock_ma_plot import _PlotMixin
 from ui.dialogs.stock_ma_side import StockMaSidePanel
 from ui.dialogs.stock_ma_view import _ViewMixin
+from ui.dialogs.stock_financials import StockFinancialsTab
 from ui.common import create_font, FONT_HEADING, FONT_BODY, FONT_CAPTION, fit_to_screen
 from ui.colors import PROFIT, LOSS
 from ui.theme import TEXT_MUTED, TEXT_FAINT
@@ -180,7 +181,23 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         root = QVBoxLayout(self)
         root.setSpacing(6)
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        root.addWidget(splitter)
+        self.tabs = None
+        self.financials_tab = None
+        if self._market in ("KOSPI", "KOSDAQ"):
+            # 차트 | 재무 (docs/dart_db_plan_2026-11-26.md 13, docs/ui.md 8.34): DART
+            # financials for a Korean stock; read the first time the tab is shown.
+            self.tabs = QTabWidget()
+            chart_page = QWidget()
+            page_v = QVBoxLayout(chart_page)
+            page_v.setContentsMargins(0, 6, 0, 0)
+            page_v.addWidget(splitter)
+            self.tabs.addTab(chart_page, tr("차트", "Chart"))
+            self.financials_tab = StockFinancialsTab(self._ticker, self._name, self._market)
+            self.tabs.addTab(self.financials_tab, tr("재무", "Financials"))
+            self.tabs.currentChanged.connect(self._on_tab_changed)
+            root.addWidget(self.tabs)
+        else:
+            root.addWidget(splitter)
 
         chart_widget = QWidget()
         chart_v = QVBoxLayout(chart_widget)
@@ -433,6 +450,12 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         self.strategy_section = self._side.strategy_section
         return self._side.widget
 
+    def _on_tab_changed(self, index: int) -> None:
+        if self.tabs is not None and self.tabs.widget(index) is self.financials_tab:
+            self.financials_tab.ensure_loaded()
+        else:
+            QTimer.singleShot(0, self._align_right_panel)
+
     def _stop_strategy_section(self) -> None:
         """Cancel the "전략 점검" workers of a closing dialog (review_agy H9)."""
         section = getattr(self, "strategy_section", None)
@@ -441,6 +464,12 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
                 section.shutdown()
             except RuntimeError:
                 pass        # the section's C++ side is already gone
+        fin = getattr(self, "financials_tab", None)
+        if fin is not None:
+            try:
+                fin.shutdown()
+            except RuntimeError:
+                pass
 
     def closeEvent(self, event):
         self._stop_strategy_section()

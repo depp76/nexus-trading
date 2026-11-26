@@ -56,6 +56,8 @@ from data.fx import (
     get_usd_krw_rate_for_date,
 )
 
+# DART financial statements for the MA chart's 재무 tab (read-only, dart.db).
+from data.dart.query import company_financials
 from data.market import (
     INDEX_TICKERS,
     MARKET_INDEX_MARKETS,
