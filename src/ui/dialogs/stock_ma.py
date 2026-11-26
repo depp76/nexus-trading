@@ -195,6 +195,7 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         root = QVBoxLayout(self)
         root.setSpacing(6)
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter = splitter
         self.tabs = None
         self.financials_tab = None
         if self._market in ("KOSPI", "KOSDAQ"):
@@ -331,7 +332,7 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
             self._group_captions.append(cap)
 
         if not self._is_simple_chart:
-            caption(tr("이동평균", "MA"))
+            caption(tr("가격선", "Price lines"))
             has_ch = self._has_data and bool(self._overlays)
             keys = [*_MA_KEYS, *(["EW"] if has_ew else []), *(["IDX"] if has_idx else []),
                     *(["CH"] if has_ch else [])]
@@ -363,7 +364,11 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         for label, _months in _PERIODS:
             self._period_combo.addItem(_PERIOD_LABELS[label], label)
         self._period_combo.setCurrentIndex(self._period_combo.findData(_DEFAULT_PERIOD))
-        self._period_combo.currentIndexChanged.connect(self._on_period_index)
+        # activated, not currentIndexChanged: picking the period already shown
+        # brings the chart back to it after a zoom or pan (ma_chart_ux_review 1).
+        self._period_combo.activated.connect(self._on_period_index)
+        self._period_combo.setToolTip(tr("기간을 다시 선택하면 최근 구간으로 돌아갑니다.",
+                                         "Pick the period again to return to the latest range."))
         row.addWidget(self._period_combo)
         # The 이동평균 and 기간 drop-downs share one width (user direction
         # 2026-11-18): the wider of the two needs.
@@ -383,7 +388,61 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         self._as_of_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         if as_of:
             row.addWidget(self._as_of_lbl)
+        self._detail_btn = None
+        if self._side is not None:
+            row.addSpacing(10)
+            row.addWidget(self._build_detail_button())
         return row_w
+
+    # ------------------------------------------------------ right panel fold
+    _DETAIL_HIDE = tr("상세 접기", "Hide details")
+    _DETAIL_SHOW = tr("상세 펼치기", "Show details")
+
+    def _build_detail_button(self) -> QPushButton:
+        """'상세 접기 / 펼치기' (ma_chart_ux_review 3): only a dialog with a
+        right panel gets it, and it sits on the chart side so it stays after
+        the panel folds. One width for both labels, so the row never moves."""
+        btn = QPushButton()
+        btn.setFixedHeight(_SEG_H)
+        btn.setFont(create_font(FONT_BODY, style_name="Semilight"))
+        widest = 0
+        for text in (self._DETAIL_HIDE, self._DETAIL_SHOW):
+            btn.setText(text)
+            widest = max(widest, btn.sizeHint().width())
+        btn.setFixedWidth(widest)
+        btn.clicked.connect(self._toggle_detail)
+        self._detail_btn = btn
+        self._detail_sizes = None
+        self._sync_detail_button(True)
+        return btn
+
+    def _sync_detail_button(self, visible: bool) -> None:
+        self._detail_btn.setText(self._DETAIL_HIDE if visible else self._DETAIL_SHOW)
+        self._detail_btn.setToolTip(
+            tr("오른쪽 상세 영역을 접어 차트를 넓힙니다.", "Fold the right panel to widen the chart.") if visible
+            else tr("접어 둔 상세 영역을 다시 엽니다.", "Show the right panel again."))
+
+    def _toggle_detail(self, *_args) -> None:
+        self.set_detail_visible(not self._right_panel.isVisibleTo(self))
+
+    def set_detail_visible(self, visible: bool) -> None:
+        """Fold or unfold the right panel. The widgets are only hidden, so the
+        period, the price lines and the 전략 점검 result stay; unfolding
+        restores the splitter split the user had."""
+        if self._side is None:
+            return
+        panel = self._right_panel
+        if visible == panel.isVisibleTo(self):
+            return
+        if visible:
+            panel.show()
+            if self._detail_sizes:
+                self._splitter.setSizes(self._detail_sizes)
+            QTimer.singleShot(0, self._align_right_panel)
+        else:
+            self._detail_sizes = self._splitter.sizes()
+            panel.hide()
+        self._sync_detail_button(visible)
 
     def _build_ma_dropdown(self, keys: list) -> QPushButton:
         """The 이동평균 drop-down: a button whose menu holds one check box per
@@ -398,19 +457,25 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         col = QVBoxLayout(panel)
         col.setContentsMargins(12, 8, 16, 8)
         col.setSpacing(6)
-        for key in keys:
-            cb = QCheckBox(_SERIES[key])
-            cb.setChecked(key in _DEFAULT_SERIES)
-            cb.clicked.connect(lambda checked, k=key: self._set_series(k, checked))
-            col.addWidget(cb)
-            self._series_buttons[key] = cb
-            if self._has_data and key in _MA_COLUMNS and not self._has_values(_MA_COLUMNS[key]):
-                # Not one full window in the history (a new listing): kept
-                # in the menu, greyed out, never filled in (ma60 doc 1.6).
-                cb.setText(tr(f"{_SERIES[key]} · 데이터 부족", f"{_SERIES[key]} · not enough data"))
-                cb.setEnabled(False)
-                cb.setToolTip(tr(f"{key}을 계산할 만큼 거래일 이력이 없습니다.",
-                                 f"Not enough trading history for {key}."))
+        # Grouped (ma_chart_ux_review 2): 이동평균 · 비교선 · 채널, a group with
+        # nothing in it left out.
+        groups = [(tr("이동평균", "Moving averages"), [k for k in keys if k in _MA_KEYS]),
+                  (tr("비교선", "Comparison"), [k for k in keys if k in ("EW", "IDX")]),
+                  (tr("채널", "Channel"), [k for k in keys if k == "CH"])]
+        self._ma_menu_groups = []
+        for title, members in groups:
+            if not members:
+                continue
+            if self._ma_menu_groups:
+                col.addSpacing(4)
+            head = QLabel(title)
+            head.setFont(create_font(FONT_CAPTION, QFont.Weight.Bold))
+            head.setStyleSheet(f"color:{TEXT_FAINT};")
+            col.addWidget(head)
+            self._ma_menu_groups.append(head)
+            for key in members:
+                self._add_ma_check(col, key)
+        self._ma_menu_keys = [k for _t, members in groups for k in members]
         if "CH" in self._series_buttons:
             self._series_buttons["CH"].setToolTip("\n".join(f"{o.label}: {o.tooltip}" for o in self._overlays))
         if "IDX" in self._series_buttons:
@@ -433,6 +498,20 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
         self._sync_ma_button()
         return btn
 
+    def _add_ma_check(self, col: QVBoxLayout, key: str) -> None:
+        cb = QCheckBox(_SERIES[key])
+        cb.setChecked(key in _DEFAULT_SERIES)
+        cb.clicked.connect(lambda checked, k=key: self._set_series(k, checked))
+        col.addWidget(cb)
+        self._series_buttons[key] = cb
+        if self._has_data and key in _MA_COLUMNS and not self._has_values(_MA_COLUMNS[key]):
+            # Not one full window in the history (a new listing): kept
+            # in the menu, greyed out, never filled in (ma60 doc 1.6).
+            cb.setText(tr(f"{_SERIES[key]} · 데이터 부족", f"{_SERIES[key]} · not enough data"))
+            cb.setEnabled(False)
+            cb.setToolTip(tr(f"{key}을 계산할 만큼 거래일 이력이 없습니다.",
+                             f"Not enough trading history for {key}."))
+
     @staticmethod
     def _ma_summary(keys) -> str:
         names = [_SERIES[k] for k in keys]
@@ -449,6 +528,10 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
             return
         on = [k for k in self._ma_menu_keys if self._series_buttons[k].isChecked()]
         self._ma_btn.setText(self._ma_summary(on))
+        # The short summary keeps the button narrow; the tooltip names every line.
+        full = ", ".join(_SERIES[k] for k in on) if on else tr("없음", "None")
+        self._ma_btn.setToolTip(tr(f"가격선: {full}", f"Price lines: {full}"))
+        self._ma_btn.setAccessibleDescription(self._ma_btn.toolTip())
 
     def _on_period_index(self, index: int) -> None:
         label = self._period_combo.itemData(index)
