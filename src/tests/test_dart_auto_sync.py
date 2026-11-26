@@ -214,6 +214,26 @@ class TestAutoSync(unittest.TestCase):
         self.assertIn("DART_API_KEY", s.label.toolTip())
         self.assertEqual(msgs, [])
 
+    def test_not_due_shows_the_newest_run_of_any_runner(self):
+        s, msgs = self._sync()
+        cli = dict(_INFO, last_run_status="partial", last_trigger="cli", last_error="daily limit")
+        s._on_done({"status": "not_due", "info": cli})
+        self.assertEqual(s.label.text(), "DART 일부 수집")
+        self.assertIn("실행: CLI", s.label.toolTip())
+        sched = dict(_INFO, last_run_status="done", last_trigger="scheduler")
+        s._on_done({"status": "not_due", "info": sched})
+        self.assertEqual(s.label.text(), "DART 11-26 19:42")
+        self.assertIn("실행: 스케줄러", s.label.toolTip())
+        self.assertEqual(msgs, [])                  # only the app's own runs post a status-bar message
+
+    def test_skip_retries_after_a_while(self):
+        s = DartAutoSync(thread_factory=_FakeThread, start_delay_ms=10, check_interval_ms=60_000, retry_ms=50)
+        self.addCleanup(lambda: [t.wait(3000) for t in s.threads()])
+        s._started_once = True
+        s._on_done({"status": "skipped", "info": {}})
+        self.assertEqual(s.label.text(), "DART 대기")
+        self.assertTrue(_pump(lambda: _FakeThread.runs == [True]))
+
     def test_disabled_never_runs(self):
         s, _ = self._sync(enabled=False)
         s.arm(universe_ready=True)

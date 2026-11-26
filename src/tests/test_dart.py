@@ -80,6 +80,7 @@ class FakeDart:
             # The small company has no consolidated statements and reports in CIS only.
             (SMALL, "2025", "11013", "OFS"): _is_rows("1,000", "(50)", "-40", "", "20250515000009", sj="CIS"),
         }
+        self.documents: dict = {}         # rcept_no -> document.xml text
 
     @staticmethod
     def _lr(corp, stock, name, cls, report, rcept):
@@ -90,6 +91,8 @@ class FakeDart:
         xml = ("<result><list><corp_code>00126380</corp_code><corp_name>삼성전자</corp_name>"
                "<stock_code>005930</stock_code></list><list><corp_code>00999999</corp_code>"
                "<corp_name>작은회사</corp_name><stock_code>123450</stock_code></list>"
+               "<list><corp_code>00888888</corp_code><corp_name>은행지주</corp_name>"
+               "<stock_code>105560</stock_code></list>"
                "<list><corp_code>00000001</corp_code><corp_name>비상장</corp_name><stock_code> </stock_code></list>"
                "</result>")
         buf = io.BytesIO()
@@ -118,6 +121,13 @@ class FakeDart:
             if k in self.fin:
                 return FakeResp({"status": "000", "list": self.fin[k]})
             return FakeResp({"status": "013", "message": "no data"})
+        if ep == "document.xml" and params["rcept_no"] in self.documents:
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w") as zf:
+                zf.writestr(params["rcept_no"] + ".xml", self.documents[params["rcept_no"]])
+            return FakeResp(content=buf.getvalue())
+        if ep == "document.xml":
+            return FakeResp({"status": "014", "message": "file not found"})
         return FakeResp({"status": "100", "message": "bad endpoint"})
 
 
@@ -424,6 +434,186 @@ class TestClient(_TmpMixin, unittest.TestCase):
                 with open(os.path.join(root, name), encoding="utf-8") as f:
                     self.assertNotIn("SECRETKEY123", f.read())
 
+
+# ---- follow-up 2026-11-26: plan items 1-7 -------------------------------------------
+
+from data.dart import documents as docs  # noqa: E402
+
+BANK = "00888888"
+
+
+def _doc(titled=True, unit="백만원", note_col=True, three_month=True, owners="지배기업주주지분순이익"):
+    """A small report document with a consolidated income statement table."""
+    note_head = "<TD>주석</TD>" if note_col else ""
+    note = "<TD>4,29</TD>" if note_col else ""
+    cols = "<TD>3개월</TD><TD>누적</TD><TD>3개월</TD><TD>누적</TD>" if three_month else "<TD>당기</TD><TD>전기</TD>"
+
+    def row(name, *vals):
+        return f"<TR><TD>{name}</TD>{note}" + "".join(f"<TD>{v}</TD>" for v in vals) + "</TR>"
+    title = '<TITLE ATOC="Y">2-2. 연결 포괄손익계산서(손익계산서)</TITLE>' if titled else ""
+    section = '<TITLE ATOC="Y">2. 연결재무제표</TITLE>' if not titled else ""
+    return (f"<DOCUMENT>{section}<TABLE><TR><TD>재무상태표</TD></TR><TR><TD>자산총계</TD><TD>9,999</TD></TR></TABLE>"
+            f"{title}<TABLE><TR><TD>(단위 : {unit})</TD></TR></TABLE>"
+            f"<TABLE><TR><TD>과목</TD>{note_head}{cols}</TR>"
+            + row("Ⅰ.순이자이익", "300", "800", "250", "700")
+            + row("1.이자수익", "500", "1,300", "450", "1,200")
+            + row("IX.영업이익", "200", "550", "(10)", "400")
+            + row("XⅢ.당(분)기연결순이익", "150", "420", "△5", "300")
+            + row(owners, "140", "400", "△6", "280")
+            + row("비지배지분순이익", "10", "20", "1", "20")
+            + "</TABLE></DOCUMENT>")
+
+
+class TestDocumentParser(unittest.TestCase):
+    def test_titled_statement_with_note_column_and_unit(self):
+        fs_div, rows, financial, nci = docs.income_rows(_doc(), "20220816000001", "11012")
+        got = {r["account_id"]: (r["thstrm_amount"], r["thstrm_add_amount"]) for r in rows}
+        self.assertEqual((fs_div, financial, nci), ("CFS", True, True))
+        self.assertEqual(got["dart_OperatingIncomeLoss"], (200e6, 550e6))      # 백만원, note column skipped
+        self.assertEqual(got["ifrs-full_ProfitLoss"], (150e6, 420e6))          # "당(분)기연결순이익"
+        self.assertEqual(got["ifrs-full_ProfitLossAttributableToOwnersOfParent"], (140e6, 400e6))
+        self.assertNotIn("ifrs-full_Revenue", got)
+
+    def test_untitled_older_layout_and_cumulative_only_columns(self):
+        fs_div, rows, *_ = docs.income_rows(_doc(titled=False, unit="천원", note_col=False, three_month=False),
+                                            "20210816000001", "11012")
+        op = next(r for r in rows if r["account_id"] == "dart_OperatingIncomeLoss")
+        self.assertEqual((fs_div, op["thstrm_amount"], op["thstrm_add_amount"]), ("CFS", None, 200e3))
+
+    def test_cp949_document_declared_utf8(self):
+        raw = '<?xml version="1.0" encoding="utf-8"?><X>손익계산서</X>'.encode("cp949")
+        self.assertIn("손익계산서", docs.decode_document(raw))
+
+    def test_no_statement(self):
+        self.assertIsNone(docs.income_rows("<DOCUMENT><TITLE>1. 회사의 개요</TITLE></DOCUMENT>", "r", "11013"))
+
+
+class TestFollowUps(_TmpMixin, unittest.TestCase):
+    def _conn(self):
+        conn = connect(self.db)
+        self.addCleanup(conn.close)
+        return conn
+
+    def test_financial_filer_revenue_not_applicable(self):
+        conn = self._conn()
+        r = "20250515000001"
+        rows = [_fin_row("CIS", "ifrs-full_RevenueFromInterest", "이자수익", 1, "500", rcept=r),
+                _fin_row("CIS", "dart_OperatingIncomeLoss", "영업이익", 2, "200", rcept=r),
+                _fin_row("CIS", "ifrs-full_ProfitLoss", "분기순이익", 3, "150", rcept=r),
+                _fin_row("CIS", "ifrs-full_ProfitLossAttributableToOwnersOfParent", "지배기업 소유주지분", 4, "140",
+                         rcept=r),
+                _fin_row("CIS", "ifrs-full_ProfitLossAttributableToNoncontrollingInterests", "비지배지분", 5, "10",
+                         rcept=r)]
+        _src, missing = fin.store_period(conn, BANK, 2025, "11013", "CFS", rows)
+        self.assertEqual(missing, [])
+        self.assertEqual([x[0] for x in conn.execute("SELECT kind FROM fin_issue")], ["revenue_na"])
+        self.assertEqual({x["metric"] for x in query.get_financials(BANK, conn=conn)},
+                         {"op_income", "net_income", "net_income_owners"})
+
+    def test_owners_from_net_income_without_minority_line(self):
+        conn = self._conn()
+        rows = [r for r in _is_rows("100", "10", "8", "7", "20250515000001") if "Owners" not in r["account_id"]]
+        _src, missing = fin.store_period(conn, SAMSUNG, 2025, "11013", "CFS", rows)
+        owners = [r for r in query.get_financials(SAMSUNG, conn=conn) if r["metric"] == "net_income_owners"]
+        self.assertEqual((missing, owners[0]["value_q"], owners[0]["derived"]), ([], 8.0, 1))
+        # With a non-controlling line the owners' share cannot be inferred: unmapped.
+        rows2 = [dict(r, rcept_no="20250814000002") for r in rows]
+        rows2.append(_fin_row("IS", "ifrs-full_ProfitLossAttributableToNoncontrollingInterests", "비지배지분", 11, "1",
+                              rcept="20250814000002"))
+        _src, missing = fin.store_period(conn, SAMSUNG, 2025, "11012", "CFS", rows2)
+        self.assertEqual(missing, ["net_income_owners"])
+
+    def test_owners_and_net_income_names(self):
+        self.assertTrue(fin.is_owners_name("지배회사소유주지분순이익"))
+        self.assertTrue(fin.is_owners_name("지배주주지분당반기순이익"))
+        self.assertFalse(fin.is_owners_name("비지배지분순이익"))
+        self.assertFalse(fin.is_owners_name("지배기업주주지분총포괄이익"))
+        for n in ("분기연결순이익(손실)", "연결당반기순이익", "당(분)기연결순이익", "당기순이익"):
+            self.assertTrue(fin.is_net_income_name(n), n)
+        self.assertFalse(fin.is_net_income_name("법인세비용차감전순이익"))
+
+    def test_q4_uses_a_later_corrected_q3_and_says_so(self):
+        conn = self._conn()
+        fin.store_period(conn, SAMSUNG, 2024, "11011", "CFS", _is_rows("130", "10", "-1", "1", "20250310000002"))
+        fin.store_period(conn, SAMSUNG, 2024, "11014", "CFS",       # Q3 known only from a 2025-06 correction
+                         _is_rows("30", "3", "2", "2", "20250620000009",
+                                  add={"rev": "90", "op": "9", "ni": "6", "own": "5"}))
+        q4 = [r for r in query.get_financials(SAMSUNG, conn=conn) if r["fiscal_q"] == 4 and r["metric"] == "revenue"]
+        self.assertEqual(q4[0]["value_q"], 40.0)
+        self.assertIn("q4_uses_later_q3", [r[0] for r in conn.execute("SELECT kind FROM fin_issue")])
+
+    def test_api_year_from_report_name(self):
+        from data.dart.sync import api_years
+        self.assertEqual(api_years([{"rcept_no": "1", "report_nm": "분기보고서 (2026.06)"}], 2027, 3), [2026])
+        self.assertEqual(api_years([{"rcept_no": "1", "report_nm": None}], 2027, 3), [2027, 2026])
+        self.assertEqual(api_years([{"rcept_no": "1", "report_nm": None}], 2025, 12), [2025])
+
+    def test_calendar_period_in_query_and_view(self):
+        self.assertEqual(query.calendar_period(2027, 1, 3), ("2026-06", 2026, 2))
+        self.assertEqual(query.calendar_period(2026, 4, 3), ("2026-03", 2026, 1))
+        self.assertEqual(query.calendar_period(2025, 3, 12), ("2025-09", 2025, 3))
+        self.assertEqual(query.calendar_period(2025, 1, 2), ("2024-05", 2024, 2))
+        conn = self._conn()
+        conn.execute("INSERT INTO company(corp_code, stock_code, corp_name, fiscal_month) "
+                     "VALUES ('M3', '067010', 'x', 3)")
+        fin.store_period(conn, "M3", 2027, "11013", "OFS", _is_rows("5", "1", "1", "", "20260814000001"))
+        r = conn.execute("SELECT period_end, cal_year, cal_q FROM v_fin_growth WHERE corp_code = 'M3' "
+                         "AND metric = 'revenue'").fetchone()
+        self.assertEqual(tuple(r), ("2026-06", 2026, 2))
+        row = query.get_financials("067010", conn=conn)[0]
+        self.assertEqual((row["period_end"], row["cal_year"], row["cal_q"]), ("2026-06", 2026, 2))
+
+    def test_document_fallback_when_the_api_has_no_data(self):
+        self.fake.list_rows.append(FakeDart._lr(BANK, "105560", "은행지주", "Y", "반기보고서 (2025.06)",
+                                                "20250814000020"))
+        self.fake.list_rows.append(FakeDart._lr(BANK, "105560", "은행지주", "Y", "[첨부정정]반기보고서 (2025.06)",
+                                                "20250820000021"))
+        self.fake.documents["20250814000020"] = _doc()       # the later correction has no statements
+        res = self.sync("backfill", tickers=["105560"])
+        self.assertEqual(res.status, "done", res.error)
+        conn = self._conn()
+        got = {r["metric"]: r for r in query.get_financials("105560", conn=conn)}
+        self.assertEqual((got["op_income"]["value_q"], got["op_income"]["value_ytd"]), (200e6, 550e6))
+        self.assertEqual(got["op_income"]["rcept_no"], "20250814000020")
+        self.assertEqual(sorted(r[0] for r in conn.execute("SELECT kind FROM fin_issue")),
+                         ["from_document", "revenue_na"])
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM fin_raw WHERE rcept_no = '20250814000020'").fetchone()[0],
+                         0)
+        # Statement sections are cached: reprocessing calls no document again.
+        n = len(self.fake.requests)
+        conn.execute("DELETE FROM fin_fetch")
+        conn.commit()
+        self.sync("backfill", tickers=["105560"])
+        self.assertEqual([p for ep, p in self.fake.requests[n:] if ep == "document.xml"], [])
+
+    def test_no_document_statement_is_no_data(self):
+        self.fake.list_rows.append(FakeDart._lr(BANK, "105560", "은행지주", "Y", "분기보고서 (2025.03)",
+                                                "20250515000030"))
+        res = self.sync("backfill", tickers=["105560"])
+        self.assertEqual(res.status, "done", res.error)
+        conn = self._conn()
+        self.assertEqual(conn.execute("SELECT status FROM fin_fetch WHERE rcept_no = '20250515000030'").fetchone()[0],
+                         "no_data")
+        self.assertEqual([r[0] for r in conn.execute("SELECT kind FROM fin_issue")], ["no_data"])
+
+    def test_growth_table_and_issue_report(self):
+        self.sync("auto")
+        table = query.format_growth_table("005930", db_path=self.db)
+        self.assertIn("2025Q2", table)
+        self.assertIn("2025-06", table)
+        rows = query.growth_table("005930", db_path=self.db)
+        self.assertEqual(rows[-1]["fiscal_q"], 3)
+        self.assertAlmostEqual(rows[-1]["op_margin"], -5 / 130)
+        self.assertAlmostEqual(rows[-1]["revenue_qoq"], 130 / 120 - 1)
+        early = query.growth_table("005930", "2025-11-10", db_path=self.db)
+        self.assertEqual([r["fiscal_q"] for r in early], [1, 2])   # Q3 was received on 2025-11-14
+        conn = self._conn()
+        fin.store_period(conn, SAMSUNG, 2025, "11013", "CFS",
+                         [_fin_row("IS", "x", "기타", 1, "5", rcept="20250601000001")])
+        conn.commit()
+        text = query.format_issues(db_path=self.db)
+        self.assertIn("계정 미매핑", text)
+        self.assertIn("005930", text)
 
 # 2025 quarterly revenue / operating income (KRW, consolidated) of the plan-7
 # verification stocks, checked on 2026-11-26 against each report's own income

@@ -18,7 +18,10 @@ import datetime as _dt
 import json
 import sqlite3
 
-SCHEMA_VERSION = 1
+# 2 (2026-11-26): fin_issue; periods marked no_data are retried (document fallback).
+# 3 (2026-11-26): periods with unmapped metrics are re-evaluated (financial revenue
+#   not applicable, wider owners / net income names); their replies come from the cache.
+SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS company (
@@ -133,9 +136,28 @@ CREATE TABLE IF NOT EXISTS fin_unmapped (
   PRIMARY KEY (rcept_no, metric)
 );
 
+CREATE TABLE IF NOT EXISTS fin_issue (
+  rcept_no TEXT NOT NULL,
+  corp_code TEXT NOT NULL,
+  fiscal_year INTEGER, fiscal_q INTEGER,
+  kind TEXT NOT NULL,                -- revenue_na / owners_from_net_income / fs_div_change / from_document / no_data
+  detail TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (rcept_no, kind, detail)
+);
+
+-- Newest receipt per (company, fiscal quarter, metric), with the calendar
+-- position of the quarter (plan 4-7): period_end 'YYYY-MM' and its calendar
+-- year / quarter, from the company's fiscal month (12 when unknown).
 DROP VIEW IF EXISTS v_fin_latest;
 CREATE VIEW v_fin_latest AS
-SELECT s.* FROM fin_std s
+SELECT s.*,
+       printf('%04d-%02d', p.m_idx / 12, p.m_idx % 12 + 1) AS period_end,
+       p.m_idx / 12 AS cal_year,
+       (p.m_idx % 12) / 3 + 1 AS cal_q
+FROM fin_std s
+JOIN (SELECT s2.rowid AS rid,
+             s2.fiscal_year * 12 + COALESCE(c.fiscal_month, 12) - 1 - 3 * (4 - s2.fiscal_q) AS m_idx
+      FROM fin_std s2 LEFT JOIN company c ON c.corp_code = s2.corp_code) p ON p.rid = s.rowid
 WHERE s.rcept_no = (
   SELECT MAX(t.rcept_no) FROM fin_std t
   WHERE t.corp_code = s.corp_code AND t.fiscal_year = s.fiscal_year
@@ -146,6 +168,7 @@ DROP VIEW IF EXISTS v_fin_growth;
 CREATE VIEW v_fin_growth AS
 SELECT c.corp_code, c.fiscal_year, c.fiscal_q, c.metric, c.fs_div,
        c.value_q, c.value_ytd, c.derived, c.rcept_no, c.rcept_dt,
+       c.period_end, c.cal_year, c.cal_q,
        y.value_q AS value_q_prev_year,
        p.value_q AS value_q_prev_q,
        CASE WHEN y.value_q > 0 THEN c.value_q / y.value_q - 1 END AS yoy,
@@ -178,6 +201,12 @@ def connect(path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=30000")
     conn.executescript(_SCHEMA)
+    old = get_state(conn, "schema_version")
+    if old is not None and int(old) < 2:
+        conn.execute("DELETE FROM fin_fetch WHERE status = 'no_data'")
+    if old is not None and int(old) < 3:
+        conn.execute("DELETE FROM fin_fetch WHERE status = 'unmapped'")
+        conn.execute("DELETE FROM fin_unmapped")
     set_state(conn, "schema_version", str(SCHEMA_VERSION))
     conn.commit()
     return conn

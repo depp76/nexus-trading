@@ -36,6 +36,7 @@ import uuid
 
 import paths
 from data.dart import corp as corp_mod
+from data.dart import documents as docs
 from data.dart import filings as fil
 from data.dart import financials as fin
 from data.dart.client import DAILY_LIMIT, DartBudgetExceeded, DartClient, api_key_from_env, calls_today, kst_today
@@ -88,7 +89,7 @@ def collection_status(db_path: str | None = None, today: _dt.date | None = None,
     try:
         today = today or kst_now().date()
         first = first_fiscal_year(today, years)
-        run = conn.execute("SELECT status, calls, filings_added, error, finished_at FROM sync_run "
+        run = conn.execute("SELECT status, calls, filings_added, error, finished_at, trigger FROM sync_run "
                            "WHERE status NOT IN ('running', 'skipped') ORDER BY started_at DESC LIMIT 1").fetchone()
         total, pending = conn.execute(
             "SELECT COUNT(*), COALESCE(SUM(p.missing > 0), 0) FROM ("
@@ -102,6 +103,8 @@ def collection_status(db_path: str | None = None, today: _dt.date | None = None,
             "last_calls": run["calls"] if run else None,
             "last_added": run["filings_added"] if run else None,
             "last_error": run["error"] if run else None,
+            "last_trigger": run["trigger"] if run else None,
+            "last_run_status": run["status"] if run else None,
             "list_done": get_state(conn, "list_backfill_done") == "1",
             "periods_total": int(total or 0),
             "periods_pending": int(pending or 0),
@@ -332,7 +335,8 @@ class _Job:
     # ---- financials --------------------------------------------------------------
 
     def _pending_sql(self, since=None):
-        sql = ("SELECT f.rcept_no, f.corp_code, f.reprt_code, f.bsns_year, f.rcept_dt, c.stock_code, c.fiscal_month "
+        sql = ("SELECT f.rcept_no, f.corp_code, f.reprt_code, f.bsns_year, f.rcept_dt, f.report_nm, c.stock_code, "
+               "c.fiscal_month "
                "FROM filing f JOIN company c ON c.corp_code = f.corp_code "
                "LEFT JOIN fin_fetch x ON x.rcept_no = f.rcept_no "
                "WHERE x.rcept_no IS NULL AND f.bsns_year >= ?")
@@ -378,7 +382,7 @@ class _Job:
     def _fetch_group(self, corp, fy, reprt, members):
         latest = max(m["rcept_no"] for m in members)
         fm = members[0]["fiscal_month"] or 12
-        years = [fy] if fm == 12 else [fy, fy - 1]
+        years = api_years(members, fy, fm)
         fs_div, rows = None, []
         for api_year in years:
             fs_div, rows = fin.fetch_period(self.client, corp, api_year, reprt, cache_tag=latest)
@@ -386,17 +390,39 @@ class _Job:
                 break
             fs_div, rows = None, []
         now = now_iso()
+        kw = {}
+        source = "api"
+        if not rows:
+            # 013 from the API (financial-sector filers before 2023 H2): read the
+            # report's own income statement, newest receipt first (a correction
+            # of attachments only has no statements; the next one is tried).
+            for m in sorted(members, key=lambda m: m["rcept_no"], reverse=True):
+                self._check()
+                got = docs.fetch_document_income(self.client, m["rcept_no"], reprt, self._cache_dir())
+                if got:
+                    fs_div, rows, financial, nci = got
+                    kw = {"raw": False, "financial": financial, "nci": nci}
+                    source = "document"
+                    break
         if not rows:
             self.conn.executemany(
                 "INSERT OR REPLACE INTO fin_fetch(rcept_no, status, src_rcept_no, fs_div, fetched_at) "
                 "VALUES (?, 'no_data', NULL, NULL, ?)", [(m["rcept_no"], now) for m in members])
+            fin.record_issue(self.conn, latest, corp, fy, fil.Q_BY_REPRT[reprt], "no_data",
+                             "no API data and no income statement found in the document")
             return
-        src, missing = fin.store_period(self.conn, corp, fy, reprt, fs_div, rows, self.account_map)
-        status = "unmapped" if missing else "ok"
+        src, missing = fin.store_period(self.conn, corp, fy, reprt, fs_div, rows, self.account_map, **kw)
+        if source == "document":
+            fin.record_issue(self.conn, src, corp, fy, fil.Q_BY_REPRT[reprt], "from_document",
+                             "API 013; read from the report's income statement table")
+        status = "unmapped" if missing else ("document" if source == "document" else "ok")
         done = {m["rcept_no"] for m in members} | {src}
         self.conn.executemany(
             "INSERT OR REPLACE INTO fin_fetch(rcept_no, status, src_rcept_no, fs_div, fetched_at) VALUES (?, ?, ?, ?, ?)",
             [(r, status, src, fs_div, now) for r in sorted(done)])
+
+    def _cache_dir(self) -> str:
+        return getattr(self.client, "cache_dir", None) or paths.DART_CACHE_DIR
 
     def _period_matches(self, rows, corp, fy, reprt) -> bool:
         """For a non-December filer: whether the reply's receipt belongs to the
@@ -410,6 +436,19 @@ class _Job:
         pos = {code: i for i, code in enumerate(order)}
         n = len(pos)
         return lambda stock: pos.get(stock, n)
+
+
+def api_years(members, fiscal_year: int, fiscal_month: int) -> list[int]:
+    """The ``bsns_year`` values to ask the financial API for, in order. DART's
+    is the calendar year in which the reported period ends (checked 2026-11-26
+    on March / June year-end filers: "분기보고서 (2026.06)" of the year ending
+    2027-03 is bsns_year 2026), so the report name gives it directly; without
+    a name (a stub filing), the fiscal year and the one before."""
+    for m in sorted(members, key=lambda m: m["rcept_no"], reverse=True):
+        parsed = fil.parse_report_name(m.get("report_nm") or "")
+        if parsed:
+            return [parsed[1]]
+    return [fiscal_year] if fiscal_month == 12 else [fiscal_year, fiscal_year - 1]
 
 
 def default_priority() -> list[str]:

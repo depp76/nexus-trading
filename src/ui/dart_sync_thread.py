@@ -15,6 +15,9 @@ next to the header's refresh status:
   19:00 KST; then every 30 minutes, run once more after 19:00 (the decision is
   made inside the thread, which reads dart.db);
 - off with ``custom_settings.json`` ``dart_auto_sync: false`` (11-9);
+- a run skipped because the CLI / a scheduler held the lock is retried after
+  5 minutes; when nothing is due the label shows the newest finished run in
+  dart.db, whoever ran it (plan 12), with the runner in the tooltip;
 - label (11-8): ``DART 초기 수집 43%`` / ``DART 수집 중 1,234건`` while running,
   ``DART 11-26 19:42`` when done (tooltip: new filings, calls, limit left),
   ``DART 일부 수집`` (WARN) when stopped by the limit or the app closing,
@@ -38,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 START_DELAY_MS = 10_000          # plan 11-1
 CHECK_INTERVAL_MS = 30 * 60_000  # plan 11-2
+RETRY_AFTER_SKIP_MS = 5 * 60_000  # another collector held the lock
 
 
 class DartSyncThread(QThread):
@@ -98,7 +102,8 @@ class DartAutoSync(QObject):
     status_message = pyqtSignal(str)
 
     def __init__(self, enabled: bool = True, *, thread_factory=DartSyncThread,
-                 start_delay_ms: int = START_DELAY_MS, check_interval_ms: int = CHECK_INTERVAL_MS, parent=None):
+                 start_delay_ms: int = START_DELAY_MS, check_interval_ms: int = CHECK_INTERVAL_MS,
+                 retry_ms: int = RETRY_AFTER_SKIP_MS, parent=None):
         super().__init__(parent)
         self.enabled = enabled
         self._factory = thread_factory
@@ -120,6 +125,12 @@ class DartAutoSync(QObject):
         self._check_timer = QTimer(self)
         self._check_timer.setInterval(check_interval_ms)
         self._check_timer.timeout.connect(self._on_check_timer)
+        # After a skip (another collector held the lock): look again soon, so the
+        # label shows that run's outcome and the app resumes if it is still due.
+        self._retry_timer = QTimer(self)
+        self._retry_timer.setSingleShot(True)
+        self._retry_timer.setInterval(retry_ms)
+        self._retry_timer.timeout.connect(self._on_retry)
 
     # ---- scheduling -------------------------------------------------------------
 
@@ -151,6 +162,9 @@ class DartAutoSync(QObject):
         if self._started_once:
             self._start(at_start=False)
 
+    def _on_retry(self) -> None:
+        self._start(at_start=True)
+
     def _start(self, at_start: bool) -> None:
         if self._stopped or not self.enabled or self.is_running():
             return
@@ -173,6 +187,7 @@ class DartAutoSync(QObject):
         self._stopped = True
         self._delay_timer.stop()
         self._check_timer.stop()
+        self._retry_timer.stop()
 
     def threads(self) -> list:
         return [self.thread] if self.thread is not None else []
@@ -216,29 +231,45 @@ class DartAutoSync(QObject):
         info = out.get("info") or {}
         res = out.get("result")
         err = out.get("error") or ""
-        if status in ("done", "not_due"):
+        if status == "not_due":
+            # Nothing to do now: show the newest finished run, whoever ran it
+            # (an app, the CLI or a scheduler; plan 12).
+            self._show_run(info.get("last_run_status") or "", info, None, info.get("last_error") or "", from_db=True)
+        elif status == "skipped":
+            if not self.label.text():
+                self.label.setText(tr("DART 대기", "DART waiting"))
+            self.label.setToolTip(tr("다른 수집(CLI·스케줄러)이 진행 중이라 이번 실행은 건너뜀 · 5분 뒤 다시 확인",
+                                     "Another collector (CLI / scheduler) is running; skipped, checking again in 5 min"))
+            self._retry_timer.start()
+        else:
+            self._show_run(status, info, res, err)
+            if status == "done":
+                added = res.filings_added if res is not None else 0
+                self.status_message.emit(tr(f"DART 새 공시 {added:,}건 반영", f"DART: {added:,} new filings"))
+
+    _TRIGGER = {"app": ("앱", "app"), "cli": ("CLI", "CLI"), "scheduler": ("스케줄러", "scheduler")}
+
+    def _show_run(self, status: str, info: dict, res, err: str, from_db: bool = False) -> None:
+        """The label for a finished run: this app's, or (`from_db`) the newest
+        one in dart.db with its runner in the tooltip, numbers from `info`."""
+        who = self._TRIGGER.get(info.get("last_trigger") or "", ("", ""))
+        by = tr(f" · 실행: {who[0]}", f" · run by {who[1]}") if from_db and who[0] else ""
+        if status == "done":
             added = res.filings_added if res is not None else (info.get("last_added") or 0)
             calls = res.calls if res is not None else (info.get("last_calls") or 0)
             tip = tr(f"새 공시 {added:,}건 · 호출 {calls:,}건 · 오늘 남은 한도 {info.get('calls_left', 0):,}건",
-                     f"{added:,} new filings · {calls:,} calls · {info.get('calls_left', 0):,} calls left today")
+                     f"{added:,} new filings · {calls:,} calls · {info.get('calls_left', 0):,} calls left today") + by
             if info.get("periods_pending"):
                 tip += tr(f"\n재무 미수집 {info['periods_pending']:,}기간 (다음 실행에서 이어 받음)",
                           f"\n{info['periods_pending']:,} periods still to fetch (resumed next run)")
             self._set(f"DART {_short_time(info.get('last_run'))}", tip)
-            if status == "done":
-                self.status_message.emit(tr(f"DART 새 공시 {added:,}건 반영", f"DART: {added:,} new filings"))
         elif status == "partial":
             self._set(tr("DART 일부 수집", "DART partial"),
                       tr(f"한도 또는 종료로 멈춤, 다음 실행에서 이어 받음 · {err}",
-                         f"Stopped by the limit or shutdown; resumed next run · {err}"), WARN)
+                         f"Stopped by the limit or shutdown; resumed next run · {err}") + by, WARN)
         elif status == "no_key":
             self._set(tr("DART 키 없음", "DART no key"),
                       tr(".env에 DART_API_KEY를 넣으면 다음 실행부터 수집합니다.",
                          "Add DART_API_KEY to .env to collect from the next run."))
-        elif status == "skipped":
-            if not self.label.text():
-                self.label.setText(tr("DART 대기", "DART waiting"))
-            self.label.setToolTip(tr("다른 수집(CLI·스케줄러)이 진행 중이라 이번 실행은 건너뜀",
-                                     "Another collector (CLI / scheduler) is running; this run was skipped"))
-        else:
-            self._set(tr("DART 실패", "DART failed"), err.splitlines()[0] if err else "", DANGER)
+        elif status == "failed":
+            self._set(tr("DART 실패", "DART failed"), (err.splitlines()[0] if err else "") + by, DANGER)
