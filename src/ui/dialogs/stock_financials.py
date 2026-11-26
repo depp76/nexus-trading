@@ -5,7 +5,7 @@ KOSDAQ stock, laid out as the approved mockup
 
     [기준 2026 3분기보고서 · 접수 … · 연결] [기간 …] [단위 억원]   [분기|연간]   DART 11-26 19:42
     [매출] [영업이익 (이익률)] [지배주주순이익] [최근 4분기 합계 매출]
-    [분기 매출 · 영업이익률 chart]          [분기 실적 table]
+    [실적: 분기 | 연간 -- revenue · margin chart | results table]
     [사업부별 매출 비중 chart]              [사업부별 매출 · 증감 table + notes]
     footnotes
 
@@ -25,7 +25,7 @@ from matplotlib.ticker import FuncFormatter
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
-    QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QPushButton, QScrollArea,
+    QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QPushButton, QScrollArea, QScrollBar,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -127,24 +127,7 @@ class StockFinancialsTab(QWidget):
         col.addLayout(self._build_bar())
         col.addLayout(self._build_kpis())
 
-        row1 = QHBoxLayout()
-        row1.setSpacing(10)
-        self._chart_card, self._chart_title, chart_box = self._card(tr("분기 매출 · 영업이익률", "Quarterly revenue · margin"))
-        self._fig = Figure(figsize=(6.4, 2.8), linewidth=0)
-        self._canvas = FigureCanvas(self._fig)
-        self._canvas.setStyleSheet("border: none;")
-        self._canvas.setMinimumHeight(260)
-        chart_box.addWidget(self._canvas, 1)
-        self._table_card, self._table_title, table_box = self._card(tr("분기 실적", "Quarterly results"))
-        self._table = QTableWidget()
-        setup_table(self._table)
-        self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._table.setMinimumHeight(260)
-        table_box.addWidget(self._table, 1)
-        row1.addWidget(self._chart_card, 5)
-        row1.addWidget(self._table_card, 4)
-        col.addLayout(row1)
-
+        col.addWidget(self._build_results_card())
         col.addLayout(self._build_segments())
         foot = QLabel(tr("† 4분기 = 사업보고서 연간값 − 3분기 누적(계산값). ⓡ 정정보고서 반영. "
                          "‡ 사업보고서 이후 정정된 3분기로 계산한 값. YoY = 전년 동기 대비, QoQ = 직전 분기 대비. "
@@ -160,6 +143,43 @@ class StockFinancialsTab(QWidget):
         col.addStretch(1)
         self._scroll.setWidget(page)
         self._refresh_mode()
+
+    def _build_results_card(self) -> QFrame:
+        """One '실적' card: the revenue / margin chart and the results table
+        show the same periods, so they share one head -- the title, a note
+        on what the chart marks, and the 분기 | 연간 switch that drives both."""
+        card, self._table_title, box = self._card(tr("실적", "Results"))
+        box.removeWidget(self._table_title)
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        head.addWidget(self._table_title)
+        self._chart_title = QLabel()             # empty unless the chart leaves periods out
+        self._chart_title.setObjectName("muted")
+        self._chart_title.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
+        head.addWidget(self._chart_title)
+        head.addStretch(1)
+        for btn in self._build_mode_buttons():
+            head.addWidget(btn)
+        box.insertLayout(0, head)
+
+        body = QHBoxLayout()
+        body.setSpacing(12)
+        self._fig = Figure(figsize=(6.4, 2.8), linewidth=0)
+        self._canvas = FigureCanvas(self._fig)
+        self._canvas.setStyleSheet("border: none;")
+        self._canvas.setMinimumHeight(260)
+        body.addWidget(self._canvas, 5)
+        self._table = QTableWidget()
+        setup_table(self._table)
+        self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._table.setMinimumHeight(260)
+        grid_box = QVBoxLayout()                 # the table with its scroll bar right under it
+        grid_box.setSpacing(0)
+        grid_box.addWidget(self._table, 1)
+        grid_box.addLayout(self._build_results_hbar())
+        body.addLayout(grid_box, 4)
+        box.addLayout(body, 1)
+        return card
 
     def _card(self, title: str):
         frame = QFrame()
@@ -194,6 +214,17 @@ class StockFinancialsTab(QWidget):
                                     f"Period {fy0} Q{fq0} – {b['fiscal_year']} Q{b['fiscal_q']}")))
         row.addWidget(self._chip(tr(f"단위 {unit_ko}", f"Unit {unit_en}")))
         row.addStretch(1)
+        last = self._data.get("last_run")
+        try:
+            when = _dt.datetime.fromisoformat(last).strftime("%m-%d %H:%M") if last else "-"
+        except ValueError:
+            when = "-"
+        sync = self._chip(f"DART {when}")
+        sync.setObjectName("faint")
+        row.addWidget(sync)
+        return row
+
+    def _build_mode_buttons(self) -> list:
         self._mode_group = QButtonGroup(self)
         self.mode_buttons = {}
         for key, label in (("q", tr("분기", "Quarterly")), ("y", tr("연간", "Annual"))):
@@ -204,17 +235,7 @@ class StockFinancialsTab(QWidget):
             btn.clicked.connect(lambda _c, k=key: self.set_mode(k))
             self._mode_group.addButton(btn)
             self.mode_buttons[key] = btn
-            row.addWidget(btn)
-        last = self._data.get("last_run")
-        try:
-            when = _dt.datetime.fromisoformat(last).strftime("%m-%d %H:%M") if last else "-"
-        except ValueError:
-            when = "-"
-        sync = self._chip(f"DART {when}")
-        sync.setObjectName("faint")
-        row.addSpacing(10)
-        row.addWidget(sync)
-        return row
+        return list(self.mode_buttons.values())
 
     def set_mode(self, mode: str) -> None:
         """"q" quarterly or "y" annual: the chart and the results table."""
@@ -273,14 +294,9 @@ class StockFinancialsTab(QWidget):
         if self._mode == "q":
             last_fy = self._quarters[-1]["fiscal_year"]
             rows = [q for q in self._quarters if q["fiscal_year"] >= last_fy - 4]
-            self._chart_title.setText(tr("분기 매출 · 영업이익률 (최근 5년, 4분기는 빗금 = 계산값)",
-                                         "Quarterly revenue · operating margin (5 years, hatched Q4 = derived)"))
-            self._table_title.setText(tr("분기 실적 (최신 정정본 기준)", "Quarterly results (latest corrections)"))
         else:
             rows = fm.annual_rows(self._quarters)
-            self._chart_title.setText(tr("연간 매출 · 영업이익률 (진행 중인 해는 누적, 빗금)",
-                                         "Annual revenue · operating margin (year in progress: cumulative, hatched)"))
-            self._table_title.setText(tr("연간 실적", "Annual results"))
+        self._chart_title.setText("")
         self._draw_results_chart(rows)
         self._fill_results_table(rows)
 
@@ -302,7 +318,7 @@ class StockFinancialsTab(QWidget):
         # unit) and the title says so (review_codex 2 P2).
         other = [r for r in rows if rows and (r["currency"] or "KRW") != (rows[-1]["currency"] or "KRW")]
         if other:
-            self._chart_title.setText(self._chart_title.text() + tr(" · 통화가 다른 기간 제외", " · other-currency periods left out"))
+            self._chart_title.setText(tr("차트: 통화가 다른 기간 제외", "Chart: other-currency periods left out"))
         for x, r in zip(xs, rows):
             if r["revenue"] is None or r in other:
                 continue
@@ -335,13 +351,15 @@ class StockFinancialsTab(QWidget):
         self._canvas.draw_idle()
 
     def _fill_results_table(self, rows) -> None:
-        """Items down the side, periods across (newest on the left), like the
-        segment table below it. The item names are the vertical header, so
-        they stay put while the periods scroll sideways."""
-        items = [tr("매출", "Revenue"), "YoY", tr("영업이익", "Op. income"), tr("이익률", "Margin"),
+        """Items down the side, periods across (oldest on the left, like the
+        chart and the segment table), shown scrolled to the newest. The item
+        names are the vertical header, so they stay put while the periods
+        scroll sideways."""
+        yoy = "  YoY"
+        items = [tr("매출", "Revenue"), yoy, tr("영업이익", "Op. income"), yoy, tr("이익률", "Margin"),
                  tr("지배순이익", "Owners' NI") if any(r.get("net_is_owners") for r in self._quarters)
-                 else tr("순이익", "Net income"), tr("비고", "Notes"), tr("접수일", "Received")]
-        periods = list(reversed(rows))
+                 else tr("순이익", "Net income"), yoy, tr("비고", "Notes"), tr("접수일", "Received")]
+        periods = list(rows)
         t = self._table
         t.setUpdatesEnabled(False)
         try:
@@ -364,9 +382,11 @@ class StockFinancialsTab(QWidget):
                     (self._amt(r["revenue"], div), None, None),
                     (_pct(r["revenue_yoy"], 0), _color(r["revenue_yoy"]), None),
                     (self._amt(r["op_income"], div), LOSS if (r["op_income"] or 0) < 0 else None, None),
+                    (_pct(r["op_yoy"], 0), _color(r["op_yoy"]), None),
                     ("—" if r["op_margin"] is None else f"{r['op_margin'] * 100:.1f}%",
                      LOSS if (r["op_margin"] or 0) < 0 else None, None),
                     (self._amt(r["net_income"], div), LOSS if (r["net_income"] or 0) < 0 else None, None),
+                    (_pct(r["net_yoy"], 0), _color(r["net_yoy"]), None),
                     self._note(r, tr(f"단위 {unit_ko}", f"unit {unit_en}")
                                if (r["currency"] or "KRW") != base_currency else ""),
                     (r["rcept_dt"], TEXT_MUTED, Qt.AlignmentFlag.AlignCenter),
@@ -381,6 +401,57 @@ class StockFinancialsTab(QWidget):
             t.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectColumns)
         finally:
             t.setUpdatesEnabled(True)
+        self._hbar_at_end = True                 # newest in view until the user scrolls
+        self._sync_results_hbar()
+
+    def _build_results_hbar(self) -> QHBoxLayout:
+        """The results table's sideways scroll bar, under the period columns
+        only: Qt's own bar runs under the frozen item names (the vertical
+        header) too, so it is switched off and this one mirrors it."""
+        t = self._table
+        t.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        inner = t.horizontalScrollBar()          # still tracks range / value with the policy off
+        self.results_hbar = bar = QScrollBar(Qt.Orientation.Horizontal)
+        self._hbar_lead = QWidget()
+        self._hbar_tail = QWidget()
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        row.addWidget(self._hbar_lead)
+        row.addWidget(bar, 1)
+        row.addWidget(self._hbar_tail)
+        self._hbar_at_end = True
+        inner.rangeChanged.connect(self._sync_results_hbar)
+        inner.actionTriggered.connect(self._release_results_hbar)     # wheel on the table
+        bar.actionTriggered.connect(self._release_results_hbar)       # the bar itself
+        inner.valueChanged.connect(bar.setValue)
+        bar.valueChanged.connect(inner.setValue)
+        t.verticalHeader().geometriesChanged.connect(self._sync_results_hbar)
+        t.verticalScrollBar().rangeChanged.connect(self._sync_results_hbar)
+        self._sync_results_hbar()
+        return row
+
+    def _release_results_hbar(self, *_args) -> None:
+        self._hbar_at_end = False
+
+    def _sync_results_hbar(self, *_args) -> None:
+        """Mirror Qt's bar; until the user scrolls, keep it at the right end:
+        the column widths (and so the range) settle only once the table is
+        laid out, which can be after the fill."""
+        t, bar = self._table, self.results_hbar
+        inner = t.horizontalScrollBar()
+        if self._hbar_at_end:
+            inner.setValue(inner.maximum())
+        bar.setRange(inner.minimum(), inner.maximum())
+        bar.setPageStep(inner.pageStep())
+        bar.setSingleStep(inner.singleStep())
+        bar.setValue(inner.value())
+        frame = t.frameWidth()
+        vh = t.verticalHeader()
+        self._hbar_lead.setFixedWidth(frame + (vh.width() if vh.isVisibleTo(t) else 0))
+        vbar = t.verticalScrollBar()
+        self._hbar_tail.setFixedWidth(frame + (vbar.sizeHint().width() if vbar.maximum() > 0 else 0))
+        bar.setVisible(inner.maximum() > 0)
 
     @staticmethod
     def _amt(v, div) -> str:

@@ -73,9 +73,9 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QButtonGroup,
-    QSplitter, QWidget, QComboBox, QMenu, QCheckBox, QWidgetAction, QTabWidget,
+    QSplitter, QWidget, QComboBox, QMenu, QCheckBox, QWidgetAction, QTabWidget, QTabBar,
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtGui import QFont
 
 from i18n import tr
@@ -108,6 +108,18 @@ def _segment_button(text: str, group: QButtonGroup = None, checked: bool = False
     if group is not None:
         group.addButton(btn)
     return btn
+
+
+class _EqualTabBar(QTabBar):
+    """A tab bar whose tabs all take the widest tab's width."""
+
+    def tabSizeHint(self, index: int) -> QSize:
+        hint = super().tabSizeHint(index)
+        widest = max(super(_EqualTabBar, self).tabSizeHint(i).width() for i in range(self.count()))
+        return QSize(widest, hint.height())
+
+    def minimumTabSizeHint(self, index: int) -> QSize:
+        return self.tabSizeHint(index)
 
 
 class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
@@ -189,6 +201,7 @@ class StockMaDialog(_PlotMixin, _HoverMixin, _ViewMixin, QDialog):
             # 차트 | 기업 정보 (docs/dart_db_plan_2026-11-26.md 13, docs/ui.md 8.34): DART
             # financials for a Korean stock; read the first time the tab is shown.
             self.tabs = QTabWidget()
+            self.tabs.setTabBar(_EqualTabBar())      # 차트 and 기업 정보 tabs equally wide
             chart_page = QWidget()
             page_v = QVBoxLayout(chart_page)
             page_v.setContentsMargins(0, 6, 0, 0)

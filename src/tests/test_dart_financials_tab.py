@@ -6,7 +6,7 @@ import tempfile
 import time
 import unittest
 
-from PyQt6.QtCore import QCoreApplication
+from PyQt6.QtCore import QCoreApplication, Qt
 from PyQt6.QtWidgets import QApplication
 
 from data.dart import financials as fin
@@ -172,17 +172,37 @@ class TestTab(unittest.TestCase):
         self.assertEqual([c.value.text() for c in t.kpi_cards], ["0", "0 (10.0%)", "0", "0"])   # 억원 of tiny values
         self.assertIn("2025 3Q", t.kpi_cards[0].label.text())
         # Transposed: items down the side (the vertical header, frozen while
-        # scrolling sideways), periods across (newest first).
-        self.assertEqual(t._table.rowCount(), 7)
-        self.assertEqual(t._table.columnCount(), 7)
-        self.assertTrue(t._table.verticalHeader().isVisibleTo(t._table))
-        self.assertEqual(t._table.verticalHeaderItem(0).text(), "매출")
-        self.assertEqual(t._table.horizontalHeaderItem(0).text(), "2025 3Q")
-        self.assertEqual(t._table.horizontalHeaderItem(3).text(), "2024 4Q†")
-        self.assertIn("ⓡ", t._table.item(5, 1).text())
+        # scrolling sideways), periods across (oldest first, opened at the newest).
+        tb = t._table
+        self.assertEqual(t._table_title.text(), "실적")
+        # Chart and table share one card, so one 분기 | 연간 switch drives both.
+        self.assertIs(t._canvas.parentWidget(), t._table.parentWidget())
+        self.assertEqual(tb.rowCount(), 9)
+        self.assertEqual(tb.columnCount(), 7)
+        self.assertTrue(tb.verticalHeader().isVisibleTo(tb))
+        self.assertEqual([tb.verticalHeaderItem(i).text().strip() for i in range(9)],
+                         ["매출", "YoY", "영업이익", "YoY", "이익률", "지배순이익", "YoY", "비고", "접수일"])
+        self.assertEqual(tb.horizontalHeaderItem(6).text(), "2025 3Q")
+        self.assertEqual(tb.horizontalHeaderItem(3).text(), "2024 4Q†")
+        self.assertIn("ⓡ", tb.item(7, 5).text())
+        self.assertTrue(tb.item(3, 6).text().endswith("%") or tb.item(3, 6).text() == "—")   # op income YoY
+        # Qt's sideways bar is off; ours mirrors it and starts after the frozen item names.
+        self.assertEqual(tb.horizontalScrollBarPolicy(), Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        t.resize(500, 900)
+        t.show()
+        self.addCleanup(t.close)
+        QApplication.processEvents()
+        self.assertEqual(t._hbar_lead.width(), tb.frameWidth() + tb.verticalHeader().width())
+        inner = tb.horizontalScrollBar()
+        self.assertGreater(inner.maximum(), 0)
+        self.assertEqual(inner.value(), inner.maximum())                    # opened at the newest
+        t.results_hbar.triggerAction(t.results_hbar.SliderAction.SliderToMinimum)
+        QApplication.processEvents()
+        self.assertEqual(inner.value(), 0)
+        self.assertFalse(t._hbar_at_end)
         t.set_mode("y")
-        self.assertEqual(t._table.columnCount(), 2)
-        self.assertEqual(t._table.horizontalHeaderItem(0).text(), "2025 3Q누적")
+        self.assertEqual(tb.columnCount(), 2)
+        self.assertEqual(tb.horizontalHeaderItem(1).text(), "2025 3Q누적")
         self.assertTrue(t.mode_buttons["y"].isChecked())
         self.assertEqual(t.segment_table.rowCount(), 3)                       # DX, DS, check
         self.assertEqual(t.segment_table.horizontalHeaderItem(2).text(), "2025 3Q*")
@@ -200,6 +220,8 @@ class TestTab(unittest.TestCase):
         self.addCleanup(kr.close)
         self.addCleanup(us.close)
         self.assertEqual([kr.tabs.tabText(i) for i in range(kr.tabs.count())], ["차트", "기업 정보"])
+        bar = kr.tabs.tabBar()
+        self.assertEqual(bar.tabSizeHint(0).width(), bar.tabSizeHint(1).width())   # equal tab widths
         self.assertIsNone(us.tabs)
         kr.tabs.setCurrentIndex(1)
         self.assertTrue(_pump(lambda: kr.financials_tab._data is not None))
