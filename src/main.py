@@ -348,6 +348,8 @@ class MainWindow(QMainWindow):
         self.universe_tab.sync_time_changed.connect(self.dart_sync.on_universe_refreshed)
         self.universe_tab.refresh_failed.connect(self.dart_sync.on_universe_refreshed)
         self.dart_sync.status_message.connect(self._on_thread_status_message)
+        # The API-limit line sits at the bottom, beside the transient messages.
+        self.statusBar().addPermanentWidget(self.dart_sync.limit_label)
         self.dart_sync.arm(universe_ready=not wait_for_universe)
 
     def _start_auto_backup(self, run_backup: bool) -> None:

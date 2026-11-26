@@ -279,20 +279,21 @@ class TestSegmentSync(_TmpMixin, unittest.TestCase):
         self.assertEqual(seg.unmatched_codes(conn, SAMSUNG), [])
         self.assertEqual(seg._segment_code(conn, SAMSUNG, "CE부문", 2026), "DX")
 
-    def test_auto_reads_only_new_reports(self):
-        """Plan 11-3-4: the background run takes the reports received in its
-        daily window; the backlog is the explicit --segments run."""
+    def test_auto_reads_the_whole_backlog_stock_by_stock(self):
+        """User direction 2026-11-26: the background run reads every pending
+        segment period of the target stocks (it used to take only the reports
+        of its daily window, plan 11-3-4); --segments then has nothing left."""
         res = run_sync("auto", "cli", api_key="k" * 40, db_path=self.db, cache_dir=self.cache, lock_path=self.lock,
                        today=dt.date(2025, 11, 20), client_factory=self.factory(), priority=["005930"])
         self.assertEqual(res.status, "done", res.error)
         conn = connect(self.db)
         self.addCleanup(conn.close)
         got = {r[0] for r in conn.execute("SELECT f.reprt_code FROM seg_fetch s JOIN filing f ON f.rcept_no = s.rcept_no")}
-        self.assertEqual(got, {"11014"})              # Q3 received 11-14 is in the window (from 11-09); Q1 / H1 wait
+        self.assertEqual(got, {"11013", "11012", "11014"})
         res = run_sync("segments", "cli", api_key="k" * 40, db_path=self.db, cache_dir=self.cache,
                        lock_path=self.lock, today=dt.date(2025, 11, 20), client_factory=self.factory(),
                        priority=["005930"])
-        self.assertEqual(res.segments_done, 2)
+        self.assertEqual(res.segments_done, 0)
 
     def test_financial_filer_is_not_applicable(self):
         conn = connect(self.db)

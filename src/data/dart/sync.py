@@ -16,8 +16,11 @@ Modes (plan 11-3 order inside ``auto``):
 - ``backfill``: financials of every filing not fetched yet (``fin_fetch``),
   Universe stocks first, then the rest by market cap.
 - ``auto``: company list (if stale) -> list backfill (if unfinished) -> daily
-  -> backfill -> segments of the reports received in the daily window only
-  (plan 11-3-4: "새로 들어온 관심 종목 보고서만").
+  -> the backfill stock by stock in the Trading Universe's order (its KOSPI
+  rows, then its KOSDAQ rows, as the table lists them): each stock's pending
+  financials, then its pending segment periods; then the financials of the
+  stocks outside the Universe by market cap (user direction 2026-11-26; until
+  then auto read the segments of the daily window only, plan 11-3-4).
 - ``segments``: revenue by business segment of the target companies, all
   pending periods (stage 4, plan 5; the initial load is this explicit run --
   most periods need the report document, a few MB each): the Universe's KOSPI/KOSDAQ stocks and ``segment_targets.json``;
@@ -363,10 +366,10 @@ class _Job:
             # instead of leaving their financials to a later backfill (review_agy L4).
             set_state(self.conn, "daily_until", self.today.isoformat())
             self.conn.commit()
-        if mode in ("backfill", "auto"):
+        if mode == "backfill":
             self.fetch_financials()
         if mode == "auto":
-            self.fetch_segments(since=getattr(self, "_daily_since", None) or self.today.isoformat())
+            self.backfill_by_stock()
 
     # ---- company list ------------------------------------------------------------
 
@@ -503,28 +506,99 @@ class _Job:
         order = sorted(groups, key=lambda k: (rank(groups[k][0]["stock_code"]), k[0], k[1], q_of[k[2]]))
         total = len(order)
         label = "new financials" if since else "financials"
-        errors_in_a_row = 0
+        errors = {"fin": 0, "seg": 0}
         for i, key in enumerate(order):
-            self._check()
-            corp, fy, reprt = key
-            members = groups[key]
-            self._progress(i, total, f"{label} {members[0]['stock_code']} {fy} {reprt}")
-            try:
-                self._fetch_group(corp, fy, reprt, members)
-            except DartApiError as e:
-                self.conn.rollback()
-                if is_fatal(e):
-                    raise
-                errors_in_a_row += 1
-                self.periods_failed += 1
-                logger.warning("DART %s %s %s skipped (left pending): %s", members[0]["stock_code"], fy, reprt, e)
-                if errors_in_a_row >= MAX_CONSECUTIVE_ERRORS:
-                    raise
-                continue
-            errors_in_a_row = 0
-            self.conn.commit()
-            self.periods_fetched += 1
+            self._progress(i, total, f"{label} {groups[key][0]['stock_code']} {key[1]} {key[2]}")
+            self._financial_step(key, groups[key], errors)
         self._progress(total, total, f"{label} done")
+
+    def _pending_groups(self, since=None) -> dict:
+        """(corp, fiscal year, reprt) -> the pending filings of that period."""
+        sql, args = self._pending_sql(since)
+        groups: dict = {}
+        for r in self.conn.execute(sql, args):
+            r = dict(r)
+            groups.setdefault((r["corp_code"], r["bsns_year"], r["reprt_code"]), []).append(r)
+        return groups
+
+    def _financial_step(self, key, members, errors) -> None:
+        """One period's financials. A failing request is logged and left pending
+        for the next run; the run stops only on a fatal status or
+        MAX_CONSECUTIVE_ERRORS failures in a row (review_agy H3)."""
+        self._check()
+        corp, fy, reprt = key
+        try:
+            self._fetch_group(corp, fy, reprt, members)
+        except DartApiError as e:
+            self.conn.rollback()
+            if is_fatal(e):
+                raise
+            errors["fin"] += 1
+            self.periods_failed += 1
+            logger.warning("DART %s %s %s skipped (left pending): %s", members[0]["stock_code"], fy, reprt, e)
+            if errors["fin"] >= MAX_CONSECUTIVE_ERRORS:
+                raise
+            return
+        errors["fin"] = 0
+        self.conn.commit()
+        self.periods_fetched += 1
+
+    def _segment_step(self, p, errors) -> None:
+        """One period's segments; failures handled like a financial period's."""
+        self._check()
+        try:
+            if self._segment_period(p):
+                self.segments_done += 1
+        except DartApiError as e:
+            self.conn.rollback()
+            if is_fatal(e):
+                raise
+            errors["seg"] += 1
+            self.segments_failed += 1
+            logger.warning("DART segments %s %s %s skipped: %s", p["stock_code"], p["bsns_year"],
+                           p["reprt_code"], e)
+            if errors["seg"] >= MAX_CONSECUTIVE_ERRORS:
+                raise
+            return
+        errors["seg"] = 0
+        self.conn.commit()
+
+    def backfill_by_stock(self) -> None:
+        """The auto backfill (user direction 2026-11-26): stock by stock in the
+        Trading Universe's order -- a stock's pending financials, then its
+        pending segment periods (they need the financials of the same receipt)
+        -- so the stocks at the top of the table are complete first; then the
+        other stocks' financials by market cap. Progress: "financials ..." for
+        each financial period (done / total = the financial periods pending at
+        the start, what the app's percentage reads) and "segments ..." for each
+        segment period."""
+        groups = self._pending_groups()
+        targets = self.segment_targets()
+        target_set = set(targets)
+        by_stock: dict = {}
+        for key, members in groups.items():
+            by_stock.setdefault(members[0]["stock_code"], []).append(key)
+        if not by_stock and not targets:
+            return
+        # Only stocks with pending financials decide whether the KRX market-cap
+        # file is needed (review_agy M1); a segment-only target sorts by the Universe.
+        rank = self._rank(set(by_stock)) if by_stock else (lambda _s: 0)
+        tpos = {c: i for i, c in enumerate(targets)}
+        stocks = sorted(set(by_stock) | target_set, key=lambda c: (rank(c), tpos.get(c, len(tpos)), c))
+        q_of = fil.Q_BY_REPRT
+        total = len(groups)
+        i = 0
+        errors = {"fin": 0, "seg": 0}
+        for stock in stocks:
+            for key in sorted(by_stock.get(stock, []), key=lambda k: (k[0], k[1], q_of[k[2]])):
+                self._progress(i, total, f"financials {stock} {key[1]} {key[2]}")
+                self._financial_step(key, groups[key], errors)
+                i += 1
+            if stock in target_set:
+                for p in self._segment_pending([stock]):
+                    self._progress(i, total, f"segments {stock} {p['bsns_year']} {p['reprt_code']}")
+                    self._segment_step(p, errors)
+        self._progress(total, total, "financials done")
 
     def _fetch_group(self, corp, fy, reprt, members):
         latest = max(m["rcept_no"] for m in members)
@@ -648,26 +722,10 @@ class _Job:
         one period failing is skipped like a financial period (H3)."""
         pending = self._segment_pending(self.segment_targets(), since)
         total = len(pending)
-        errors_in_a_row = 0
+        errors = {"fin": 0, "seg": 0}
         for i, p in enumerate(pending):
-            self._check()
             self._progress(i, total, f"segments {p['stock_code']} {p['bsns_year']} {p['reprt_code']}")
-            try:
-                if self._segment_period(p):
-                    self.segments_done += 1
-            except DartApiError as e:
-                self.conn.rollback()
-                if is_fatal(e):
-                    raise
-                errors_in_a_row += 1
-                self.segments_failed += 1
-                logger.warning("DART segments %s %s %s skipped: %s", p["stock_code"], p["bsns_year"],
-                               p["reprt_code"], e)
-                if errors_in_a_row >= MAX_CONSECUTIVE_ERRORS:
-                    raise
-                continue
-            errors_in_a_row = 0
-            self.conn.commit()
+            self._segment_step(p, errors)
         if total:
             self._progress(total, total, "segments done")
 
@@ -769,13 +827,20 @@ def api_years(members, fiscal_year: int, fiscal_month: int) -> list[int]:
 
 
 def universe_priority() -> list[str]:
-    """The Universe cache's KOSPI/KOSDAQ stock codes by market cap (plan 11-3-3)."""
+    """The Universe cache's KOSPI/KOSDAQ stock codes in the Trading Universe
+    table's order (KOSPI by market cap, then KOSDAQ by market cap; user direction
+    2026-11-26 -- before, both markets were merged by market cap, plan 11-3-3)."""
     try:
         with open(paths.UNIVERSE_CACHE_FILE, encoding="utf-8") as f:
             rows = json.load(f)
-        kr = [r for r in rows if isinstance(r, dict) and r.get("market") in ("KOSPI", "KOSDAQ") and r.get("ticker")]
-        kr.sort(key=lambda r: -(r.get("market_cap") or 0))
-        return [str(r["ticker"]).zfill(6) for r in kr]
+        out, seen = [], set()
+        for r in rows:
+            if isinstance(r, dict) and r.get("market") in ("KOSPI", "KOSDAQ") and r.get("ticker"):
+                code = str(r["ticker"]).zfill(6)
+                if code not in seen:
+                    seen.add(code)
+                    out.append(code)
+        return out
     except (OSError, ValueError, TypeError):
         logger.info("DART priority: no Universe cache", exc_info=True)
         return []

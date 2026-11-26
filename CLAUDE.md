@@ -236,7 +236,9 @@ Dev tooling is in `requirements-dev.txt`
   `auto` reads new reports only, the backlog is `--segments`). Not in
   the `data_fetcher` facade. The app runs it in the background (stage 3A, docs/ui.md 8.33):
   `src/ui/dart_sync_thread.py` (`DartSyncThread` -- the plan names this path, so this QThread lives in
-  `ui/`, not `threads/` -- and `DartAutoSync`, the start rule and the header label) armed by
+  `ui/`, not `threads/` -- and `DartAutoSync`, the start rule, the header label, continuous collection while the
+  app is open and the status-bar `limit_label` with the after-midnight resume when the daily limit is spent; the
+  auto backfill goes stock by stock in the Universe table's order, financials then segments, docs/ui.md 8.33) armed by
   `MainWindow._arm_dart_sync`; tests never reach the real dart.db or key (conftest).
 - **`src/data_fetcher.py`**: the single re-export facade over `data/` (data access only, no
   strategy symbols) so UI and thread code import from one place; `data/__init__.py` itself

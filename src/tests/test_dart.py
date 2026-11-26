@@ -1556,3 +1556,33 @@ class TestReviewCodex3(_TmpMixin, unittest.TestCase):
         n = len(self.fake.requests)
         self.sync("backfill", tickers=["123450"])                   # fresh now: not asked again
         self.assertEqual([ep for ep, _ in self.fake.requests[n:]].count("corpCode.xml"), 0)
+
+
+class TestUniverseOrder(_TmpMixin, unittest.TestCase):
+    """User direction 2026-11-26: the auto backfill goes stock by stock in the
+    Trading Universe's order -- a stock's financials, then its segments."""
+
+    def test_stock_by_stock_in_the_given_order(self):
+        res = run_sync("auto", "cli", api_key="k" * 40, db_path=self.db, cache_dir=self.cache, lock_path=self.lock,
+                       today=dt.date(2025, 11, 26), priority=["123450", "005930"], client_factory=self.factory())
+        self.assertEqual(res.status, "done", res.error)
+        steps = []
+        for ep, prm in self.fake.requests:
+            if ep == "fnlttSinglAcntAll.json":
+                steps.append(("fin", prm["corp_code"]))
+            elif ep == "fnlttXbrl.xml":
+                steps.append(("seg", prm["rcept_no"][:8]))
+        first_samsung = steps.index(("fin", SAMSUNG))
+        self.assertTrue(all(s == ("fin", SMALL) for s in steps[:1]))
+        self.assertIn(("seg", "20250515"), steps[:first_samsung])          # the small company's segments first
+        self.assertTrue(all(s[0] != "fin" or s[1] == SAMSUNG for s in steps[first_samsung:]))
+
+    def test_universe_order_is_the_tables(self):
+        rows = [{"market": "Index", "ticker": "^KS11"},
+                {"market": "KOSPI", "ticker": "5930", "market_cap": 5},
+                {"market": "KOSPI", "ticker": "660", "market_cap": 9},
+                {"market": "KOSDAQ", "ticker": "247540", "market_cap": 99},
+                {"market": "KOSPI", "ticker": "5930", "market_cap": 5}]
+        with open(paths.UNIVERSE_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(rows, f)
+        self.assertEqual(dsync.universe_priority(), ["005930", "000660", "247540"])
