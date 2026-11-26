@@ -72,11 +72,15 @@ def quarter_windows(start: _dt.date, end: _dt.date) -> list[tuple[_dt.date, _dt.
 
 
 def fetch_filing_list(client, bgn: _dt.date, end: _dt.date, *, corp_cls: str | None = None,
-                      corp_code: str | None = None, cacheable: bool = False) -> list[dict]:
+                      corp_code: str | None = None, cacheable: bool = False, check=None) -> list[dict]:
     """Every periodic-report row DART lists for the window (all pages). Past
-    windows (`cacheable`) are served from the cache on a rerun."""
+    windows (`cacheable`) are served from the cache on a rerun. `check()` runs
+    before every page (run_sync's cancel check: a market-wide quarter is ~15
+    pages, too long to wait for when the app closes)."""
     rows, page = [], 1
     while True:
+        if check:
+            check()
         params = {"bgn_de": bgn.strftime("%Y%m%d"), "end_de": end.strftime("%Y%m%d"),
                   "pblntf_ty": "A", "last_reprt_at": "N", "page_no": page, "page_count": 100}
         if corp_cls:

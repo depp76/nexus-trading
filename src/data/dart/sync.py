@@ -38,7 +38,7 @@ import paths
 from data.dart import corp as corp_mod
 from data.dart import filings as fil
 from data.dart import financials as fin
-from data.dart.client import DartBudgetExceeded, DartClient, api_key_from_env, kst_today
+from data.dart.client import DAILY_LIMIT, DartBudgetExceeded, DartClient, api_key_from_env, calls_today, kst_today
 from data.dart.lock import SyncLock
 from data.dart.store import connect, get_state, now_iso, set_state
 
@@ -48,6 +48,73 @@ DART_YEARS = 5                 # 5 business years + the current one (plan header
 DAILY_OVERLAP_DAYS = 3         # plan 11-3-2
 MODES = ("init", "daily", "backfill", "auto")
 _KEY_FROM_ENV = object()
+_KST = _dt.timezone(_dt.timedelta(hours=9))
+EVENING_HOUR = 19              # plan 11-2: one run after 19:00 KST catches the day's filings
+INITIAL_PENDING_PERIODS = 1000  # more periods than this still to fetch = the initial load (plan 11-8)
+
+
+def kst_now() -> _dt.datetime:
+    return _dt.datetime.now(_KST)
+
+
+def _parse_kst(text: str | None) -> _dt.datetime | None:
+    if not text:
+        return None
+    try:
+        t = _dt.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return t.replace(tzinfo=_KST) if t.tzinfo is None else t.astimezone(_KST)
+
+
+def is_due(last_run: str | None, last_status: str | None, now: _dt.datetime, at_start: bool) -> bool:
+    """Plan 11-2. At app start: run unless a run (not a failed one) already
+    finished after today's 19:00 KST. On the 30-minute check: run only after
+    19:00, and only if no run finished after 19:00 today."""
+    now = now.astimezone(_KST) if now.tzinfo else now.replace(tzinfo=_KST)
+    evening = now.replace(hour=EVENING_HOUR, minute=0, second=0, microsecond=0)
+    last = _parse_kst(last_run)
+    done_tonight = last is not None and last >= evening and last_status != "failed"
+    if done_tonight:
+        return False
+    return at_start or now >= evening
+
+
+def collection_status(db_path: str | None = None, today: _dt.date | None = None, years: int = DART_YEARS) -> dict:
+    """What a status display needs, read from dart.db: last run (time, status,
+    calls, new filings), whether the list backfill is done, the periods in the
+    window and how many still lack financials, and today's calls / limit left."""
+    conn = connect(db_path or paths.DART_DB_FILE)
+    try:
+        today = today or kst_now().date()
+        first = first_fiscal_year(today, years)
+        run = conn.execute("SELECT status, calls, filings_added, error, finished_at FROM sync_run "
+                           "WHERE status NOT IN ('running', 'skipped') ORDER BY started_at DESC LIMIT 1").fetchone()
+        total, pending = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(p.missing > 0), 0) FROM ("
+            " SELECT f.corp_code, f.bsns_year, f.reprt_code, SUM(x.rcept_no IS NULL) AS missing"
+            " FROM filing f LEFT JOIN fin_fetch x ON x.rcept_no = f.rcept_no WHERE f.bsns_year >= ?"
+            " GROUP BY f.corp_code, f.bsns_year, f.reprt_code) p", (first,)).fetchone()
+        used = calls_today(conn, today.isoformat())
+        return {
+            "last_run": get_state(conn, "last_run"),
+            "last_status": get_state(conn, "last_run_status"),
+            "last_calls": run["calls"] if run else None,
+            "last_added": run["filings_added"] if run else None,
+            "last_error": run["error"] if run else None,
+            "list_done": get_state(conn, "list_backfill_done") == "1",
+            "periods_total": int(total or 0),
+            "periods_pending": int(pending or 0),
+            "calls_today": used,
+            "calls_left": max(0, DAILY_LIMIT - used),
+        }
+    finally:
+        conn.close()
+
+
+def is_initial_load(status: dict) -> bool:
+    """Whether the first full collection is still under way (plan 11-8 label)."""
+    return not status.get("list_done") or status.get("periods_pending", 0) > INITIAL_PENDING_PERIODS
 
 
 @dataclasses.dataclass
@@ -104,6 +171,11 @@ def run_sync(mode: str = "auto", trigger: str = "cli", *, budget: int | None = N
                         finished=True)
             return SyncResult("skipped", run_id)
         try:
+            # Holding the lock means no other run is alive: a 'running' row left by a
+            # process that ended mid-run (the app closing past its 2 s wait) is closed here.
+            conn.execute("UPDATE sync_run SET status = 'partial', finished_at = ?, "
+                         "error = 'interrupted: the process ended during the run' WHERE status = 'running'",
+                         (now_iso(),))
             _record_run(conn, run_id, trigger, mode, "running", 0, 0, None)
             if client_factory is not None:
                 client = client_factory(conn, key, run_id)
@@ -123,7 +195,7 @@ def run_sync(mode: str = "auto", trigger: str = "cli", *, budget: int | None = N
                 conn.rollback()
             calls = getattr(client, "calls", 0)
             pending = job.pending_count()
-            set_state(conn, "last_run", now_iso())
+            set_state(conn, "last_run", kst_now().isoformat(timespec="seconds"))
             set_state(conn, "last_run_status", status)
             _record_run(conn, run_id, trigger, mode, status, calls, job.filings_added, error, finished=True)
             return SyncResult(status, run_id, calls, job.filings_added, job.periods_fetched, pending, error)
@@ -213,7 +285,8 @@ class _Job:
             self._check()
             self._progress(i, len(windows), f"filing list {bgn}..{end}")
             for cls in ("Y", "K"):
-                rows = fil.fetch_filing_list(self.client, bgn, end, corp_cls=cls, cacheable=end < self.today)
+                rows = fil.fetch_filing_list(self.client, bgn, end, corp_cls=cls, cacheable=end < self.today,
+                                             check=self._check)
                 self.filings_added += fil.store_filings(self.conn, rows, self.first_year)
             set_state(self.conn, "list_backfill_cursor", (end + _dt.timedelta(days=1)).isoformat())
             self.conn.commit()
@@ -229,7 +302,7 @@ class _Job:
         for bgn, end in fil.quarter_windows(start, self.today):
             self._check()
             for cls in ("Y", "K"):
-                rows = fil.fetch_filing_list(self.client, bgn, end, corp_cls=cls)
+                rows = fil.fetch_filing_list(self.client, bgn, end, corp_cls=cls, check=self._check)
                 self.filings_added += fil.store_filings(self.conn, rows, self.first_year)
             self.conn.commit()
         set_state(self.conn, "daily_until", self.today.isoformat())
@@ -242,7 +315,7 @@ class _Job:
         for i, corp in enumerate(corps):
             self._check()
             self._progress(i, len(corps), f"filing list {corp}")
-            rows = fil.fetch_filing_list(self.client, start, self.today, corp_code=corp)
+            rows = fil.fetch_filing_list(self.client, start, self.today, corp_code=corp, check=self._check)
             self.filings_added += fil.store_filings(self.conn, rows, self.first_year)
             self.conn.commit()
 

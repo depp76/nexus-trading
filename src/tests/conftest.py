@@ -28,6 +28,13 @@ def _isolated_holdout_ledger(tmp_path, monkeypatch):
     # Same for the Universe cache (2026-11-18: a Universe test's table render saved its one
     # fixture row over the real universe_cache.json).
     monkeypatch.setattr(paths, "UNIVERSE_CACHE_FILE", str(tmp_path / "universe_cache.json"))
+    # DART (2026-11-26): a MainWindow left running in a test arms the app's DART auto
+    # collection; it must never reach the real dart.db or OpenDART. No key -> run_sync
+    # records "no_key" in the temporary DB and calls nothing.
+    import data.dart.sync as dart_sync
+    monkeypatch.setattr(paths, "DART_DB_FILE", str(tmp_path / "dart.db"))
+    monkeypatch.setattr(paths, "DART_CACHE_DIR", str(tmp_path / "dart_cache"))
+    monkeypatch.setattr(dart_sync, "api_key_from_env", lambda: None)
 
 
 # Close and delete the top-level widgets a test module leaves open (2026-11-20). Many UI tests

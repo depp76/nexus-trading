@@ -36,6 +36,7 @@ from ui.common import (
 from ui.language_switch import LanguageSwitch
 from ui.theme import app_qss, app_palette, apply_matplotlib_theme, TEXT_EMPTY
 from ui.colors import OK, WARN, DANGER
+from ui.dart_sync_thread import DartAutoSync
 
 load_dotenv(ENV_FILE)
 
@@ -95,6 +96,7 @@ _UI_NAMES = {
     "ui.language_switch": ("LanguageSwitch",),
     "ui.theme": ("app_qss", "app_palette", "apply_matplotlib_theme", "TEXT_EMPTY"),
     "ui.colors": ("OK", "WARN", "DANGER"),
+    "ui.dart_sync_thread": ("DartAutoSync",),
     "threads.fetch_threads": ("AutoBackupThread",),
     "ui.history_tab": ("TradingHistoryTab",),
     "ui.assets_tab": ("TradingRecordTab",),
@@ -197,6 +199,7 @@ class MainWindow(QMainWindow):
 
         self._install_tab_shortcuts()
         self._start_auto_backup(run_backup)
+        self._arm_dart_sync(wait_for_universe=initial_refresh)
 
     def _build_header(self) -> QHBoxLayout:
         """App title; also builds the refresh status and language flags
@@ -264,6 +267,10 @@ class MainWindow(QMainWindow):
         self.update_time_label.setFont(create_font(FONT_BODY, style_name="Semilight"))
         header_layout.addSpacing(6)
         header_layout.addWidget(self.update_time_label)
+        # DART auto collection state, right of the refresh time (docs/ui.md 8.33).
+        self.dart_sync = DartAutoSync()
+        header_layout.addSpacing(10)
+        header_layout.addWidget(self.dart_sync.label)
 
     def _build_tabs(self, main_layout: QVBoxLayout) -> None:
         # Tab System
@@ -332,6 +339,17 @@ class MainWindow(QMainWindow):
         sc_prev.setContext(Qt.ShortcutContext.WindowShortcut)
         sc_prev.activated.connect(self._tab_prev)
 
+    def _arm_dart_sync(self, wait_for_universe: bool) -> None:
+        """DART collection in the background (docs/dart_db_plan_2026-11-26.md 11,
+        docs/ui.md 8.33): first run once the Universe's first refresh has ended
+        and 10 s have passed; off with custom_settings.json dart_auto_sync."""
+        self.dart_sync.enabled = bool(self.universe_tab.custom_settings.get("dart_auto_sync", True))
+        self.dart_sync.label.setVisible(self.dart_sync.enabled)
+        self.universe_tab.sync_time_changed.connect(self.dart_sync.on_universe_refreshed)
+        self.universe_tab.refresh_failed.connect(self.dart_sync.on_universe_refreshed)
+        self.dart_sync.status_message.connect(self._on_thread_status_message)
+        self.dart_sync.arm(universe_ready=not wait_for_universe)
+
     def _start_auto_backup(self, run_backup: bool) -> None:
         # Automatic backup of portfolio.db (trades + asset snapshots) + custom_settings.json (roadmap 2-4).
         # Runs in the background so it never blocks startup.
@@ -393,6 +411,8 @@ class MainWindow(QMainWindow):
         threads = []
         if self._auto_backup_thread is not None:
             threads.append(self._auto_backup_thread)
+        if hasattr(self, "dart_sync"):
+            threads.extend(self.dart_sync.threads())
         for tab in ("universe_tab", "trading_history_tab", "trading_record_tab", "strategy_tab"):
             if hasattr(self, tab):
                 threads.extend(getattr(self, tab).collect_threads_to_stop())
@@ -405,6 +425,7 @@ class MainWindow(QMainWindow):
         late result never reaches this window. Returns the running threads."""
         self.global_auto_timer.stop()
         self._indicator_timer.stop()
+        self.dart_sync.stop()
         running = []
         for t in self._threads_to_stop():
             try:

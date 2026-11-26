@@ -18,6 +18,11 @@ from data.dart.lock import SyncLock
 from data.dart.store import connect
 from data.dart.sync import run_sync
 
+import paths  # noqa: E402
+
+# The real dart.db, taken before conftest points paths.DART_DB_FILE at a temporary file.
+REAL_DART_DB = paths.DART_DB_FILE
+
 SAMSUNG = "00126380"
 SMALL = "00999999"          # separate statements only (OFS)
 
@@ -225,10 +230,15 @@ class TestFinancials(_TmpMixin, unittest.TestCase):
 
 class TestSyncAndQuery(_TmpMixin, unittest.TestCase):
     def test_full_run_loads_quarters_corrections_and_fallbacks(self):
+        conn = connect(self.db)                       # a run whose process died mid-way
+        conn.execute("INSERT INTO sync_run(run_id, trigger, mode, status) VALUES ('dead', 'app', 'auto', 'running')")
+        conn.commit()
+        conn.close()
         res = self.sync("auto")
         self.assertEqual(res.status, "done", res.error)
         conn = connect(self.db)
         self.addCleanup(conn.close)
+        self.assertEqual(conn.execute("SELECT status FROM sync_run WHERE run_id = 'dead'").fetchone()[0], "partial")
         # Companies: listed ones only, market from the list.
         self.assertEqual(conn.execute("SELECT market FROM company WHERE corp_code = ?", (SMALL,)).fetchone()[0],
                          "KOSDAQ")
@@ -439,11 +449,10 @@ class TestVerificationStocks(unittest.TestCase):
     reads the DB only, no API calls."""
 
     def test_2025_quarters_match_report_tables(self):
-        import paths
         from data.dart.client import api_key_from_env
-        if not api_key_from_env() or not os.path.exists(paths.DART_DB_FILE):
+        if not api_key_from_env() or not os.path.exists(REAL_DART_DB):
             self.skipTest("no DART key or dart.db")
-        conn = connect(paths.DART_DB_FILE)
+        conn = connect(REAL_DART_DB)
         self.addCleanup(conn.close)
         for code, metrics in EXPECTED_2025.items():
             rows = query.get_financials(code, conn=conn)

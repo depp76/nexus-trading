@@ -223,7 +223,10 @@ Dev tooling is in `requirements-dev.txt`
   then -- the one read entry point for screens and strategies), `lock.py` (`cache/dart/sync.lock`),
   `sync.py` (`run_sync(mode, trigger, ...)`: the only collection logic, no Qt; records `sync_run`).
   `tools/dart_sync.py` (`--init/--daily/--backfill [--tickers]/--auto`) only calls `run_sync`. Not in
-  the `data_fetcher` facade; no UI caller yet (stage 3A adds the app thread).
+  the `data_fetcher` facade. The app runs it in the background (stage 3A, docs/ui.md 8.33):
+  `src/ui/dart_sync_thread.py` (`DartSyncThread` -- the plan names this path, so this QThread lives in
+  `ui/`, not `threads/` -- and `DartAutoSync`, the start rule and the header label) armed by
+  `MainWindow._arm_dart_sync`; tests never reach the real dart.db or key (conftest).
 - **`src/data_fetcher.py`**: the single re-export facade over `data/` (data access only, no
   strategy symbols) so UI and thread code import from one place; `data/__init__.py` itself
   re-exports nothing. Nothing in `data/` imports the facade back; keep it that way. It
