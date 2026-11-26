@@ -53,7 +53,13 @@ class DartApiError(Exception):
 
 
 class DartBudgetExceeded(Exception):
-    """The daily limit (api_usage), this run's budget, or DART's own 020."""
+    """The daily limit (api_usage), this run's budget, or DART's own 020.
+    ``reason`` says which: ``daily_limit`` / ``budget`` / ``server_limit``
+    (review_codex 4 P2: the app waits for midnight on either limit)."""
+
+    def __init__(self, message: str = "", reason: str = "daily_limit"):
+        super().__init__(message)
+        self.reason = reason
 
 
 class DartCancelled(Exception):
@@ -225,14 +231,15 @@ class DartClient:
         run's budget is used up. The conditional UPDATE makes the check and the
         increment one step, so two processes cannot both take the last call."""
         if self.budget is not None and self.calls >= self.budget:
-            raise DartBudgetExceeded(f"run budget of {self.budget} calls used")
+            raise DartBudgetExceeded(f"run budget of {self.budget} calls used", reason="budget")
         day = self._today()
         self.conn.execute("INSERT OR IGNORE INTO api_usage(kst_date, calls) VALUES (?, 0)", (day,))
         cur = self.conn.execute(
             "UPDATE api_usage SET calls = calls + 1 WHERE kst_date = ? AND calls < ?", (day, self.daily_limit))
         self.conn.commit()
         if cur.rowcount == 0:
-            raise DartBudgetExceeded(f"daily limit of {self.daily_limit} calls reached ({day} KST)")
+            raise DartBudgetExceeded(f"daily limit of {self.daily_limit} calls reached ({day} KST)",
+                                     reason="daily_limit")
         self.calls += 1
 
     def _request(self, endpoint: str, params: dict):
@@ -265,7 +272,14 @@ class DartClient:
         if status in (STATUS_OK, STATUS_NO_DATA):
             return
         if status == STATUS_LIMIT:
-            raise DartBudgetExceeded(f"DART refused: {message} (020)")
+            # DART's own count is spent (the key may be used elsewhere too): mark
+            # today's usage as full, so every collector -- and the app's status --
+            # waits for the next KST day instead of asking again (review_codex 4 P2).
+            day = self._today()
+            self.conn.execute("INSERT OR IGNORE INTO api_usage(kst_date, calls) VALUES (?, 0)", (day,))
+            self.conn.execute("UPDATE api_usage SET calls = MAX(calls, ?) WHERE kst_date = ?", (self.daily_limit, day))
+            self.conn.commit()
+            raise DartBudgetExceeded(f"DART refused: {message} (020)", reason="server_limit")
         raise DartApiError(status, message)
 
     def _log(self, endpoint: str, params: dict, status: str, error) -> None:

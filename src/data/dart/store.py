@@ -34,7 +34,7 @@ import sqlite3
 # 6 (2026-11-26, stage 4): seg_fetch -- which filings' segment revenue was read.
 # 7 (2026-11-26, review_codex 2): a Q4 row per Q3 version (fin_std.derived = 2 under the
 #   late Q3's receipt) instead of one value with an availability day; Q4 rows re-derived.
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS company (
@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS fin_std (
   rcept_dt TEXT NOT NULL,
   currency TEXT DEFAULT 'KRW',       -- reporting currency (plan 4-6); amounts are never converted
   avail_dt TEXT,                     -- unused since schema 7 (a late Q3 gives its own Q4 row, derived = 2)
+  ytd_derived INTEGER DEFAULT 0,     -- 1: value_ytd = the quarter before + value_q (the reply had no cumulative)
   PRIMARY KEY (corp_code, fiscal_year, fiscal_q, metric, rcept_no)
 );
 
@@ -180,23 +181,36 @@ CREATE TABLE IF NOT EXISTS fin_issue (
 # Views are kept apart from the tables: they are dropped and recreated on a
 # schema change only (after the column migrations).
 _VIEWS = """
--- Newest receipt per (company, fiscal quarter, metric), with the calendar
--- position of the quarter (plan 4-7): period_end 'YYYY-MM' and its calendar
--- year / quarter, from the company's fiscal month (12 when unknown).
+-- One statement version per (company, fiscal quarter): the newest receipt that
+-- stored the quarter's statement rows (derived <> 2), and only the metrics of
+-- that receipt -- a metric a correction no longer has is not taken from the
+-- original (review_codex 4 P1). A Q4 restated under a later Q3 correction
+-- (derived = 2) is kept on its own and replaces that metric when it is newer.
+-- With the calendar position of the quarter (plan 4-7): period_end 'YYYY-MM'
+-- and its calendar year / quarter, from the company's fiscal month (12 when unknown).
 DROP VIEW IF EXISTS v_fin_growth;
 DROP VIEW IF EXISTS v_fin_latest;
+DROP VIEW IF EXISTS v_fin_version;
+CREATE VIEW v_fin_version AS
+SELECT corp_code, fiscal_year, fiscal_q, MAX(rcept_no) AS rcept_no FROM fin_std
+WHERE COALESCE(derived, 0) <> 2 GROUP BY corp_code, fiscal_year, fiscal_q;
+
 CREATE VIEW v_fin_latest AS
 SELECT s.*,
        printf('%04d-%02d', (s.fiscal_year * 12 + COALESCE(c.fiscal_month, 12) - 1 - 3 * (4 - s.fiscal_q)) / 12, (s.fiscal_year * 12 + COALESCE(c.fiscal_month, 12) - 1 - 3 * (4 - s.fiscal_q)) % 12 + 1) AS period_end,
        (s.fiscal_year * 12 + COALESCE(c.fiscal_month, 12) - 1 - 3 * (4 - s.fiscal_q)) / 12 AS cal_year,
        ((s.fiscal_year * 12 + COALESCE(c.fiscal_month, 12) - 1 - 3 * (4 - s.fiscal_q)) % 12) / 3 + 1 AS cal_q
 FROM fin_std s
+JOIN v_fin_version v ON v.corp_code = s.corp_code AND v.fiscal_year = s.fiscal_year AND v.fiscal_q = s.fiscal_q
 LEFT JOIN company c ON c.corp_code = s.corp_code
-WHERE s.rcept_no = (
-  SELECT MAX(t.rcept_no) FROM fin_std t
-  WHERE t.corp_code = s.corp_code AND t.fiscal_year = s.fiscal_year
-    AND t.fiscal_q = s.fiscal_q AND t.metric = s.metric
-);
+WHERE (COALESCE(s.derived, 0) <> 2 AND s.rcept_no = v.rcept_no
+       AND NOT EXISTS (SELECT 1 FROM fin_std t WHERE t.corp_code = s.corp_code AND t.fiscal_year = s.fiscal_year
+                       AND t.fiscal_q = s.fiscal_q AND t.metric = s.metric AND t.derived = 2
+                       AND t.rcept_no > v.rcept_no))
+   OR (s.derived = 2 AND s.rcept_no > v.rcept_no
+       AND s.rcept_no = (SELECT MAX(t.rcept_no) FROM fin_std t WHERE t.corp_code = s.corp_code
+                         AND t.fiscal_year = s.fiscal_year AND t.fiscal_q = s.fiscal_q
+                         AND t.metric = s.metric AND t.derived = 2));
 
 -- Growth is computed only against a base of the same statement kind and the
 -- same reporting currency (a company moving OFS -> CFS, or KRW -> USD, would
@@ -259,6 +273,8 @@ def _migrate(conn: sqlite3.Connection, old: int | None) -> None:
             "WHERE r.rcept_no = fin_std.rcept_no AND r.currency IS NOT NULL AND r.currency <> '' LIMIT 1), 'KRW')")
     if "avail_dt" not in {r[1] for r in conn.execute("PRAGMA table_info(fin_std)")}:
         conn.execute("ALTER TABLE fin_std ADD COLUMN avail_dt TEXT")
+    if "ytd_derived" not in {r[1] for r in conn.execute("PRAGMA table_info(fin_std)")}:
+        conn.execute("ALTER TABLE fin_std ADD COLUMN ytd_derived INTEGER DEFAULT 0")
     if "retry_after" not in {r[1] for r in conn.execute("PRAGMA table_info(fin_fetch)")}:
         conn.execute("ALTER TABLE fin_fetch ADD COLUMN retry_after TEXT")
     if old is not None and old < 8:

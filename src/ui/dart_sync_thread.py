@@ -111,13 +111,25 @@ def ms_until_limit_reset(now: _dt.datetime | None = None) -> int:
     return max(1_000, int((nxt - now).total_seconds() * 1000))
 
 
+def _stop_reason(out: dict) -> str | None:
+    res = out.get("result")
+    return getattr(res, "stop_reason", None) if res is not None else None
+
+
 def _limit_reached(out: dict) -> bool:
-    """Whether a run's outcome means today's API limit is spent."""
+    """Whether a run's outcome means today's API limit is spent: our own count
+    (daily_limit) or DART's 020 (server_limit), read from the run's structured
+    stop reason (review_codex 4 P2); a carried-over outcome without a result
+    falls back to the status read."""
     if out.get("status") == "limit":
         return True
+    if out.get("status") != "partial":
+        return False
+    reason = _stop_reason(out)
+    if reason is not None:
+        return reason in ("daily_limit", "server_limit")
     info = out.get("info") or {}
-    return out.get("status") == "partial" and ("daily limit" in (out.get("error") or "")
-                                              or info.get("calls_left", 1) <= 0)
+    return "daily limit" in (out.get("error") or "") or info.get("calls_left", 1) <= 0
 
 
 def _short_time(iso: str | None) -> str:
@@ -311,7 +323,8 @@ class DartAutoSync(QObject):
         res = out.get("result")
         if out.get("status") not in ("done", "partial") or res is None:
             return False
-        if out.get("status") == "partial" and (out.get("error") or "").lower().startswith(("cancelled", "interrupted")):
+        if out.get("status") == "partial" and (_stop_reason(out) == "cancelled" or (out.get("error") or "").lower()
+                                               .startswith(("cancelled", "interrupted"))):
             return False                # the app is closing
         return bool(res.filings_added or res.periods_fetched or res.segments_done)
 
@@ -321,8 +334,12 @@ class DartAutoSync(QObject):
         self._continue_timer.stop()
         self._reset_timer.start(self._reset_ms())
 
-    def _set_limit(self, on: bool, info: dict | None = None) -> None:
-        if on:
+    def _set_limit(self, on: bool, info: dict | None = None, server: bool = False) -> None:
+        if on and server:
+            self.limit_label.setText(tr(
+                "DART 서버가 오늘 호출 한도 초과(020)를 알려 수집을 멈췄습니다 · 자정(KST) 이후 자동으로 이어서 수집합니다",
+                "DART says today's call limit is reached (020); collection resumes by itself after midnight KST"))
+        elif on:
             used = (info or {}).get("calls_today") or dart_sync.DAILY_LIMIT
             self.limit_label.setText(tr(
                 f"DART 오늘 API 한도({used:,}건)를 모두 사용해 수집을 멈췄습니다 · 자정(KST) 이후 자동으로 이어서 수집합니다",
@@ -348,7 +365,7 @@ class DartAutoSync(QObject):
         info = out.get("info") or {}
         res = out.get("result")
         err = out.get("error") or ""
-        self._set_limit(_limit_reached(out), info)
+        self._set_limit(_limit_reached(out), info, server=_stop_reason(out) == "server_limit")
         if status == "limit":
             self._set(tr("DART 한도 소진", "DART limit reached"),
                       tr("오늘 API 한도를 모두 사용함 · 자정(KST) 이후 이어서 수집",

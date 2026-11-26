@@ -250,6 +250,7 @@ def store_period(conn, corp_code: str, fiscal_year: int, reprt_code: str, fs_div
             continue
         cur = parse_amount(row.get("thstrm_amount"))
         add = parse_amount(row.get("thstrm_add_amount"))
+        ytd_derived = 0
         if q == 1:
             value_q, ytd = cur, add if add is not None else cur
         elif q == 4:
@@ -258,15 +259,15 @@ def store_period(conn, corp_code: str, fiscal_year: int, reprt_code: str, fs_div
             value_q, ytd = cur, add
             prev = _ytd(conn, corp_code, fiscal_year, q - 1, metric, fs_div, rcept_dt, currency)
             if ytd is None and value_q is not None and prev is not None:
-                ytd = prev + value_q
+                ytd, ytd_derived = prev + value_q, 1
             elif value_q is None and ytd is not None and prev is not None:
                 value_q, derived = ytd - prev, 1
         if value_q is None and ytd is None:
             continue                          # the account is there but blank (e.g. OFS owners' line)
         conn.execute(
             "INSERT OR REPLACE INTO fin_std(corp_code, fiscal_year, fiscal_q, fs_div, metric, value_q, value_ytd, "
-            "derived, rcept_no, rcept_dt, currency) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (corp_code, fiscal_year, q, fs_div, metric, value_q, ytd, derived, src, rcept_dt, currency))
+            "derived, rcept_no, rcept_dt, currency, ytd_derived) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (corp_code, fiscal_year, q, fs_div, metric, value_q, ytd, derived, src, rcept_dt, currency, ytd_derived))
     if q in (1, 2):
         rederive_following(conn, corp_code, fiscal_year, q)
     if q in (1, 2):
@@ -302,17 +303,29 @@ def rederive_following(conn, corp_code: str, fiscal_year: int, q: int) -> None:
                              "AND fiscal_q = ? AND metric = ? AND rcept_no = ?",
                              (r["value_ytd"] - prev, corp_code, fiscal_year, nq, r["metric"], r["rcept_no"]))
             else:
-                conn.execute("UPDATE fin_std SET value_ytd = ? WHERE corp_code = ? AND fiscal_year = ? "
+                conn.execute("UPDATE fin_std SET value_ytd = ?, ytd_derived = 1 WHERE corp_code = ? AND fiscal_year = ? "
                              "AND fiscal_q = ? AND metric = ? AND rcept_no = ?",
                              (prev + r["value_q"], corp_code, fiscal_year, nq, r["metric"], r["rcept_no"]))
 
 
 def _recompute_derived_following(conn, corp_code: str, fiscal_year: int, q: int) -> None:
-    """After quarter `q` was (re)stored: the half / Q3 three-month values that
-    were derived from a cumulative minus the quarter before are computed again
-    from what is stored now -- empty when that quarter has no value any more
-    (review_codex 3 P1)."""
+    """After quarter `q` was (re)stored: what the half / Q3 rows computed from
+    the quarter before is computed again from what is stored now, each with the
+    previous quarter known on its own receipt date -- a three-month value taken
+    as cumulative minus the quarter before (review_codex 3 P1) and a cumulative
+    taken as the quarter before plus the reported three months (review_codex 4
+    P2); empty when that quarter has no value any more. Quarters are redone in
+    order, so a Q3 uses the half just recomputed."""
     for nq in range(q + 1, 4):
+        for r in conn.execute(
+                "SELECT metric, fs_div, currency, value_q, rcept_no, rcept_dt FROM fin_std "
+                "WHERE corp_code = ? AND fiscal_year = ? AND fiscal_q = ? AND ytd_derived = 1 AND value_q IS NOT NULL",
+                (corp_code, fiscal_year, nq)).fetchall():
+            prev = _ytd(conn, corp_code, fiscal_year, nq - 1, r["metric"], r["fs_div"], r["rcept_dt"], r["currency"])
+            conn.execute("UPDATE fin_std SET value_ytd = ? WHERE corp_code = ? AND fiscal_year = ? AND fiscal_q = ? "
+                         "AND metric = ? AND rcept_no = ?",
+                         (None if prev is None else prev + r["value_q"], corp_code, fiscal_year, nq,
+                          r["metric"], r["rcept_no"]))
         for r in conn.execute(
                 "SELECT metric, fs_div, currency, value_ytd, rcept_no, rcept_dt FROM fin_std "
                 "WHERE corp_code = ? AND fiscal_year = ? AND fiscal_q = ? AND derived = 1 AND value_ytd IS NOT NULL",
