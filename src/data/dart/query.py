@@ -294,3 +294,110 @@ def format_issues(limit: int = 50, **kw) -> str:
                 lines.append(f"  {r['stock_code']} {r['corp_name']} {r['fiscal_year']}Q{r['fiscal_q']} "
                              f"{r['detail']} ({r['rcept_no']})")
     return "\n".join(lines)
+
+
+# ---- segments (stage 4, plan 5) -----------------------------------------------------
+
+def get_segments(code: str, as_of=None, *, include_adjustments: bool = False,
+                 conn: sqlite3.Connection | None = None, db_path: str | None = None) -> list[dict]:
+    """Revenue by segment, oldest quarter first: {fiscal_year, fiscal_q,
+    segment_raw, segment_code, revenue, op_income, basis, source,
+    check_status, rcept_no, rcept_dt}. For each fiscal quarter the newest
+    receipt received by `as_of`. ``basis`` says whether revenue is the
+    quarter's ('q') or the cumulative year-to-date amount ('ytd'). Adjustment
+    rows (eliminations, the difference to the reported total) only with
+    `include_adjustments`."""
+    with _reader(conn, db_path) as db:
+        if db is None:
+            return []
+        corp = _resolve_corp(db, code)
+        if corp is None:
+            return []
+        sql = "SELECT * FROM segment_rev WHERE corp_code = ?"
+        args: list = [corp]
+        if as_of is not None:
+            day = (as_of.isoformat() if isinstance(as_of, (_dt.date, _dt.datetime)) else str(as_of))[:10]
+            sql += " AND rcept_dt <= ?"
+            args.append(day)
+        rows = [dict(r) for r in db.execute(sql, args)]
+    newest: dict = {}
+    for r in rows:
+        key = (r["fiscal_year"], r["fiscal_q"])
+        if r["rcept_no"] > newest.get(key, ""):
+            newest[key] = r["rcept_no"]
+    out = [r for r in rows if r["rcept_no"] == newest[(r["fiscal_year"], r["fiscal_q"])]
+           and (include_adjustments or not str(r["segment_code"] or "").startswith("_"))]
+    out.sort(key=lambda r: (r["fiscal_year"], r["fiscal_q"], -(r["revenue"] or 0)))
+    return out
+
+
+def segment_report(tickers=None, conn: sqlite3.Connection | None = None, db_path: str | None = None) -> dict:
+    """Per company: periods read and their check status / source counts, the
+    pass rate (plan 7, stage 4 completion), and the segment names that do not
+    run through all years (to map by hand in segment_map, plan 5-4)."""
+    from data.dart.segments import unmatched_codes
+    with _reader(conn, db_path) as db:
+        if db is None:
+            return {"companies": [], "unmatched": {}}
+        sql = ("SELECT c.corp_code, c.stock_code, c.corp_name, s.status, s.source, COUNT(*) AS n FROM seg_fetch s "
+               "JOIN filing f ON f.rcept_no = s.rcept_no JOIN company c ON c.corp_code = f.corp_code")
+        args: list = []
+        if tickers:
+            sql += f" WHERE c.stock_code IN ({','.join('?' * len(tickers))})"
+            args = [str(t).zfill(6) for t in tickers]
+        by: dict = {}
+        for r in db.execute(sql + " GROUP BY 1, 2, 3, 4, 5", args):
+            d = by.setdefault(r["corp_code"], {"stock_code": r["stock_code"], "corp_name": r["corp_name"],
+                                               "status": {}, "source": {}})
+            d["status"][r["status"]] = d["status"].get(r["status"], 0) + r["n"]
+            if r["source"]:
+                d["source"][r["source"]] = d["source"].get(r["source"], 0) + r["n"]
+        unmatched = {corp: unmatched_codes(db, corp) for corp in by}
+    companies = []
+    for corp, d in by.items():
+        st = d["status"]
+        checked = sum(n for k, n in st.items() if k != "na")
+        d["periods"] = sum(st.values())
+        d["pass_rate"] = (st.get("ok", 0) / checked) if checked else None
+        d["corp_code"] = corp
+        companies.append(d)
+    companies.sort(key=lambda d: d["stock_code"] or "")
+    return {"companies": companies, "unmatched": {k: v for k, v in unmatched.items() if v}}
+
+
+_SOURCE_LABEL = {"xbrl": "XBRL", "html_segment": "원문 부문표", "html_product": "원문 제품표", "single": "단일부문"}
+
+
+def format_segment_report(tickers=None, **kw) -> str:
+    """segment_report() as text: the check table per company, the totals and
+    the names to map."""
+    rep = segment_report(tickers, **kw)
+    if not rep["companies"]:
+        return "no segment data in dart.db (run tools/dart_sync.py --segments)"
+    lines = [f"{'종목':<8}{'회사':<14}{'기간':>4}{'ok':>5}{'불일치':>7}{'review':>8}{'해당없음':>8}{'통과율':>8}  출처",
+             "-" * 92]
+    tot: dict = {}
+    for d in rep["companies"]:
+        st = d["status"]
+        for k, n in st.items():
+            tot[k] = tot.get(k, 0) + n
+        rate = "-" if d["pass_rate"] is None else f"{d['pass_rate'] * 100:.0f}%"
+        src = ", ".join(f"{_SOURCE_LABEL.get(k, k)} {n}" for k, n in sorted(d["source"].items(), key=lambda x: -x[1]))
+        lines.append(f"{d['stock_code']:<8}{d['corp_name'][:12]:<14}{d['periods']:>4}{st.get('ok', 0):>5}"
+                     f"{st.get('sum_mismatch', 0):>7}{st.get('review', 0):>8}{st.get('na', 0):>8}{rate:>8}  {src}")
+    checked = sum(n for k, n in tot.items() if k != "na")
+    lines.append("-" * 92)
+    lines.append(f"합계 {len(rep['companies'])}개사 · 기간 {sum(tot.values())} · ok {tot.get('ok', 0)} · 불일치 "
+                 f"{tot.get('sum_mismatch', 0)} · review {tot.get('review', 0)} · 해당없음 {tot.get('na', 0)} · 통과율 "
+                 + (f"{tot.get('ok', 0) / checked * 100:.0f}%" if checked else "-"))
+    names = {d["corp_code"]: (d["stock_code"], d["corp_name"]) for d in rep["companies"]}
+    lines.append("")
+    lines.append("== 매핑 안 된 부문명 (모든 연도에 이어지지 않는 이름: segment_map에서 묶을 후보)")
+    if not rep["unmatched"]:
+        lines.append("  없음")
+    for corp, items in rep["unmatched"].items():
+        code, name = names[corp]
+        for it in items:
+            lines.append(f"  {code} {name}: '{it['segment_raw']}' (코드 {it['segment_code']}) "
+                         f"있는 해 {','.join(map(str, it['years']))} / 없는 해 {','.join(map(str, it['missing']))}")
+    return "\n".join(lines)

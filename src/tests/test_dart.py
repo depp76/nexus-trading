@@ -908,8 +908,9 @@ class TestReviewSync(_TmpMixin, unittest.TestCase):
     # ---- M1 ----
     def test_no_pending_means_no_priority_lookup(self):
         self.sync("auto")
-        with mock.patch.object(dsync, "universe_priority", side_effect=AssertionError("looked up")), \
-                mock.patch.object(dsync, "market_cap_priority", side_effect=AssertionError("looked up")):
+        # The Universe file is read for the segment targets (a local file); the
+        # KRX market-cap download must not happen without pending financials.
+        with mock.patch.object(dsync, "market_cap_priority", side_effect=AssertionError("looked up")):
             res = run_sync("auto", "cli", api_key="k" * 40, db_path=self.db, cache_dir=self.cache,
                            lock_path=self.lock, today=dt.date(2025, 11, 26), client_factory=self.factory())
         self.assertEqual(res.status, "done", res.error)

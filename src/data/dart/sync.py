@@ -16,7 +16,13 @@ Modes (plan 11-3 order inside ``auto``):
 - ``backfill``: financials of every filing not fetched yet (``fin_fetch``),
   Universe stocks first, then the rest by market cap.
 - ``auto``: company list (if stale) -> list backfill (if unfinished) -> daily
-  -> backfill.
+  -> backfill -> segments of the reports received in the daily window only
+  (plan 11-3-4: "새로 들어온 관심 종목 보고서만").
+- ``segments``: revenue by business segment of the target companies, all
+  pending periods (stage 4, plan 5; the initial load is this explicit run --
+  most periods need the report document, a few MB each): the Universe's KOSPI/KOSDAQ stocks and ``segment_targets.json``;
+  annual reports of the whole window and the quarterly reports of the last
+  SEGMENT_QUARTER_YEARS fiscal years, newest first, once their financials are in.
 
 With ``tickers`` the list comes from per-company searches and only those
 companies' financials are fetched (verification runs).
@@ -40,6 +46,7 @@ from data.dart import corp as corp_mod
 from data.dart import documents as docs
 from data.dart import filings as fil
 from data.dart import financials as fin
+from data.dart import segments as seg
 from data.dart.client import (
     DAILY_LIMIT, DartApiError, DartBudgetExceeded, DartCancelled, DartClient, api_key_from_env, calls_today,
     is_fatal, kst_today,
@@ -51,7 +58,7 @@ logger = logging.getLogger(__name__)
 
 DART_YEARS = 5                 # 5 business years + the current one (plan header)
 DAILY_OVERLAP_DAYS = 3         # plan 11-3-2
-MODES = ("init", "daily", "backfill", "auto")
+MODES = ("init", "daily", "backfill", "auto", "segments")
 _KEY_FROM_ENV = object()
 _KST = _dt.timezone(_dt.timedelta(hours=9))
 EVENING_HOUR = 19              # plan 11-2: one run after 19:00 KST catches the day's filings
@@ -68,6 +75,8 @@ FETCH_LOG_KEEP_DAYS = 90
 # walked again (past windows come from the cache). 2: one fiscal year before
 # the window is kept for non-December filers (review_agy H4).
 LIST_VERSION = "2"
+SEGMENT_QUARTER_YEARS = 2      # quarterly segment data for the current and the previous fiscal year
+_SEGMENT_TARGETS_FILE = os.path.join(os.path.dirname(__file__), "segment_targets.json")
 
 
 def kst_now() -> _dt.datetime:
@@ -163,6 +172,7 @@ class SyncResult:
     periods_fetched: int = 0
     pending_left: int = 0
     error: str | None = None
+    segments_done: int = 0
 
 
 class _Cancelled(Exception):
@@ -239,7 +249,8 @@ def run_sync(mode: str = "auto", trigger: str = "cli", *, budget: int | None = N
                 set_state(conn, "last_run_status", status)
                 _prune_fetch_log(conn)
                 _record_run(conn, run_id, trigger, mode, status, calls, job.filings_added, error, finished=True)
-                return SyncResult(status, run_id, calls, job.filings_added, job.periods_fetched, pending, error)
+                return SyncResult(status, run_id, calls, job.filings_added, job.periods_fetched, pending, error,
+                                  job.segments_done)
             finally:
                 close = getattr(client, "close", None)
                 if callable(close):
@@ -281,6 +292,7 @@ class _Job:
         self.filings_added = 0
         self.periods_fetched = 0
         self.periods_failed = 0
+        self.segments_done = 0
         self.account_map = fin.load_account_map()
         self._order: list[str] | None = None      # backfill order, built once per run
         self._order_has_caps = False
@@ -300,7 +312,7 @@ class _Job:
                 logger.warning("DART progress callback failed", exc_info=True)
 
     def run(self, mode):
-        if mode in ("init", "daily", "auto") or (mode == "backfill" and self.tickers):
+        if mode in ("init", "daily", "auto") or (mode in ("backfill", "segments") and self.tickers):
             self.sync_corp_list(force=(mode == "init"))
         if self.tickers:
             # A verification run: these companies' lists, then everything of theirs
@@ -309,6 +321,11 @@ class _Job:
             self.list_for_tickers()
             if mode != "init":
                 self.fetch_financials()
+            if mode in ("segments", "auto"):
+                self.fetch_segments()
+            return
+        if mode == "segments":
+            self.fetch_segments()
             return
         if mode in ("init", "auto", "backfill") or get_state(self.conn, "list_backfill_done") != "1":
             self.list_backfill()
@@ -319,6 +336,7 @@ class _Job:
             # the list window, or a daily-only user would never get back to a
             # report answered 013 for a few days (review_codex P2).
             since = (_dt.date.fromisoformat(since) - _dt.timedelta(days=RECENT_FILING_DAYS + 1)).isoformat()
+            self._daily_since = since
             self.fetch_financials(since=since)
             # Only now is the window "done": a run stopped before this line keeps the
             # old daily_until, so the next daily run covers the same days again
@@ -327,6 +345,8 @@ class _Job:
             self.conn.commit()
         if mode in ("backfill", "auto"):
             self.fetch_financials()
+        if mode == "auto":
+            self.fetch_segments(since=getattr(self, "_daily_since", None) or self.today.isoformat())
 
     # ---- company list ------------------------------------------------------------
 
@@ -537,6 +557,111 @@ class _Job:
         self.conn.executemany(
             "INSERT OR REPLACE INTO fin_fetch(rcept_no, status, src_rcept_no, fs_div, fetched_at) VALUES (?, ?, ?, ?, ?)",
             [(r, status, src, fs_div, now) for r in sorted(done)])
+
+    # ---- segments (stage 4) -------------------------------------------------------
+
+    def segment_targets(self) -> list[str]:
+        """Stock codes whose segments are collected: the given tickers, else the
+        Universe's KOSPI/KOSDAQ stocks and segment_targets.json (plan 5-5)."""
+        if self.tickers:
+            return list(self.tickers)
+        if self.priority is not None:
+            return list(self.priority)          # an explicit order (tests, callers) is the target list too
+        codes = universe_priority()
+        try:
+            with open(_SEGMENT_TARGETS_FILE, encoding="utf-8") as f:
+                extra = [str(c).zfill(6) for c in json.load(f).get("stocks", [])]
+        except (OSError, ValueError, AttributeError):
+            extra = []
+        seen = set(codes)
+        return codes + [c for c in extra if c not in seen]
+
+    def _segment_pending(self, targets: list[str], since: str | None = None) -> list[dict]:
+        if not targets:
+            return []
+        first_q_year = self.today.year - SEGMENT_QUARTER_YEARS + 1
+        self.conn.execute("DROP TABLE IF EXISTS temp.seg_targets")
+        self.conn.execute("CREATE TEMP TABLE seg_targets(stock_code TEXT PRIMARY KEY, pos INTEGER)")
+        self.conn.executemany("INSERT OR IGNORE INTO temp.seg_targets VALUES (?, ?)",
+                              [(c, i) for i, c in enumerate(targets)])
+        rows = self.conn.execute(
+            "SELECT f.corp_code, f.bsns_year, f.reprt_code, MAX(f.rcept_no) AS rcept_no, t.pos, c.stock_code "
+            "FROM filing f JOIN company c ON c.corp_code = f.corp_code "
+            "JOIN temp.seg_targets t ON t.stock_code = c.stock_code "
+            "WHERE f.bsns_year >= ? AND (f.reprt_code = '11011' OR f.bsns_year >= ?) "
+            "GROUP BY f.corp_code, f.bsns_year, f.reprt_code "
+            "HAVING MAX(f.rcept_dt) >= ?", (self.first_year, first_q_year, since or "0000")).fetchall()
+        done = {r[0] for r in self.conn.execute("SELECT rcept_no FROM seg_fetch")}
+        q_of = fil.Q_BY_REPRT
+        out = [dict(r) for r in rows if r["rcept_no"] not in done]
+        out.sort(key=lambda r: (r["pos"], -r["bsns_year"], -q_of[r["reprt_code"]]))
+        return out
+
+    def fetch_segments(self, since: str | None = None):
+        """Segment revenue of the target companies' pending periods (plan 5);
+        with `since` only periods with a report received from that day.
+        A period waits until its financials are in (the check needs revenue);
+        one period failing is skipped like a financial period (H3)."""
+        pending = self._segment_pending(self.segment_targets(), since)
+        total = len(pending)
+        errors_in_a_row = 0
+        for i, p in enumerate(pending):
+            self._check()
+            self._progress(i, total, f"segments {p['stock_code']} {p['bsns_year']} {p['reprt_code']}")
+            try:
+                if self._segment_period(p):
+                    self.segments_done += 1
+            except DartApiError as e:
+                self.conn.rollback()
+                if is_fatal(e):
+                    raise
+                errors_in_a_row += 1
+                logger.warning("DART segments %s %s %s skipped: %s", p["stock_code"], p["bsns_year"],
+                               p["reprt_code"], e)
+                if errors_in_a_row >= MAX_CONSECUTIVE_ERRORS:
+                    raise
+                continue
+            errors_in_a_row = 0
+            self.conn.commit()
+        if total:
+            self._progress(total, total, "segments done")
+
+    def _segment_period(self, p: dict) -> bool:
+        """Read, check and store one period's segments; False when it has to
+        wait for its financials."""
+        corp, fy, reprt, rcept = p["corp_code"], p["bsns_year"], p["reprt_code"], p["rcept_no"]
+        q = fil.Q_BY_REPRT[reprt]
+        rev = self.conn.execute(
+            "SELECT value_q, value_ytd, fs_div FROM fin_std WHERE corp_code = ? AND fiscal_year = ? AND fiscal_q = ? "
+            "AND metric = 'revenue' ORDER BY rcept_no DESC LIMIT 1", (corp, fy, q)).fetchone()
+        rcept_dt = self.conn.execute("SELECT rcept_dt FROM filing WHERE rcept_no = ?", (rcept,)).fetchone()[0]
+        if rev is None:
+            na = self.conn.execute(
+                "SELECT 1 FROM fin_issue WHERE corp_code = ? AND fiscal_year = ? AND fiscal_q = ? "
+                "AND kind = 'revenue_na'", (corp, fy, q)).fetchone()
+            if na:
+                seg.record_fetch(self.conn, rcept, "na", None, "financial filer: no revenue to check against")
+                return True
+            return False
+        rq, ry, fs_div = rev["value_q"], rev["value_ytd"], rev["fs_div"]
+        cache = self._cache_dir()
+        xc = seg.fetch_xbrl(self.client, rcept, reprt, fs_div, cache)
+        chosen, basis, residual, status = seg.choose(xc, rq, ry)
+        if status != "ok":
+            self._check()
+            dc, single = seg.fetch_document(self.client, rcept, fs_div, cache)
+            d_chosen, d_basis, d_residual, d_status = seg.choose(dc, rq, ry)
+            if d_status == "ok":
+                chosen, basis, residual, status = d_chosen, d_basis, d_residual, d_status
+            elif single:
+                chosen, basis = seg.single_segment(rq, ry, reprt)
+                residual, status = 0.0, "ok"
+            elif status != "sum_mismatch" and d_status == "sum_mismatch":
+                chosen, basis, residual, status = d_chosen, d_basis, d_residual, d_status
+        source = chosen.source if chosen is not None else None
+        seg.store_segments(self.conn, corp, fy, q, rcept, rcept_dt, chosen, basis, residual, status, source or "")
+        seg.record_fetch(self.conn, rcept, status, source, chosen.label if chosen is not None else "")
+        return True
 
     def _is_recent(self, member) -> bool:
         return (self.today - _dt.date.fromisoformat(member["rcept_dt"][:10])).days <= RECENT_FILING_DAYS
