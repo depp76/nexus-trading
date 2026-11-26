@@ -1,0 +1,4 @@
+{
+  "_comment": "Company-specific account_id additions (docs/dart_db_plan_2026-11-26.md 4-1): {corp_code: {metric: [account_id, ...]}}. Tried before the built-in IFRS tags. Fill from the fin_unmapped list.",
+  "_example": {"00000000": {"revenue": ["entity00000000_Revenue"]}}
+}

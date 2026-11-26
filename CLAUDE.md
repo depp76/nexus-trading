@@ -213,6 +213,24 @@ Dev tooling is in `requirements-dev.txt`
   layer that has what it needs, never add a `from data.market import` below market.py, and
   never import a strategy package from here. Uses polars internally and converts to pandas
   only at library boundaries; reuse the module-level caches rather than adding parallel ones.
+- **`src/data/dart/`** (since 2026-11-26, `docs/dart_db_plan_2026-11-26.md` stages 1-3): OpenDART
+  periodic reports and quarterly revenue / operating income / net income in `dart.db` (SQLite, WAL,
+  repo root). `client.py` (key from `DART_API_KEY`, daily call counter `api_usage` stopping at 19,000,
+  back-off, <= 5 calls/s, raw replies cached under `cache/dart/`), `corp.py`, `filings.py` (list.json ->
+  `filing`, fiscal year/quarter from the report name, corrections linked), `financials.py` (fin_raw ->
+  fin_std: CFS before OFS, IS before CIS, Q4 = annual - Q3 cumulative; financial-sector filers get no
+  revenue, by user decision), `documents.py` (the income statement read from a report's document.xml for
+  periods the API answers 013 -- financial filers before 2023 H2), `store.py` (schema incl. `fin_issue`,
+  views `v_fin_latest`/`v_fin_growth` with the calendar quarter), `query.py` (`get_financials(code,
+  as_of=)`: only filings received by then -- the one read entry point for screens and strategies; also
+  the growth table and issue reports), `lock.py` (`cache/dart/sync.lock`), `sync.py` (`run_sync(mode,
+  trigger, ...)`: the only collection logic, no Qt; records `sync_run`). `tools/dart_sync.py`
+  (`--init/--daily/--backfill [--tickers]/--auto`, read-only `--show CODE`/`--issues`) only calls
+  `run_sync` or `query`. Not in
+  the `data_fetcher` facade. The app runs it in the background (stage 3A, docs/ui.md 8.33):
+  `src/ui/dart_sync_thread.py` (`DartSyncThread` -- the plan names this path, so this QThread lives in
+  `ui/`, not `threads/` -- and `DartAutoSync`, the start rule and the header label) armed by
+  `MainWindow._arm_dart_sync`; tests never reach the real dart.db or key (conftest).
 - **`src/data_fetcher.py`**: the single re-export facade over `data/` (data access only, no
   strategy symbols) so UI and thread code import from one place; `data/__init__.py` itself
   re-exports nothing. Nothing in `data/` imports the facade back; keep it that way. It
@@ -264,7 +282,9 @@ plus the legacy `trading_record.json` (read once by
 `portfolio.db`'s `migrations` table so deleted rows are never re-imported), and
 the rebuildable caches under `cache/` (`investor_flows/<ticker>.json`, `cd91.json`,
 `krx_calendar.json`, and
-`jp10y.json`, the last MOF JP 10Y series, served when the download fails).
+`jp10y.json`, the last MOF JP 10Y series, served when the download fails), and `dart.db`
+(DART filings and financials collected over days within the API's daily limit -- rebuildable only
+slowly, so treat it as data, not a cache) with its raw replies and lock under `cache/dart/`.
 All of these paths come from `src/paths.py`. They are runtime data,
 not fixtures. Trading History principal/deposit/withdrawal live in `QSettings`
 (scope "PortfolioManagement"/"PortfolioManagement"; migrated once from the old

@@ -45,6 +45,12 @@ JP10Y_CACHE_FILE = root_path("cache", "jp10y.json")
 # KRX open/closed days from the KIS holiday API (data/krx_calendar.py).
 KRX_CALENDAR_CACHE_FILE = root_path("cache", "krx_calendar.json")
 
+# DART financial statements (src/data/dart/, docs/dart_db_plan_2026-11-26.md):
+# the SQLite DB at the root (not a cache: it holds years of collected filings),
+# and the raw API replies + the collector's lock file under cache/dart/.
+DART_DB_FILE = root_path("dart.db")
+DART_CACHE_DIR = root_path("cache", "dart")
+
 # Backtest reports written by the Strategy tab ("Save Report").
 REPORTS_DIR = root_path("reports")
 # One JSON line per Strategy-tab research run whose dates reach past the

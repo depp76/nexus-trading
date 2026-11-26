@@ -20,6 +20,9 @@ app_stderr.log
 portfolio.db
 portfolio.db-wal
 portfolio.db-shm
+dart.db
+dart.db-wal
+dart.db-shm
 custom_settings.json
 holdout_ledger*.jsonl
 universe_cache.json
