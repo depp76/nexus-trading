@@ -41,6 +41,10 @@ import sqlite3
 # 12 (2026-11-27, review_codex 5): segments read again once -- order-book, cost and
 #   customer tables are no longer taken for revenue breakdowns, a candidate is checked
 #   against its own period only, a product sold by several segments is added up.
+# 13 also (2026-11-27, review_agy 2; the branch was not merged, so no 14):
+#   segment_rev.axis -- what the items are (segment / product / region / sales_type /
+#   unknown), apart from the source -- and segment_rev.op_source, where an operating
+#   income came from; the stored rows get their axis from their names at once.
 SCHEMA_VERSION = 13
 
 _SCHEMA = """
@@ -109,6 +113,8 @@ CREATE TABLE IF NOT EXISTS segment_rev (
   check_status TEXT,
   rcept_no TEXT NOT NULL,
   rcept_dt TEXT NOT NULL,
+  axis TEXT,                               -- segment / product / region / sales_type / unknown (Candidate.axis)
+  op_source TEXT,                          -- the source op_income was read from (segments.fill_ops)
   PRIMARY KEY (corp_code, fiscal_year, fiscal_q, level, segment_raw, rcept_no)
 );
 
@@ -286,10 +292,33 @@ def _add_segment_level(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE segment_rev_old")
 
 
+def _add_segment_axis(conn: sqlite3.Connection) -> None:
+    """segment_rev.axis / op_source (schema 13, review_agy 2). The rows already
+    stored get the axis their names and source give (Candidate.axis), so the
+    screen stops joining a year of kinds of sale to a year of segments before
+    the periods are read again; op_source stays empty until then."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(segment_rev)")}
+    if "op_source" not in cols:
+        conn.execute("ALTER TABLE segment_rev ADD COLUMN op_source TEXT")
+    if "axis" in cols:
+        return
+    conn.execute("ALTER TABLE segment_rev ADD COLUMN axis TEXT")
+    from data.dart.segments import Candidate
+    groups: dict = {}
+    for r in conn.execute("SELECT rcept_no, level, source, segment_raw, revenue, segment_code "
+                          "FROM segment_rev").fetchall():
+        if not str(r[5] or "").startswith("_"):            # adjustment rows take their segments' axis
+            groups.setdefault((r[0], r[1], r[2]), []).append((r[3], r[4]))
+    conn.executemany("UPDATE segment_rev SET axis = ? WHERE rcept_no = ? AND level = ? AND source IS ?",
+                     [(Candidate(source or "", items).axis(), rcept, level, source)
+                      for (rcept, level, source), items in groups.items()])
+
+
 def _migrate(conn: sqlite3.Connection, old: int | None) -> None:
     """Bring the DB to SCHEMA_VERSION: tables, column additions, data fixes, views."""
     _add_segment_level(conn)
     conn.executescript(_SCHEMA)
+    _add_segment_axis(conn)
     if "currency" not in {r[1] for r in conn.execute("PRAGMA table_info(fin_std)")}:
         conn.execute("ALTER TABLE fin_std ADD COLUMN currency TEXT DEFAULT 'KRW'")
         conn.execute(
@@ -314,6 +343,13 @@ def _migrate(conn: sqlite3.Connection, old: int | None) -> None:
         # document's XBRL-tagged cells as a source ahead of the table readers --
         # every period not settled by the XBRL package is read again (a tagged
         # product breakdown may fill the product level of those too: all of them).
+        # Also the review_agy readings of the same day ("all other segments",
+        # account names and instant columns left out, "&cr;", the net reading
+        # before the gross one, operating income filled in) and of review_agy 2
+        # (kinds of sale and regions are not taken for operating segments, a
+        # period no table settles keeps basis NULL). This reread asks
+        # for each document once more and saves its slice (segments.slice_document);
+        # a later change of the readers is read from the slices.
         conn.execute("DELETE FROM seg_fetch")
     if old is not None and old < 8:
         # A correction marked done although the numbers stored for it came from an

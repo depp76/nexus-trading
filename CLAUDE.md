@@ -239,6 +239,17 @@ Dev tooling is in `requirements-dev.txt`
   -- the 기업 정보 tab shows products by default; a table is first told apart by its caption, header path and
   item names (order books, cost tables and customer lists are not revenue breakdowns even when they add up) and a
   candidate is checked against its own period only (`Candidate.when/span/months`), plan 5 note "코드 리뷰 5차";
+  since the review_agy pass of 2026-11-27: `fetch_document` saves the slice of a document the readers use
+  (`slice_document` -> `cache/dart/seg_doc/{year}/{rcept_no}.xml.gz`) and a later `DOC_PARSER_VERSION` reads it
+  instead of the API -- bump `SLICE_VERSION` only when the *places* read change; `choose` takes the net reading
+  when gross and net both reconcile, `enrich_ops` fills operating income from another reading of the period;
+  since the second review_agy pass (same day): what a breakdown lists is `segment_rev.axis` (`Candidate.axis`:
+  segment / product / region / sales_type / unknown), apart from `source` -- kinds of sale and regions under a
+  product caption are never stored as operating segments (`is_segment_reading`; the note's own region table is,
+  with axis region -- 기아), `Candidate.check` leaves the basis None (stored NULL, status ok) when a table names no
+  period and fits both the quarter and the cumulative revenue, `fill_ops` completes operating income segment by
+  segment (`segment_rev.op_source`); `segment_view` joins periods only on the same axis and ends the CAGR at the
+  newest full year;
   `segment_map` drafts; targets = Universe + `segment_targets.json`;
   `auto` reads new reports only, the backlog is `--segments`). Not in
   the `data_fetcher` facade. The app runs it in the background (stage 3A, docs/ui.md 8.33):

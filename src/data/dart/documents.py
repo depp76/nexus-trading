@@ -42,8 +42,13 @@ _TABLE_END = re.compile(r"</TABLE>", re.S | re.I)
 _FIN_WORDS = ("이자수익", "순이자이익", "보험수익", "보험서비스결과", "수수료수익", "투자서비스수익", "보험료수익")
 
 
+# DART's own line break inside a cell ("식품및&cr;식품서비스") is no HTML entity,
+# so html.unescape leaves it in the text (review_agy P0-4).
+LINE_BREAK = re.compile(r"&(?:amp;)?cr;|&#1[03];|&#x0?[ad];", re.I)
+
+
 def _text(cell: str) -> str:
-    return re.sub(r"\s+", "", html.unescape(re.sub(r"<[^>]+>", "", cell)))
+    return re.sub(r"\s+", "", html.unescape(LINE_BREAK.sub(" ", re.sub(r"<[^>]+>", "", cell))))
 
 
 def _amount(cell: str):

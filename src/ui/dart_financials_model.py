@@ -26,7 +26,24 @@ from i18n import tr
 TURN_LABELS = {"turn_profit": ("흑자전환", "Turned profitable"), "turn_loss": ("적자전환", "Turned to loss"),
                "loss_continued": ("적자지속", "Loss continued")}
 CHECK_LABELS = {"ok": ("ok", "ok"), "sum_mismatch": ("합계 불일치", "Sum mismatch"),
-                "review": ("확인 필요", "Review"), "na": ("해당 없음", "N/A")}
+                "review": ("확인 필요", "Review"), "na": ("해당 없음", "N/A"),
+                # The amounts add up to the revenue, but the table does not say whether
+                # they are the quarter's or the cumulative ones (segment_rev.basis NULL).
+                "basis_unknown": ("기간 미확정", "Period unknown")}
+# What a breakdown lists (segment_rev.axis): shown where it is not what the level's name says.
+AXIS_LABELS = {"segment": ("사업부문", "Segments"), "product": ("제품", "Products"), "region": ("지역", "Regions"),
+               "sales_type": ("매출 유형", "Sales types"), "unknown": ("분류 미확인", "Unclassified")}
+
+
+def axis_label(column: dict) -> str | None:
+    """The axis name to show for a segment_view column, None when the column's
+    axis is the level's own (segments at the segment level, products at the
+    product level), not recorded, or the single segment."""
+    axis = column.get("axis")
+    if not axis or axis == column.get("level") or column.get("source") == "single":
+        return None
+    ko, en = AXIS_LABELS.get(axis, (axis, axis))
+    return tr(ko, en)
 
 
 def unit_of(currency: str | None) -> tuple[float, str, str]:
@@ -187,7 +204,7 @@ def segment_view(data: dict, max_years: int = 6, mode: str = "y", max_quarters: 
                  level: str | None = None, keys: list | None = None) -> dict:
     """Segment revenue per period (see the module docstring):
     {"columns": [{"fiscal_year", "fiscal_q", "label", "basis", "gross", "partial", "status", "source",
-                  "verified"}],
+                  "verified", "axis"}],
      "segments": [{"code", "name", "values": [..], "yoy": [..], "shares": [..], "cagr"}],
      "notes": [...], "currency", "mode", "level", "levels"}.
 
@@ -214,7 +231,19 @@ def segment_view(data: dict, max_years: int = 6, mode: str = "y", max_quarters: 
     unverified amount is shown as disclosed in its own column (the annual
     view, and a first quarter in the quarterly view) and nothing is derived
     from it: with Q1 unverified and the half year verified, the half-year
-    cumulative shows and Q2 alone stays empty (review_codex 5 P1)."""
+    cumulative shows and Q2 alone stays empty (review_codex 5 P1).
+
+    review_agy 2 (2026-11-27): a column also carries its ``axis`` (what the
+    rows are: segment / product / region / sales_type / unknown; None for rows
+    stored before the column existed) and two periods are joined -- the
+    quarter split, YoY, CAGR -- only on the same axis, so a year of regions is
+    never compared with a year of business segments under a shared "기타". A
+    period whose rows reconcile but whose basis is not settled (basis None,
+    status "ok") gets the column status "basis_unknown" and is unverified.
+    The CAGR is fixed to the newest full-year column: the run of verified
+    years on one basis that ends there; an end of 0 is -100 %, an end that is
+    missing or unverified gives none -- an older stretch is never shown as if
+    it reached the newest year."""
     levels = segment_levels(data)
     if level not in levels:
         level = levels[0] if levels else "segment"
@@ -244,16 +273,32 @@ def segment_view(data: dict, max_years: int = 6, mode: str = "y", max_quarters: 
         if level == "product":                  # the period's status is the segment reading's
             st = ("ok", recs[0]["source"])
         verified = recs[0].get("check_status") == "ok" and recs[0]["basis"] in ("q", "ytd")
+        if recs[0].get("check_status") == "ok" and recs[0]["basis"] is None and st[0] == "ok":
+            st = ("basis_unknown", st[1])
         meta[(fy, fq)] = {"basis": recs[0]["basis"], "gross": gross, "status": st[0],
-                          "source": st[1] or recs[0]["source"], "level": level, "verified": verified}
+                          "source": st[1] or recs[0]["source"], "level": level, "verified": verified,
+                          "axis": recs[0].get("axis")}
 
     def raw(key, code):
         v = [r["revenue"] for r in by_period.get(key, []) if r["segment_code"] == code and r["revenue"] is not None]
         return sum(v) if v else None
 
+    def statement(key):
+        """(fs_div, currency) of the period's revenue row, None for one not known."""
+        r = revenue.get(key) or {}
+        return r.get("fs_div"), r.get("currency")
+
     def same(a, b) -> bool:
+        """Whether two periods' amounts can be added or subtracted: the same
+        level, breakdown axis (review_agy 2 P1) and gross / net basis, and the
+        statements they were checked against of the same kind (consolidated /
+        separate) and currency (review_agy P1-7) -- where both periods say."""
         ma, mb = meta.get(a), meta.get(b)
-        return bool(ma and mb) and ma["gross"] == mb["gross"] and ma["level"] == mb["level"]
+        if not (ma and mb) or ma["gross"] != mb["gross"] or ma["level"] != mb["level"]:
+            return False
+        if ma["axis"] and mb["axis"] and ma["axis"] != mb["axis"]:
+            return False
+        return all(x is None or y is None or x == y for x, y in zip(statement(a), statement(b)))
 
     def verified(key) -> bool:
         return key in meta and meta[key]["verified"]
@@ -297,7 +342,8 @@ def segment_view(data: dict, max_years: int = 6, mode: str = "y", max_quarters: 
         return quarter_checked(key, code)
 
     def blank():
-        return {"basis": None, "gross": False, "status": None, "source": None, "level": level, "verified": False}
+        return {"basis": None, "gross": False, "status": None, "source": None, "level": level, "verified": False,
+                "axis": None}
 
     if keys is not None:
         cols = []
@@ -357,23 +403,29 @@ def segment_view(data: dict, max_years: int = 6, mode: str = "y", max_quarters: 
             # over two years is not a year-on-year figure (review_codex 2 P2).
             comparable = (prev is not None and prev["verified"] and c["verified"]
                           and prev["fiscal_q"] == 4 and c["fiscal_q"] == 4
-                          and prev["basis"] == c["basis"] and prev["gross"] == c["gross"]
-                          and prev["level"] == c["level"] and prev["fiscal_year"] == c["fiscal_year"] - 1)
+                          and prev["basis"] == c["basis"] and same((prev["fiscal_year"], 4), key)
+                          and prev["fiscal_year"] == c["fiscal_year"] - 1)
             yoy.append(growth(values[i], values[i - 1]) if comparable else None)
         cagr = None
         if mode != "q":
-            # CAGR over the newest run of full years on one basis (gross or external).
+            # CAGR to the newest full-year column (review_agy 2 P2): the end year
+            # is fixed first, then the run of verified years on one basis, axis and
+            # statement that ends there. A year that is missing, unverified or on
+            # another basis ends the run -- the end year itself gives no CAGR
+            # then, rather than an older stretch shown as if it were current.
             full = []
             for c, v in reversed(list(zip(cols, values))):
                 if c["fiscal_q"] != 4:
-                    continue
-                if full and (c["gross"] != full[-1][2] or c["level"] != full[-1][3]
+                    continue                   # the year in progress is no year
+                if v is None or not c["verified"]:
+                    break
+                if full and (not same((c["fiscal_year"], 4), (full[-1][0], 4))
                              or c["fiscal_year"] != full[-1][0] - 1):
-                    break                      # another basis, or a year missing: the run ends
-                if v and c["verified"]:        # an unverified year is a missing one: the run ends there
-                    full.append((c["fiscal_year"], v, c["gross"], c["level"]))
+                    break
+                full.append((c["fiscal_year"], v))
             full.reverse()
-            if len(full) >= 2 and full[0][1] > 0 and full[-1][1] > 0 and full[-1][0] > full[0][0]:
+            # A start of zero or less has no growth rate; an end of zero is -100 %.
+            if len(full) >= 2 and full[0][1] > 0 and full[-1][1] >= 0:
                 cagr = (full[-1][1] / full[0][1]) ** (1 / (full[-1][0] - full[0][0])) - 1
         segs.append({"code": code, "name": names[code], "values": values, "yoy": yoy, "cagr": cagr})
     for i, c in enumerate(cols):

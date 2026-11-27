@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 BAR_COLOR = SERIES_PALETTE[6]          # revenue bars: a calm blue, not the PROFIT "gain" color
 SEGMENT_COLORS = SERIES_PALETTE
-_CHECK_KIND = {"ok": OK, "sum_mismatch": WARN, "review": TEXT_EMPTY, "na": TEXT_EMPTY}
+_CHECK_KIND = {"ok": OK, "sum_mismatch": WARN, "review": TEXT_EMPTY, "na": TEXT_EMPTY, "basis_unknown": WARN}
 
 
 def _pct(v, digits: int = 1) -> str:
@@ -854,7 +854,20 @@ class StockFinancialsTab(QWidget):
                 label = tr(*fm.CHECK_LABELS.get(c["status"], (c["status"], c["status"])))
                 if c.get("source") == "single":
                     label = tr("단일부문", "Single segment")
+                # What the period's rows are when not what the level says (regions
+                # stored as the segments, a product table standing in for them).
+                axis = fm.axis_label(c)
+                if axis and c["status"]:
+                    label = f"{label} · {axis}"
                 item = QTableWidgetItem(label)
+                if c["status"] == "basis_unknown":
+                    item.setToolTip(tr("합계는 매출과 맞지만 표가 3개월·누적 중 어느 기간인지 밝히지 않아 분기 환산과 증감 계산에서 뺍니다.",
+                                       "The amounts add up to revenue, but the table does not say whether they are "
+                                       "3-month or cumulative, so no quarter split or growth is derived."))
+                elif axis:
+                    item.setToolTip(tr(f"이 기간의 항목은 {axis} 기준입니다. 분류 기준이 다른 기간과는 증감을 계산하지 않습니다.",
+                                       f"This period is broken down by {axis}; no growth is computed against a "
+                                       "period on another axis."))
                 item.setTextAlignment(int(Qt.AlignmentFlag.AlignCenter))
                 item.setForeground(QColor(_CHECK_KIND.get(c["status"], TEXT_EMPTY)))
                 t.setItem(check, j, item)

@@ -315,8 +315,14 @@ def get_segments(code: str, as_of=None, *, include_adjustments: bool = False,
                  conn: sqlite3.Connection | None = None, db_path: str | None = None) -> list[dict]:
     """Revenue by segment, oldest quarter first: {fiscal_year, fiscal_q,
     segment_raw, segment_code, revenue, op_income, basis, source,
-    check_status, rcept_no, rcept_dt}. ``basis`` says whether revenue is the
-    quarter's ('q') or the cumulative year-to-date amount ('ytd'). Adjustment
+    check_status, rcept_no, rcept_dt, level, axis, op_source}. ``basis`` says
+    whether revenue is the quarter's ('q') or the cumulative year-to-date
+    amount ('ytd'); None with check_status 'ok' when the amounts reconcile but
+    the table names no period and fits both (nothing may be differenced from
+    it). ``axis`` is what the rows are -- segment / product / region /
+    sales_type / unknown -- whatever the ``level`` and ``source``; compare
+    periods only on the same axis. ``op_source``: the source an operating
+    income was read from (it may be filled in from another table). Adjustment
     rows (eliminations, the difference to the reported total) only with
     `include_adjustments`.
 

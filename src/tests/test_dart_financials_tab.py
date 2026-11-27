@@ -230,6 +230,43 @@ class TestReviewCodex5Model(unittest.TestCase):
         self.assertAlmostEqual(fm.segment_view(both, mode="q", keys=[(2024, 1), (2025, 1)])["segments"][0]["yoy"][1], 0.6)
 
 
+class TestReviewAgyModel(unittest.TestCase):
+    """review_agy P1-7: segment amounts checked against a consolidated statement
+    and against a separate one (or in another currency) are not one series."""
+
+    @staticmethod
+    def _data(statements):
+        rows = [{"fiscal_year": fy, "fiscal_q": fq, "metric": "revenue", "value_q": None, "value_ytd": v, **extra}
+                for (fy, fq, v), extra in statements]
+        segs = [{**_seg_row(fy, fq, "A", v, source="html_segment", basis="ytd", level="segment"), "check_status": "ok"}
+                for (fy, fq, v), _extra in statements]
+        return {"rows": rows, "segments": segs}
+
+    def test_a_change_of_statement_or_currency_ends_the_comparison(self):
+        periods = [(2025, 1, 80.0), (2025, 2, 100.0)]
+        cfs, ofs = {"fs_div": "CFS", "currency": "KRW"}, {"fs_div": "OFS", "currency": "KRW"}
+        keys = [(2025, 1), (2025, 2)]
+        same = self._data(list(zip(periods, (cfs, cfs))))
+        self.assertEqual(fm.segment_view(same, mode="q", keys=keys)["segments"][0]["values"], [80.0, 20.0])
+        for other in (ofs, {"fs_div": "CFS", "currency": "USD"}):
+            changed = self._data(list(zip(periods, (cfs, other))))
+            self.assertEqual(fm.segment_view(changed, mode="q", keys=keys)["segments"][0]["values"], [80.0, None])
+        # A row that does not say (older data) is compared as before.
+        unknown = self._data(list(zip(periods, (cfs, {}))))
+        self.assertEqual(fm.segment_view(unknown, mode="q", keys=keys)["segments"][0]["values"], [80.0, 20.0])
+
+    def test_annual_growth_stays_on_one_statement(self):
+        years = [(2023, 4, 100.0), (2024, 4, 120.0), (2025, 4, 150.0)]
+        cfs, ofs = {"fs_div": "CFS", "currency": "KRW"}, {"fs_div": "OFS", "currency": "KRW"}
+        a = fm.segment_view(self._data(list(zip(years, (cfs, cfs, cfs)))))["segments"][0]
+        self.assertAlmostEqual(a["yoy"][2], 0.25)
+        self.assertAlmostEqual(a["cagr"], 1.5 ** 0.5 - 1)
+        b = fm.segment_view(self._data(list(zip(years, (ofs, cfs, cfs)))))["segments"][0]
+        self.assertEqual(b["yoy"][1], None)
+        self.assertAlmostEqual(b["yoy"][2], 0.25)
+        self.assertAlmostEqual(b["cagr"], 0.25)                               # the run of consolidated years only
+
+
 class TestReviewCodex2Model(unittest.TestCase):
     """review_codex.md, second round: the tab's own sums and comparisons."""
 
@@ -281,6 +318,23 @@ class TestTab(unittest.TestCase):
         self.assertTrue(_pump(lambda: t._thread is not None and not t._thread.isRunning()))
         _pump(lambda: False, 0.2)
         return t
+
+    def test_check_row_names_another_axis_and_an_unsettled_period(self):
+        """review_agy 2: regions stored as the segments say so, and a period
+        whose table names no period is not shown as a plain "ok"."""
+        from data.dart.store import connect
+        conn = connect(self.db)
+        conn.execute("UPDATE segment_rev SET axis = 'region' WHERE fiscal_year = 2024")
+        conn.execute("UPDATE segment_rev SET basis = NULL WHERE fiscal_year = 2025")
+        conn.commit()
+        conn.close()
+        st = self._tab().segment_table
+        check = st.rowCount() - 1
+        self.assertEqual(st.verticalHeaderItem(check).text(), "검산")
+        cells = [st.item(check, j) for j in range(st.columnCount()) if st.item(check, j).text()]
+        self.assertEqual([c.text() for c in cells], ["ok · 지역", "기간 미확정"])      # 2024 4Q, 2025 3Q
+        self.assertIn("지역", cells[0].toolTip())
+        self.assertIn("3개월", cells[1].toolTip())
 
     def test_tab_shows_kpis_results_and_segments(self):
         t = self._tab()
@@ -443,6 +497,89 @@ class TestTab(unittest.TestCase):
         self.assertIsNone(us.tabs)
         kr.tabs.setCurrentIndex(1)
         self.assertTrue(_pump(lambda: kr.financials_tab._data is not None))
+
+
+class TestReviewAgy2Model(unittest.TestCase):
+    """review_agy 2 (2026-11-27): periods join only on the same breakdown axis,
+    a period of unsettled basis derives nothing, and the CAGR ends at the
+    newest full year."""
+
+    @staticmethod
+    def _row(fy, fq, rev, axis="segment", raw="A", status="ok", basis="ytd"):
+        return {**_seg_row(fy, fq, raw, rev, source="html_segment", basis=basis, level="segment"),
+                "check_status": status, "axis": axis}
+
+    def _years(self, *values, **kw):
+        rows = [self._row(2023 + i, 4, v, **kw) for i, v in enumerate(values) if v is not None]
+        keys = [(2023 + i, 4) for i in range(len(values))]
+        return fm.segment_view({"segments": rows}, keys=keys)["segments"][0]
+
+    def test_cagr_ends_at_the_newest_year(self):
+        self.assertAlmostEqual(self._years(100.0, 120.0, 150.0)["cagr"], 1.5 ** 0.5 - 1)
+        # The review's cases: an end of zero is -100 %, not the +20 % of the two years before.
+        zero = self._years(100.0, 120.0, 0.0)
+        self.assertEqual((zero["yoy"][2], zero["cagr"]), (-1.0, -1.0))
+        # The newest year missing: no CAGR (an older stretch is not the current one).
+        self.assertIsNone(self._years(100.0, 120.0, None)["cagr"])
+        # ... or unverified.
+        rows = [self._row(2023, 4, 100.0), self._row(2024, 4, 120.0), self._row(2025, 4, 150.0, status="sum_mismatch")]
+        self.assertIsNone(fm.segment_view({"segments": rows})["segments"][0]["cagr"])
+        # The run ends at a year that is missing, so the CAGR starts after it.
+        self.assertAlmostEqual(self._years(50.0, None, 100.0, 120.0)["cagr"], 0.2)
+        # A start of zero has no rate; a zero in between does not end the run.
+        self.assertIsNone(self._years(0.0, 120.0, 150.0)["cagr"])
+        self.assertAlmostEqual(self._years(100.0, 0.0, 121.0)["cagr"], 0.1)
+        # The year in progress is not the end year.
+        rows = [self._row(2023, 4, 100.0), self._row(2024, 4, 121.0), self._row(2025, 2, 10.0)]
+        self.assertAlmostEqual(fm.segment_view({"segments": rows})["segments"][0]["cagr"], 0.21)
+
+    def test_periods_join_only_on_the_same_axis(self):
+        # Regions one year, business segments the next, both with a "기타".
+        rows = [self._row(2023, 4, 100.0, "region", raw="기타"), self._row(2024, 4, 120.0, "region", raw="기타"),
+                self._row(2025, 4, 150.0, "segment", raw="기타")]
+        sv = fm.segment_view({"segments": rows})
+        a = sv["segments"][0]
+        self.assertEqual([c["axis"] for c in sv["columns"]], ["region", "region", "segment"])
+        self.assertEqual(a["values"], [100.0, 120.0, 150.0])                  # shown as disclosed
+        self.assertAlmostEqual(a["yoy"][1], 0.2)
+        self.assertIsNone(a["yoy"][2])                                        # not region -> segment
+        self.assertIsNone(a["cagr"])                                          # the run on the newest axis is one year
+        # The quarter split and the quarterly YoY stay on one axis too.
+        q = [self._row(2025, 1, 80.0, "sales_type"), self._row(2025, 2, 100.0, "segment"),
+             self._row(2024, 2, 30.0, "segment", basis="q")]
+        b = fm.segment_view({"segments": q}, mode="q", keys=[(2024, 2), (2025, 1), (2025, 2)])["segments"][0]
+        self.assertEqual((b["values"], b["yoy"]), ([30.0, 80.0, None], [None, None, None]))
+        # Rows stored before the axis was kept say nothing and join as before.
+        old = [self._row(2023, 4, 100.0, None), self._row(2024, 4, 120.0, "segment")]
+        self.assertAlmostEqual(fm.segment_view({"segments": old})["segments"][0]["yoy"][1], 0.2)
+
+    def test_axis_label_only_where_it_differs_from_the_level(self):
+        self.assertIsNone(fm.axis_label({"axis": "segment", "level": "segment", "source": "xbrl"}))
+        self.assertIsNone(fm.axis_label({"axis": "product", "level": "product", "source": "biz_product"}))
+        self.assertIsNone(fm.axis_label({"axis": None, "level": "segment", "source": "xbrl"}))
+        self.assertIsNone(fm.axis_label({"axis": "segment", "level": "segment", "source": "single"}))
+        self.assertEqual(fm.axis_label({"axis": "region", "level": "segment", "source": "html_segment"}), "지역")
+        self.assertEqual(fm.axis_label({"axis": "product", "level": "segment", "source": "html_product"}), "제품")
+        self.assertEqual(fm.axis_label({"axis": "sales_type", "level": "segment", "source": "html_product"}), "매출 유형")
+
+    def test_a_period_of_unsettled_basis_derives_nothing(self):
+        """The amounts reconcile (status ok) but the table names no period (basis None)."""
+        rows = [self._row(2025, 1, 60.0, basis="q"), self._row(2025, 2, 100.0, basis=None),
+                self._row(2025, 3, 180.0), self._row(2024, 2, 50.0, basis="q")]
+        keys = [(2024, 2), (2025, 1), (2025, 2), (2025, 3)]
+        sv = fm.segment_view({"segments": rows}, mode="q", keys=keys)
+        self.assertEqual([(c["status"], c["verified"]) for c in sv["columns"]],
+                         [("ok", True), ("ok", True), ("basis_unknown", False), ("ok", True)])
+        a = sv["segments"][0]
+        # Neither Q2 itself (3-month or cumulative?) nor Q3 = 180 - Q2 is derived, and no YoY.
+        self.assertEqual((a["values"], a["yoy"]), ([50.0, 60.0, None, None], [None, None, None, None]))
+        # The annual view shows the amount as disclosed and compares nothing with it.
+        years = [self._row(2024, 4, 100.0), self._row(2025, 4, 120.0, basis=None)]
+        b = fm.segment_view({"segments": years})
+        self.assertEqual((b["segments"][0]["values"], b["segments"][0]["yoy"], b["segments"][0]["cagr"]),
+                         ([100.0, 120.0], [None, None], None))
+        self.assertEqual(b["columns"][1]["status"], "basis_unknown")
+        self.assertEqual(fm.CHECK_LABELS["basis_unknown"][0], "기간 미확정")
 
 
 if __name__ == "__main__":
