@@ -10,9 +10,11 @@ tested on plain dicts.
   same quarters a year before).
 - ``kpis``: the four cards (latest quarter revenue, operating income with
   margin, owners' net income, trailing four quarters' revenue).
-- ``segment_view``: segment revenue per fiscal year (annual reports, and the
-  newest period of the year in progress), shares, YoY, the CAGR over the full
-  years, the check status per column and the reorganisation notes.
+- ``segment_view``: segment (or product) revenue per fiscal year (annual
+  reports, and the newest period of the year in progress) or per quarter
+  (cumulatives differenced), shares of the company's revenue, YoY, the CAGR
+  over the full years, the check status and source per column and the
+  reorganisation notes.
 
 Amounts stay in the reporting currency's unit (``unit_of``: 억원 for KRW,
 millions otherwise; plan 4-6).
@@ -163,98 +165,236 @@ def _turn(cur, prev):
 
 
 def _display_name(raw: str) -> str:
-    """A segment name without note marks: "차량(*1)" -> "차량"."""
+    """A segment name without note marks: "차량(*1)" -> "차량"; a long list of
+    products ("설화수,헤라,아이오페,...") shows its first two and 등."""
     import re
-    return re.sub(r"\s*\(\*\d*\)$", "", raw or "").strip()
+    name = re.sub(r"\s*\(\*\d*\)$", "", raw or "").strip()
+    parts = [p for p in re.split(r"\s*,\s*", name) if p]
+    if len(name) > 16 and len(parts) > 2:
+        name = ",".join(parts[:2]) + " 등"
+    return name
 
 
-def segment_view(data: dict, max_years: int = 6) -> dict:
-    """Segment revenue by fiscal year (see the module docstring):
-    {"columns": [{"fiscal_year", "fiscal_q", "label", "basis", "status", "source"}],
+def segment_levels(data: dict) -> list[str]:
+    """The breakdowns a company has: "product" (the business section's product
+    table) first, then "segment"."""
+    have = {r.get("level") or "segment" for r in data.get("segments") or []
+            if not str(r.get("segment_code") or "").startswith("_")}
+    return [lv for lv in ("product", "segment") if lv in have]
+
+
+def segment_view(data: dict, max_years: int = 6, mode: str = "y", max_quarters: int = 8,
+                 level: str | None = None, keys: list | None = None) -> dict:
+    """Segment revenue per period (see the module docstring):
+    {"columns": [{"fiscal_year", "fiscal_q", "label", "basis", "gross", "partial", "status", "source",
+                  "verified"}],
      "segments": [{"code", "name", "values": [..], "yoy": [..], "shares": [..], "cagr"}],
-     "notes": [...], "currency"}. Columns are the annual reports, plus the newest
-    period of a year that has no annual report yet."""
-    all_rows = data.get("segments") or []
+     "notes": [...], "currency", "mode", "level", "levels"}.
+
+    ``keys``: the (fiscal_year, fiscal_q) of every column, given by the tab
+    so the segment chart and table have the results' periods slot for slot
+    (user direction 2026-11-27: one 실적 card); a period without segment data
+    is an empty column. Without it the columns are the periods that have data.
+
+    ``level``: "product" or "segment" -- one breakdown for every column, so a
+    line's trend is never broken by a year read from another table; by default
+    the product breakdown where there is one (user direction 2026-11-27).
+
+    ``mode`` "y": the annual reports, plus the newest period of a year that has
+    no annual report yet (``partial``). "q": one column per fiscal quarter, the
+    quarter's own amount -- a cumulative figure minus the one before it in the
+    same year, on the same breakdown and basis (user direction 2026-11-27: the
+    business section lists cumulative amounts) -- with YoY against the same
+    quarter a year earlier. ``shares`` are of the company's revenue for the
+    period (the income statement's), else of the segments' sum.
+
+    Only a period whose rows passed the check against revenue (``check_status``
+    "ok") on a known basis ("q" / "ytd") is ``verified`` and enters a
+    calculation -- the quarter split, a cumulative sum, YoY, CAGR. An
+    unverified amount is shown as disclosed in its own column (the annual
+    view, and a first quarter in the quarterly view) and nothing is derived
+    from it: with Q1 unverified and the half year verified, the half-year
+    cumulative shows and Q2 alone stays empty (review_codex 5 P1)."""
+    levels = segment_levels(data)
+    if level not in levels:
+        level = levels[0] if levels else "segment"
+    all_rows = [r for r in data.get("segments") or [] if (r.get("level") or "segment") == level]
     rows = [r for r in all_rows if not str(r.get("segment_code") or "").startswith("_")]
     adjust: dict = {}
     for r in all_rows:
-        if str(r.get("segment_code") or "").startswith("_") and r.get("revenue") is not None:
+        code = str(r.get("segment_code") or "")
+        # A product table's residual is the lines it leaves out, not an elimination.
+        if code.startswith("_") and r.get("revenue") is not None and not (level == "product" and code == "_residual"):
             adjust[_key(r)] = adjust.get(_key(r), 0.0) + r["revenue"]
     status = data.get("segment_status") or {}
     by_period: dict = {}
     for r in rows:
         by_period.setdefault(_key(r), []).append(r)
-    years: dict = {}
-    for (fy, fq) in by_period:                 # the annual report, else the newest quarter of the year
-        years[fy] = max(years.get(fy, 0), fq)
-    cols = []
-    for fy in sorted(years)[-max_years:]:
-        fq = years[fy]
-        recs = by_period[(fy, fq)]
-        basis = recs[0]["basis"]
+    revenue = {_key(r): r for r in data.get("rows") or [] if r.get("metric") == "revenue"}
+
+    meta: dict = {}
+    for (fy, fq), recs in by_period.items():
         st = status.get((fy, fq), (recs[0]["check_status"], recs[0]["source"]))
-        if fq == 4:
-            label = str(fy)
-        elif basis == "ytd":
-            label = tr(f"{fy} {fq}Q누적", f"{fy} Q{fq} YTD")
-        else:
-            label = tr(f"{fy} {fq}Q", f"{fy} Q{fq}")
         seg_sum = sum(r["revenue"] for r in recs if r["revenue"] and r["revenue"] > 0)
         # Segments reported gross (before intersegment eliminations, which come as
         # adjustment rows) are not comparable with external-revenue segments: a
         # company whose source changes (Hyundai: the note's net table, then
         # XBRL's gross one) would show growth that is only the change of basis.
         gross = abs(adjust.get((fy, fq), 0.0)) > 0.01 * seg_sum if seg_sum else False
-        cols.append({"fiscal_year": fy, "fiscal_q": fq, "label": label, "basis": basis, "gross": gross,
-                     "status": st[0], "source": st[1], "rows": recs})
+        if level == "product":                  # the period's status is the segment reading's
+            st = ("ok", recs[0]["source"])
+        verified = recs[0].get("check_status") == "ok" and recs[0]["basis"] in ("q", "ytd")
+        meta[(fy, fq)] = {"basis": recs[0]["basis"], "gross": gross, "status": st[0],
+                          "source": st[1] or recs[0]["source"], "level": level, "verified": verified}
+
+    def raw(key, code):
+        v = [r["revenue"] for r in by_period.get(key, []) if r["segment_code"] == code and r["revenue"] is not None]
+        return sum(v) if v else None
+
+    def same(a, b) -> bool:
+        ma, mb = meta.get(a), meta.get(b)
+        return bool(ma and mb) and ma["gross"] == mb["gross"] and ma["level"] == mb["level"]
+
+    def verified(key) -> bool:
+        return key in meta and meta[key]["verified"]
+
+    def ytd_checked(key, code):
+        """The cumulative amount to `key` from verified periods only (a 3-month
+        figure added to the cumulative before it); None when one is not."""
+        if not verified(key):
+            return None
+        v = raw(key, code)
+        if v is None or meta[key]["basis"] == "ytd" or key[1] == 1:
+            return v
+        prev = (key[0], key[1] - 1)
+        p = ytd_checked(prev, code) if same(prev, key) else None
+        return None if p is None else p + v
+
+    def quarter_checked(key, code):
+        """The quarter's own amount from verified periods only (a cumulative
+        minus the cumulative before it)."""
+        if not verified(key):
+            return None
+        v = raw(key, code)
+        if v is None or meta[key]["basis"] == "q" or key[1] == 1:
+            return v
+        prev = (key[0], key[1] - 1)
+        p = ytd_checked(prev, code) if same(prev, key) else None
+        return None if p is None else v - p
+
+    def ytd(key, code):
+        """The annual view's cell: an unverified period as disclosed."""
+        return ytd_checked(key, code) if verified(key) else raw(key, code)
+
+    def quarter(key, code):
+        """The quarterly view's cell: an unverified amount only for a first
+        quarter (whatever its basis, it is that quarter's); later in the year
+        its basis is unknown, so it is no quarter amount."""
+        if key not in meta:
+            return None
+        if not verified(key):
+            return raw(key, code) if key[1] == 1 else None
+        return quarter_checked(key, code)
+
+    def blank():
+        return {"basis": None, "gross": False, "status": None, "source": None, "level": level, "verified": False}
+
+    if keys is not None:
+        cols = []
+        for fy, fq in keys:
+            m = meta.get((fy, fq)) or blank()
+            if mode == "q":
+                label = tr(f"{fy} {fq}Q", f"{fy} Q{fq}")
+            elif fq == 4:
+                label = str(fy)
+            else:
+                label = tr(f"{fy} {fq}Q누적", f"{fy} Q{fq} YTD")
+            cols.append({"fiscal_year": fy, "fiscal_q": fq, "label": label,
+                         "partial": mode != "q" and fq != 4, **m})
+    elif mode == "q":
+        # Quarters with an amount: an annual report whose Q3 was not collected
+        # (quarterly segments: the last two fiscal years) cannot be split.
+        keys = [k for k in sorted(by_period)
+                if any(quarter(k, r["segment_code"]) is not None for r in by_period[k])][-max_quarters:]
+        cols = [{"fiscal_year": fy, "fiscal_q": fq, "label": tr(f"{fy} {fq}Q", f"{fy} Q{fq}"), "partial": False,
+                 **meta[(fy, fq)]} for fy, fq in keys]
+    else:
+        years: dict = {}
+        for (fy, fq) in by_period:             # the annual report, else the newest quarter of the year
+            years[fy] = max(years.get(fy, 0), fq)
+        cols = []
+        for fy in sorted(years)[-max_years:]:
+            fq = years[fy]
+            m = meta[(fy, fq)]
+            label = str(fy) if fq == 4 else tr(f"{fy} {fq}Q누적", f"{fy} Q{fq} YTD")
+            cols.append({"fiscal_year": fy, "fiscal_q": fq, "label": label, "partial": fq != 4, **m})
+
+    def value(c, code):
+        key = (c["fiscal_year"], c["fiscal_q"])
+        return quarter(key, code) if mode == "q" else ytd(key, code)      # annual: the cumulative
+
     # Codes ordered by the newest column's revenue; the newest raw name names a code.
     names: dict = {}
     for c in cols:
-        for r in c["rows"]:
+        for r in by_period.get((c["fiscal_year"], c["fiscal_q"]), []):
             names[r["segment_code"]] = _display_name(r["segment_raw"])
-    last_vals = {r["segment_code"]: (r["revenue"] or 0) for r in (cols[-1]["rows"] if cols else [])}
+    with_data = [c for c in cols if any(value(c, code) is not None for code in names)]
+    last = with_data[-1] if with_data else None
+    last_vals = {code: (value(last, code) or 0) for code in names} if last else {}
     codes = sorted(names, key=lambda k: (-last_vals.get(k, 0), names[k]))
     segs = []
     for code in codes:
-        values = []
-        for c in cols:
-            v = [r["revenue"] for r in c["rows"] if r["segment_code"] == code and r["revenue"] is not None]
-            values.append(sum(v) if v else None)
-        yoy = [None]
-        for i in range(1, len(cols)):
-            prev, cur = cols[i - 1], cols[i]
+        values = [value(c, code) for c in cols]
+        yoy = []
+        for i, c in enumerate(cols):
+            key = (c["fiscal_year"], c["fiscal_q"])
+            if mode == "q":
+                ago = (key[0] - 1, key[1])
+                yoy.append(growth(quarter_checked(key, code), quarter_checked(ago, code)) if same(ago, key) else None)
+                continue
+            prev = cols[i - 1] if i else None
             # Exactly the year before: with a year missing in between, the change
             # over two years is not a year-on-year figure (review_codex 2 P2).
-            comparable = (prev["fiscal_q"] == 4 and cur["fiscal_q"] == 4 and prev["basis"] == cur["basis"]
-                          and prev["gross"] == cur["gross"] and prev["fiscal_year"] == cur["fiscal_year"] - 1)
+            comparable = (prev is not None and prev["verified"] and c["verified"]
+                          and prev["fiscal_q"] == 4 and c["fiscal_q"] == 4
+                          and prev["basis"] == c["basis"] and prev["gross"] == c["gross"]
+                          and prev["level"] == c["level"] and prev["fiscal_year"] == c["fiscal_year"] - 1)
             yoy.append(growth(values[i], values[i - 1]) if comparable else None)
-        # CAGR over the newest run of full years on one basis (gross or external).
-        full = []
-        for c, v in reversed(list(zip(cols, values))):
-            if c["fiscal_q"] != 4:
-                continue
-            if full and (c["gross"] != full[-1][2] or c["fiscal_year"] != full[-1][0] - 1):
-                break                          # another basis, or a year missing: the run ends
-            if v:
-                full.append((c["fiscal_year"], v, c["gross"]))
-        full.reverse()
         cagr = None
-        if len(full) >= 2 and full[0][1] > 0 and full[-1][1] > 0 and full[-1][0] > full[0][0]:
-            cagr = (full[-1][1] / full[0][1]) ** (1 / (full[-1][0] - full[0][0])) - 1
+        if mode != "q":
+            # CAGR over the newest run of full years on one basis (gross or external).
+            full = []
+            for c, v in reversed(list(zip(cols, values))):
+                if c["fiscal_q"] != 4:
+                    continue
+                if full and (c["gross"] != full[-1][2] or c["level"] != full[-1][3]
+                             or c["fiscal_year"] != full[-1][0] - 1):
+                    break                      # another basis, or a year missing: the run ends
+                if v and c["verified"]:        # an unverified year is a missing one: the run ends there
+                    full.append((c["fiscal_year"], v, c["gross"], c["level"]))
+            full.reverse()
+            if len(full) >= 2 and full[0][1] > 0 and full[-1][1] > 0 and full[-1][0] > full[0][0]:
+                cagr = (full[-1][1] / full[0][1]) ** (1 / (full[-1][0] - full[0][0])) - 1
         segs.append({"code": code, "name": names[code], "values": values, "yoy": yoy, "cagr": cagr})
-    for i, _c in enumerate(cols):
-        total = sum(s["values"][i] for s in segs if s["values"][i] and s["values"][i] > 0)
+    for i, c in enumerate(cols):
+        rev = revenue.get((c["fiscal_year"], c["fiscal_q"]))
+        whole = None
+        if rev is not None:
+            whole = rev.get("value_q") if mode == "q" else rev.get("value_ytd")
+        if not whole or whole <= 0:
+            whole = sum(s["values"][i] for s in segs if s["values"][i] and s["values"][i] > 0)
         for s in segs:
             v = s["values"][i]
-            s.setdefault("shares", []).append((v / total) if (v and v > 0 and total) else None)
+            s.setdefault("shares", []).append((v / whole) if (v and v > 0 and whole) else None)
     notes = []
     for u in data.get("user_maps") or []:
         notes.append(("map", u))
     for u in data.get("unmatched") or []:
-        notes.append(("unmatched", u))
+        if (u.get("level") or "segment") == level:
+            notes.append(("unmatched", u))
     currency = (data.get("rows") or [{}])[-1].get("currency") if data.get("rows") else "KRW"
-    return {"columns": [{k: v for k, v in c.items() if k != "rows"} for c in cols], "segments": segs,
-            "notes": notes, "currency": currency or "KRW"}
+    return {"columns": cols, "segments": segs, "notes": notes, "currency": currency or "KRW", "mode": mode,
+            "level": level, "levels": levels, "has_values": bool(with_data)}
 
 
 def basis_report(quarters: list[dict]) -> dict:

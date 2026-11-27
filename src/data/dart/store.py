@@ -34,7 +34,14 @@ import sqlite3
 # 6 (2026-11-26, stage 4): seg_fetch -- which filings' segment revenue was read.
 # 7 (2026-11-26, review_codex 2): a Q4 row per Q3 version (fin_std.derived = 2 under the
 #   late Q3's receipt) instead of one value with an availability day; Q4 rows re-derived.
-SCHEMA_VERSION = 9
+# 10 (2026-11-27): segments read again once -- the business section's product /
+#   segment tables (segments.biz_candidates).
+# 11 (2026-11-27): segment_rev.level -- a period keeps its segment breakdown and,
+#   where the business section has one, its product breakdown (read again once).
+# 12 (2026-11-27, review_codex 5): segments read again once -- order-book, cost and
+#   customer tables are no longer taken for revenue breakdowns, a candidate is checked
+#   against its own period only, a product sold by several segments is added up.
+SCHEMA_VERSION = 12
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS company (
@@ -92,6 +99,7 @@ CREATE TABLE IF NOT EXISTS segment_rev (
   corp_code TEXT NOT NULL,
   fiscal_year INTEGER NOT NULL,
   fiscal_q INTEGER NOT NULL,
+  level TEXT NOT NULL DEFAULT 'segment',   -- segment / product (the business section's product table)
   segment_raw TEXT NOT NULL,
   segment_code TEXT,
   revenue REAL,
@@ -101,7 +109,7 @@ CREATE TABLE IF NOT EXISTS segment_rev (
   check_status TEXT,
   rcept_no TEXT NOT NULL,
   rcept_dt TEXT NOT NULL,
-  PRIMARY KEY (corp_code, fiscal_year, fiscal_q, segment_raw, rcept_no)
+  PRIMARY KEY (corp_code, fiscal_year, fiscal_q, level, segment_raw, rcept_no)
 );
 
 CREATE TABLE IF NOT EXISTS segment_map (
@@ -153,7 +161,7 @@ CREATE TABLE IF NOT EXISTS fin_fetch (
 CREATE TABLE IF NOT EXISTS seg_fetch (
   rcept_no TEXT PRIMARY KEY,
   status TEXT NOT NULL,              -- ok / sum_mismatch / review / na (no revenue to check against)
-  source TEXT,                       -- xbrl / html_segment / html_product / single
+  source TEXT,                       -- the segment level's: xbrl / biz_segment / html_segment / html_product / single
   detail TEXT,
   fetched_at TEXT
 );
@@ -263,8 +271,24 @@ def _stored_version(conn: sqlite3.Connection) -> int | None:
         return None
 
 
+def _add_segment_level(conn: sqlite3.Connection) -> None:
+    """segment_rev before schema 11 had no level and a key without it: rebuilt
+    with every existing row at the segment level."""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(segment_rev)")]
+    if not cols or "level" in cols:
+        return
+    conn.execute("ALTER TABLE segment_rev RENAME TO segment_rev_old")
+    conn.execute("DROP INDEX IF EXISTS ix_segment_rev_period")
+    conn.executescript(_SCHEMA)
+    keep = ", ".join(cols)
+    conn.execute(f"INSERT INTO segment_rev({keep}, level) SELECT {keep}, "
+                 "CASE WHEN source = 'biz_product' THEN 'product' ELSE 'segment' END FROM segment_rev_old")
+    conn.execute("DROP TABLE segment_rev_old")
+
+
 def _migrate(conn: sqlite3.Connection, old: int | None) -> None:
     """Bring the DB to SCHEMA_VERSION: tables, column additions, data fixes, views."""
+    _add_segment_level(conn)
     conn.executescript(_SCHEMA)
     if "currency" not in {r[1] for r in conn.execute("PRAGMA table_info(fin_std)")}:
         conn.execute("ALTER TABLE fin_std ADD COLUMN currency TEXT DEFAULT 'KRW'")
@@ -277,6 +301,13 @@ def _migrate(conn: sqlite3.Connection, old: int | None) -> None:
         conn.execute("ALTER TABLE fin_std ADD COLUMN ytd_derived INTEGER DEFAULT 0")
     if "retry_after" not in {r[1] for r in conn.execute("PRAGMA table_info(fin_fetch)")}:
         conn.execute("ALTER TABLE fin_fetch ADD COLUMN retry_after TEXT")
+    if old is not None and old < 12:
+        # Every period's segments are read again (the stored rows stay shown until
+        # then); the XBRL replies are cached, the documents are asked for again.
+        # 11: the level column; 12: the review_codex 5 reading rules -- seg_fetch
+        # skips a receipt already read, so a new parser version alone would leave
+        # the misread rows (order books, cost tables, customers) in place.
+        conn.execute("DELETE FROM seg_fetch")
     if old is not None and old < 8:
         # A correction marked done although the numbers stored for it came from an
         # older receipt (closed after the 7-day wait before schema 8) is asked
