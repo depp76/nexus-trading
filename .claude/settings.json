@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.venv/Scripts/python.exe\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/precommit_check.py\"",
+            "timeout": 400,
+            "statusMessage": "커밋 전 검사(ruff, pytest) 실행 중..."
+          }
+        ]
+      }
+    ]
+  }
+}
