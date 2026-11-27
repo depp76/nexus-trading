@@ -65,7 +65,7 @@ MAX_RESIDUAL_SHARE = 0.15
 # sold by several segments added up). The XBRL result gained the period's length,
 # which an older cached result gives through its label (_from_json): no bump.
 PARSER_VERSION = 12
-DOC_PARSER_VERSION = 14
+DOC_PARSER_VERSION = 15
 _GEO = ("국내", "한국", "대한민국", "내수", "수출", "해외", "북미", "미국", "미주", "유럽", "구주", "아시아", "중국",
         "일본", "베트남", "인도", "중남미", "남미", "중동", "아프리카", "오세아니아", "호주", "캐나다", "멕시코",
         "브라질", "독일", "러시아", "기타지역", "기타국가", "아태", "동남아")
@@ -93,7 +93,7 @@ def is_total(name: str) -> bool:
     n = (name or "").replace(" ", "")
     return bool(_TOTAL.match(n)) or n.endswith(("합계", "총계"))
 _ADJ = re.compile(r"(연결조정|조정|내부거래|제거|상계|부문간|내부매출|연결제거)")
-_EXTERNAL = re.compile(r"외부")
+_EXTERNAL = re.compile(r"(외부|순매출)")         # the external-sales row or column first ("외부매출", 기아 "순매출액")
 _INTERNAL = re.compile(r"(내부|부문간|부문사이)")
 _REVENUE_LABEL = re.compile(r"(매출|수익|영업수익)")
 _NOT_REVENUE = re.compile(r"(원가|비율|구성비|%|이익|손익|손실|비용|자산|부채|상각|법인세|이자|취득|투자|감가|채권|증감)")
@@ -671,7 +671,16 @@ def table_candidates(table: str, unit: float, product: bool, caption=(None, None
         rev_cols = [(c, lab) for c, lab in cols if not _NOT_REVENUE.search(lab)]
     op_col = next((c for c, lab in cols if _OP_LABEL.search(lab.replace(" ", ""))), None)
     col_period = _periods({c: _marks(paths[c]) for c, _lab in cols}, caption)
-    for c, lab in rev_cols:
+    first_value = min((a for row in body for a, _b, x in row if a > 0 and docs._amount(x) is not None),
+                      default=ncols)
+    tree = _row_paths(body, first_value)
+    for c, lab in rev_cols if tree else ():
+        entries = [(names, val(r, c), None if op_col is None else val(r, op_col)) for names, r in tree]
+        items, adjust, total, ops = _tree_items([e for e in entries if e[1] is not None])
+        if items:
+            out.append(Candidate(source, items, adjust, total, label=f"col {lab}", ops=ops,
+                                 when=col_period[c][0], span=col_period[c][1]))
+    for c, lab in rev_cols if not tree else ():
         items, adjust, total = [], [], None
         ops = {}
         for name, r in rows:
@@ -695,10 +704,7 @@ def table_candidates(table: str, unit: float, product: bool, caption=(None, None
     # Orientation B: items are columns; one candidate per revenue-like row and
     # period. A column's path of header labels ends with its period ("3개월",
     # "누적", "당기"...) when the table shows several; the label before it is
-    # the item. A total label at the top ("계(*)", "제품과용역합계") is the
-    # table's total; a total label under a parent ("DS부문 > 계") is that
-    # parent's own amount, and the parent's other sub-columns (반도체, DP) are
-    # its parts, not segments.
+    # the item (see _tree_items for totals and parts).
     columns = []
     for c in range(1, ncols):
         path = [p for p in paths[c] if p]
@@ -709,21 +715,6 @@ def table_candidates(table: str, unit: float, product: bool, caption=(None, None
         if not names:
             continue
         columns.append((c, names, period))
-    def is_axis(n):
-        return n.replace(" ", "") in _AXIS_WORDS or is_total(n)
-
-    def real_parents(names):
-        """The segment-like labels above a column's leaf (axis words, totals
-        and elimination groups are not segments)."""
-        return [n for n in names[:-1] if not is_axis(n) and not _ADJ.search(n)]
-
-    # A segment shown with its own total and parts ("DS부문 > 계 | 반도체 | DP").
-    parent_totals = set()
-    for _c, names, _p in columns:
-        if is_total(names[-1]) and not any(_ADJ.search(n) for n in names):
-            rp = real_parents(names)
-            if rp:
-                parent_totals.add(rp[-1])
     rev_rows = [(n, r) for n, r in rows if _REVENUE_LABEL.search(n) and not _NOT_REVENUE.search(n)
                 and not _INTERNAL.search(n)]
     rev_rows.sort(key=lambda nr: 0 if _EXTERNAL.search(nr[0]) else 1)
@@ -734,44 +725,90 @@ def table_candidates(table: str, unit: float, product: bool, caption=(None, None
     row_period = _periods({p: _marks(p) for p in periods}, caption)
     for rname, r in rev_rows:
         for period in periods:
-            items, adjust, adj_total, total, ops = [], [], None, None, {}
-            for c, names, p in columns:
-                if p != period:
-                    continue
-                v = val(r, c)
-                if v is None:
-                    continue
-                leaf = names[-1]
-                in_adj = any(_ADJ.search(n) for n in names)
-                rp = real_parents(names)
-                if is_total(leaf):
-                    if in_adj:
-                        adj_total = v                      # an elimination group's own total
-                    elif rp:
-                        items.append((rp[-1], v))          # a segment's own total
-                        if op_row is not None and val(op_row, c) is not None:
-                            ops[rp[-1]] = val(op_row, c)
-                    else:
-                        total = v                          # the last total column: the grand total
-                    continue
-                if in_adj:
-                    adjust.append((f"{leaf} 제거" if not _ADJ.search(leaf) else leaf, v))
-                    continue
-                if any(p in parent_totals for p in rp):
-                    continue                               # part of a segment shown with its total
-                if _is_revenue_caption(leaf):
-                    continue                               # "외부고객으로부터의 수익" over the columns, not a segment
-                items.append((leaf, v))
-                if op_row is not None:
-                    ov = val(op_row, c)
-                    if ov is not None:
-                        ops[leaf] = ov
-            if adj_total is not None and not adjust:
-                adjust = [("부문간 제거", adj_total)]
+            entries = [(names, val(r, c), None if op_row is None else val(op_row, c))
+                       for c, names, p in columns if p == period]
+            items, adjust, total, ops = _tree_items([e for e in entries if e[1] is not None])
             if items:
                 out.append(Candidate(source, items, adjust, total, label=f"row {rname} {' '.join(period)}".strip(),
                                      ops=ops, when=row_period[period][0], span=row_period[period][1]))
     return out
+
+
+def _is_axis(name: str) -> bool:
+    return name.replace(" ", "") in _AXIS_WORDS or is_total(name)
+
+
+def _real_parents(names) -> list[str]:
+    """The segment-like labels above a path's leaf (axis words, totals and
+    elimination groups are not segments)."""
+    return [n for n in names[:-1] if not _is_axis(n) and not _ADJ.search(n)]
+
+
+def _tree_items(entries) -> tuple[list, list, float | None, dict]:
+    """(items, adjust, total, ops) of one period's amounts, each given with the
+    path of labels that names it -- a column's header path, or a row's labels
+    across the table's label columns (_row_paths). A total at the top ("계(*)",
+    "지역합계") is the table's total; a total under a parent ("DS부문 > 계",
+    "KUS > 기업전체총계합계") is that parent's own amount, and the parent's other
+    entries -- its parts (반도체, DP), its gross amount and its own eliminations
+    (기아: "KUS > 기업전체총계 > 영업부문 | 중요한조정사항 > 부문간제거한금액") --
+    are already in it, not segments or adjustments of the table."""
+    parent_totals = set()
+    for names, _v, _o in entries:
+        if is_total(names[-1]) and not any(_ADJ.search(n) for n in names):
+            rp = _real_parents(names)
+            if rp:
+                parent_totals.add(rp[-1])
+    items, adjust, adj_total, total, ops = [], [], None, None, {}
+    for names, v, ov in entries:
+        leaf = names[-1]
+        in_adj = any(_ADJ.search(n) for n in names)
+        rp = _real_parents(names)
+        if is_total(leaf):
+            if in_adj:
+                adj_total = v                      # an elimination group's own total
+            elif rp:
+                items.append((rp[-1], v))          # a segment's own total
+                if ov is not None:
+                    ops[rp[-1]] = ov
+            else:
+                total = v                          # the last total: the grand total
+            continue
+        if any(p in parent_totals for p in rp):
+            continue                               # part of a segment shown with its total
+        if in_adj:
+            adjust.append((f"{leaf} 제거" if not _ADJ.search(leaf) else leaf, v))
+            continue
+        if _is_revenue_caption(leaf):
+            continue                               # "외부고객으로부터의 수익" over the columns, not a segment
+        name = rp[-1] if _is_axis(leaf) and rp else leaf     # "KUS > 영업부문": the segment is KUS
+        items.append((name, v))
+        if ov is not None:
+            ops[name] = ov
+    if adj_total is not None and not adjust:
+        adjust = [("부문간 제거", adj_total)]
+    return items, adjust, total, ops
+
+
+def _row_paths(body, first_value: int) -> list:
+    """(labels, row) of each body row when the row labels run over several
+    columns, a level per column with row spans (기아's segment note 2025 1-3Q:
+    "지역 | 외국 | 북중미 | KUS | 기업전체총계 | 영업부문 | amount"); a label is
+    carried down to the rows it spans and a new label at a level clears the
+    deeper ones. None when the labels sit in the first column only."""
+    stack: dict[int, str] = {}
+    out, deep = [], False
+    for row in body:
+        labels = [(a, b, _clean(x)) for a, b, x in row if b < first_value and _clean(x)]
+        for a, _b, _t in labels:
+            for k in [k for k in stack if k >= a]:
+                del stack[k]
+        for a, _b, t in labels:
+            stack[a] = t
+        deep = deep or any(a > 0 for a, _b, _t in labels) or len(labels) > 1
+        if stack:
+            out.append(([stack[k] for k in sorted(stack)], row))
+    return out if deep else None
 
 
 def document_candidates(region: str) -> tuple[list[Candidate], bool]:  # one region

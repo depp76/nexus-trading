@@ -429,6 +429,51 @@ class TestReviewCodex5(unittest.TestCase):
         self.assertEqual(seg.biz_table_candidates(t, 1.0)[0].items, [("케미칼", 66.0), ("장비", 34.0)])
 
 
+class TestRegionTrees(unittest.TestCase):
+    """기아 2025-2026 (2026-11-27): the region segments in an XBRL-styled note,
+    each region shown as gross | its own eliminations | its own total."""
+
+    def test_row_labels_over_several_columns(self):
+        """2025 1-3Q: a level of the region tree per label column, with row
+        spans; each region's "기업전체총계합계" row is its amount."""
+        rows = [[("지역", 1, 9), ("본사소재지국가", 3, 3), ("기업전체총계", 1, 2), ("영업부문", 2), "160"],
+                ["중요한조정사항", "부문간제거한금액", "(87)"],
+                [("기업전체총계합계", 3), "73"],
+                [("외국", 1, 6), ("북중미", 1, 3), ("KUS", 1, 3), ("기업전체총계", 1, 2), ("영업부문", 2), "98"],
+                ["중요한조정사항", "부문간제거한금액", "0"],
+                [("기업전체총계합계", 3), "98"],
+                [("유럽", 2, 3), ("기업전체총계", 1, 2), ("영업부문", 2), "133"],
+                ["중요한조정사항", "부문간제거한금액", "(69)"],
+                [("기업전체총계합계", 3), "64"],
+                [("지역합계", 7), "235"]]
+        t = _table(rows, [["", "", "", "", "", "", "", "수익(매출액)"]])
+        c, basis, residual, status = seg.choose(seg.table_candidates(t, E, False), 235 * E, 235 * E, 1)
+        self.assertEqual((status, residual), ("ok", 0.0))
+        self.assertEqual(c.items, [("본사소재지국가", 73 * E), ("KUS", 98 * E), ("유럽", 64 * E)])
+        self.assertEqual((c.adjust, c.total), ([], 235 * E))
+
+    def test_eliminations_inside_a_regions_own_total(self):
+        """2025 annual and later: the same tree in the header; the elimination
+        columns under a region are in its total, not adjustments of the table."""
+        head = [["", ("지역", 6), ("지역합계", 1, 5)],
+                ["", ("본사소재지국가", 3), ("유럽", 3)],
+                ["", ("기업전체총계", 2), ("기업전체총계합계", 1, 3), ("기업전체총계", 2), ("기업전체총계합계", 1, 3)],
+                ["", ("영업부문", 1, 2), "중요한조정사항", ("영업부문", 1, 2), "중요한조정사항"],
+                ["", "부문간제거한금액", "부문간제거한금액"]]
+        t = _table([["수익(매출액)", "651", "(351)", "300", "515", "(271)", "244", "544"]], head)
+        c, _basis, residual, status = seg.choose(seg.table_candidates(t, E, False), None, 544 * E, 4)
+        self.assertEqual((status, residual), ("ok", 0.0))
+        self.assertEqual((c.items, c.adjust), ([("본사소재지국가", 300 * E), ("유럽", 244 * E)], []))
+
+    def test_net_sales_row_before_the_gross_one(self):
+        """2024 annual: "수익(매출액)" (gross, with the eliminations) and
+        "순매출액" both reconcile; the net one keeps the series on one basis."""
+        head = [["구분", "본사소재지국가", "유럽", "부문간제거한금액", "합계"]]
+        t = _table([["수익(매출액)", "632", "492", "(580)", "544"], ["순매출액", "300", "244", "0", "544"]], head)
+        c, _basis, _r, status = seg.choose(seg.table_candidates(t, E, False), None, 544 * E, 4)
+        self.assertEqual((status, c.items), ("ok", [("본사소재지국가", 300 * E), ("유럽", 244 * E)]))
+
+
 class TestLevelMigration(_TmpMixin, unittest.TestCase):
     def test_old_segment_rows_get_a_level_and_are_read_again(self):
         import sqlite3
@@ -460,11 +505,27 @@ class TestLevelMigration(_TmpMixin, unittest.TestCase):
         conn = connect(self.db)
         self.addCleanup(conn.close)
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM seg_fetch").fetchone()[0], 0)
-        self.assertEqual(conn.execute("SELECT value FROM sync_state WHERE key = 'schema_version'").fetchone()[0], "12")
+        self.assertEqual(conn.execute("SELECT value FROM sync_state WHERE key = 'schema_version'").fetchone()[0], "13")
         # Both levels may now hold the same name in one period.
         seg.store_segments(conn, "C", 2025, 4, "r1", "d", seg.Candidate("biz_product", [("DX", 2.0), ("DS", 1.0)]),
                            "ytd", 0.0, "ok", "biz_product", level="product")
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM segment_rev WHERE segment_raw = 'DX'").fetchone()[0], 2)
+
+    def test_schema_13_reads_the_note_table_periods_again(self):
+        """2026-11-27 (기아): failed periods and the ones the note tables or the
+        single-segment rule decided are read again; XBRL and business-section
+        periods never reached the note reader and stay."""
+        conn = connect(self.db)
+        conn.executemany("INSERT INTO seg_fetch VALUES (?, ?, ?, '', '')",
+                         [("x", "ok", "xbrl"), ("b", "ok", "biz_segment"), ("n", "na", None), ("h", "ok", "html_segment"),
+                          ("p", "ok", "html_product"), ("s", "ok", "single"), ("r", "review", None),
+                          ("m", "sum_mismatch", "xbrl")])
+        conn.execute("UPDATE sync_state SET value = '12' WHERE key = 'schema_version'")
+        conn.commit()
+        conn.close()
+        conn = connect(self.db)
+        self.addCleanup(conn.close)
+        self.assertEqual(sorted(r[0] for r in conn.execute("SELECT rcept_no FROM seg_fetch")), ["b", "n", "x"])
 
 
 class TestSegmentSync(_TmpMixin, unittest.TestCase):

@@ -41,10 +41,6 @@ logger = logging.getLogger(__name__)
 BAR_COLOR = SERIES_PALETTE[6]          # revenue bars: a calm blue, not the PROFIT "gain" color
 SEGMENT_COLORS = SERIES_PALETTE
 _CHECK_KIND = {"ok": OK, "sum_mismatch": WARN, "review": TEXT_EMPTY, "na": TEXT_EMPTY}
-_SOURCE_LABELS = {"biz_product": ("사업의 내용 제품표", "business section, products"),
-                  "biz_segment": ("사업의 내용 부문표", "business section, segments"),
-                  "xbrl": ("XBRL", "XBRL"), "html_segment": ("주석 부문표", "segment note"),
-                  "html_product": ("주석 제품표", "note's product table"), "single": ("단일부문", "single segment")}
 
 
 def _pct(v, digits: int = 1) -> str:
@@ -108,8 +104,55 @@ class _PinnedScroll:
         vh = t.verticalHeader()
         self.lead.setFixedWidth(frame + (vh.width() if vh.isVisibleTo(t) else 0))
         vbar = t.verticalScrollBar()
-        self.tail.setFixedWidth(frame + (vbar.sizeHint().width() if vbar.maximum() > 0 else 0))
+        self.tail.setFixedWidth(frame + (vbar.width() if vbar.isVisibleTo(t) else 0))
         bar.setVisible(inner.maximum() > 0)
+
+
+# Fixed geometry (user direction 2026-11-27): switching 분기 | 연간 or 제품별 | 부문별
+# must not move a chart or a table. The charts' plot areas get the same margins in
+# pixels whatever their tick labels (tight_layout moved them), so the results and
+# the segment charts also stay one above the other; the tables get one width for
+# the item names and for every period column.
+CHART_H = 280                       # both charts
+TABLE_H = 262                       # both tables (their scroll bar under them)
+NAME_W = 132                        # the tables' frozen item-name column
+PERIOD_W = 104                      # every period column
+_MARGINS = (104, 60, 36, 10)        # chart plot area: left, right, bottom, top, in pixels
+
+
+def _pin_margins(fig) -> None:
+    """The plot area at fixed pixel margins for the figure's current size."""
+    w, h = fig.get_size_inches() * fig.dpi
+    left, right, bottom, top = _MARGINS
+    fig.subplots_adjust(left=min(left / w, 0.4), right=max(1 - right / w, 0.6),
+                        bottom=min(bottom / h, 0.4), top=max(1 - top / h, 0.6))
+
+
+def _fixed_canvas(fig) -> FigureCanvas:
+    canvas = FigureCanvas(fig)
+    canvas.setStyleSheet("border: none;")
+    canvas.setFixedHeight(CHART_H)
+
+    def on_resize(_event):
+        _pin_margins(fig)
+        canvas.draw_idle()
+    canvas.mpl_connect("resize_event", on_resize)
+    return canvas
+
+
+def _fix_table_geometry(table: QTableWidget) -> None:
+    """One width for the item names and for every period column, one height."""
+    table.setFixedHeight(TABLE_H)
+    vh = table.verticalHeader()
+    vh.setFixedWidth(NAME_W)
+    vh.setTextElideMode(Qt.TextElideMode.ElideRight)
+    hh = table.horizontalHeader()
+    hh.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+    hh.setDefaultSectionSize(PERIOD_W)
+    table.setTextElideMode(Qt.TextElideMode.ElideRight)
+    table.setHorizontalScrollMode(QTableWidget.ScrollMode.ScrollPerPixel)   # the newest column flush right
+    # Always there, so a breakdown with more rows does not push the columns left.
+    table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
 
 
 def _select_column(table: QTableWidget, col) -> None:
@@ -246,16 +289,14 @@ class StockFinancialsTab(QWidget):
         body = QHBoxLayout()
         body.setSpacing(12)
         self._fig = Figure(figsize=(6.4, 2.8), linewidth=0)
-        self._canvas = FigureCanvas(self._fig)
-        self._canvas.setStyleSheet("border: none;")
-        self._canvas.setMinimumHeight(260)
+        self._canvas = _fixed_canvas(self._fig)
         self._canvas.mpl_connect("motion_notify_event", self._on_chart_motion)
         self._canvas.mpl_connect("figure_leave_event", lambda _e: self._hover(None))
         body.addWidget(self._canvas, 5)
         self._table = QTableWidget()
         setup_table(self._table)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._table.setMinimumHeight(260)
+        _fix_table_geometry(self._table)
         grid_box = QVBoxLayout()                 # the table with its scroll bar right under it
         grid_box.setSpacing(0)
         grid_box.addWidget(self._table, 1)
@@ -435,7 +476,7 @@ class StockFinancialsTab(QWidget):
                   loc="upper left", fontsize=FONT_CAPTION, frameon=False)
         ax.set_xlim(-0.6, max(len(rows) - 0.4, 0.6))      # the segment chart uses the same range
         self._build_chart_marker(ax, ax2 if margins else None, rows, div)
-        fig.tight_layout()
+        _pin_margins(fig)
         self._results_ax = ax
         self._canvas.draw_idle()
 
@@ -553,11 +594,12 @@ class StockFinancialsTab(QWidget):
                 ]
                 for i, (text, color, align) in enumerate(cells):
                     item = QTableWidgetItem(text)
+                    if i == 7 and text:
+                        item.setToolTip(text)            # the notes may be wider than the fixed column
                     item.setTextAlignment(int(align or (Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)))
                     if color:
                         item.setForeground(QColor(color))
                     t.setItem(i, j, item)
-            t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
             t.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectColumns)
         finally:
             t.setUpdatesEnabled(True)
@@ -599,10 +641,6 @@ class StockFinancialsTab(QWidget):
         head = QHBoxLayout()
         head.setSpacing(10)
         head.addWidget(self._seg_title)
-        self._seg_caption = QLabel()
-        self._seg_caption.setObjectName("muted")
-        self._seg_caption.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
-        head.addWidget(self._seg_caption)
         head.addStretch(1)
         box.addLayout(head)
         self.segment_data = fm.segment_view(self._data)
@@ -632,16 +670,14 @@ class StockFinancialsTab(QWidget):
         body = QHBoxLayout()
         body.setSpacing(12)
         self._seg_fig = Figure(figsize=(6.4, 2.8), linewidth=0)
-        self._seg_canvas = FigureCanvas(self._seg_fig)
-        self._seg_canvas.setStyleSheet("border: none;")
-        self._seg_canvas.setMinimumHeight(260)
+        self._seg_canvas = _fixed_canvas(self._seg_fig)
         self._seg_canvas.mpl_connect("motion_notify_event", self._on_seg_motion)
         self._seg_canvas.mpl_connect("figure_leave_event", lambda _e: self._hover(None))
         body.addWidget(self._seg_canvas, 5)
         self.segment_table = QTableWidget()
         setup_table(self.segment_table, row_height=36)
         self.segment_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.segment_table.setMinimumHeight(260)
+        _fix_table_geometry(self.segment_table)
         grid_box = QVBoxLayout()
         grid_box.setSpacing(0)
         grid_box.addWidget(self.segment_table, 1)
@@ -649,11 +685,7 @@ class StockFinancialsTab(QWidget):
         grid_box.addLayout(self._seg_scroll.layout)
         body.addLayout(grid_box, 4)
         box.addLayout(body, 1)
-        self._seg_notes = QLabel()
-        self._seg_notes.setObjectName("faint")
-        self._seg_notes.setWordWrap(True)
-        self._seg_notes.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
-        box.addWidget(self._seg_notes)
+
 
     def set_segment_level(self, level: str) -> None:
         """"product" or "segment": the breakdown the segment card shows."""
@@ -664,23 +696,13 @@ class StockFinancialsTab(QWidget):
         self._refresh_segments()
 
     def _refresh_segments(self) -> None:
-        """Redraw the segment card for the current 분기 | 연간 mode."""
-        if self._mode == "q":
-            caption = tr("분기 매출액 · 누적 차이로 계산", "quarterly revenue, from cumulatives")
-        else:
-            caption = tr("연간 매출액 · 진행 중인 해는 누적(빗금)", "annual revenue; the year in progress cumulative (hatched)")
-        self._seg_caption.setText(caption)
+        """Redraw the segment section for the current 분기 | 연간 mode."""
         if self._seg_empty:
             return
         sv = fm.segment_view(self._data, mode=self._mode, level=self._seg_level, keys=self._period_keys)
         self.segment_data = sv
         self._draw_segment_chart(sv)
         self._fill_segment_table(sv)
-        notes = self._segment_notes(sv)
-        if not sv["has_values"]:
-            notes = tr("이 기준의 분기 자료가 없습니다 — 연간 보기나 다른 기준을 고르세요.",
-                       "No quarterly data on this breakdown: pick the annual view or the other breakdown.")
-        self._seg_notes.setText(notes)
 
     def _draw_segment_chart(self, sv) -> None:
         """Revenue amount per segment, the segments side by side within each
@@ -717,6 +739,11 @@ class StockFinancialsTab(QWidget):
         ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _p: f"{v:,.0f}"))
         ax.set_ylabel(tr(f"매출 ({unit_ko})", f"Revenue ({unit_en})"), color=TEXT_MUTED)
         ax.set_xlim(-0.6, max(len(cols) - 0.4, 0.6))
+        # Nothing on this breakdown in this view (products often annual only): said in the chart.
+        self.segment_no_data = not sv["has_values"]
+        if self.segment_no_data:
+            ax.text(0.5, 0.5, tr("이 보기에는 자료가 없습니다", "No data in this view"), transform=ax.transAxes,
+                    ha="center", va="center", color=TEXT_EMPTY, fontsize=FONT_BODY)
         ax.legend(handles=[Patch(color=SEGMENT_COLORS[i % len(SEGMENT_COLORS)], label=s["name"])
                            for i, s in enumerate(segs)],
                   loc="upper left", fontsize=FONT_CAPTION, frameon=False, ncols=min(len(segs), 3) or 1)
@@ -728,10 +755,7 @@ class StockFinancialsTab(QWidget):
             "", xy=(0, 1), xycoords=("data", "axes fraction"), xytext=(10, -8), textcoords="offset points",
             ha="left", va="top", multialignment="left", fontsize=FONT_CAPTION, color=TEXT, visible=False, zorder=10,
             bbox=dict(boxstyle="round,pad=0.4", facecolor=SURFACE, edgecolor=LINE, alpha=0.95))
-        fig.tight_layout()
-        # The results chart's plot area: the same periods sit one above the other.
-        if getattr(self, "_results_ax", None) is not None:
-            ax.set_position(self._results_ax.get_position())
+        _pin_margins(fig)                         # the results chart's plot area, pixel for pixel
         self._seg_canvas.draw_idle()
 
     def _on_seg_motion(self, event) -> None:
@@ -800,6 +824,7 @@ class StockFinancialsTab(QWidget):
             t.setRowCount(len(segs) + 1)
             for i, s in enumerate(segs):
                 head = QTableWidgetItem(s["name"])
+                head.setToolTip(s["name"])
                 head.setTextAlignment(int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter))
                 head.setForeground(QColor(SEGMENT_COLORS[i % len(SEGMENT_COLORS)]))
                 t.setVerticalHeaderItem(i, head)
@@ -834,42 +859,9 @@ class StockFinancialsTab(QWidget):
                 item.setForeground(QColor(_CHECK_KIND.get(c["status"], TEXT_EMPTY)))
                 t.setItem(check, j, item)
             t.verticalHeader().setVisible(True)      # setup_table hides it; here it is the frozen column
-            t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
             t.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectColumns)
         finally:
             t.setUpdatesEnabled(True)
         self._seg_marker_idx = None
         self._seg_scroll.pin()
-
-    @staticmethod
-    def _segment_notes(sv) -> str:
-        quarterly = sv.get("mode") == "q"
-        lines = [tr("셀 아래 줄: 매출 비중(손익계산서 매출 대비) · " + ("전년 동기 대비" if quarterly else "전년 대비")
-                    + ". 검산: 부문 합계 + 조정 vs 손익계산서 매출, 차이 1% 이내 = ok.",
-                    "Second line: share of income-statement revenue · " + ("YoY" if quarterly else "change on the year")
-                    + ". Check: segments + adjustments vs income-statement revenue, within 1 % = ok.")]
-        sources = list(dict.fromkeys(c.get("source") for c in sv["columns"] if c.get("source")))
-        if sources:
-            lines.append(tr("출처: ", "Source: ") + ", ".join(tr(*_SOURCE_LABELS.get(x, (x, x))) for x in sources))
-        if "biz_product" in sources:
-            lines.append(tr("제품별: 사업의 내용 '매출 및 수주상황' / '주요 제품' 표. 표에 없는 품목은 비중 합계에서 빠짐.",
-                            "By product: the business section's sales / main products table. Lines the table "
-                            "leaves out are not in the shares."))
-        if quarterly:
-            lines.append(tr("분기 값 = 누적 − 직전 분기 누적(같은 표 기준끼리만). 분기별 사업부 자료는 최근 2개 사업연도만 수집.",
-                            "Quarter = cumulative − the previous quarter's cumulative (same table kind only). "
-                            "Quarterly segment data is collected for the last two fiscal years."))
-        if any(c["gross"] for c in sv["columns"]):
-            lines.append(tr("* 내부거래 제거 전 총액 기준(나머지는 외부 매출). 기준이 다른 해끼리는 증감률을 계산하지 않음.",
-                            "* gross, before intersegment eliminations (others: external revenue). No change is "
-                            "computed between years on different bases."))
-        for kind, u in sv["notes"]:
-            if kind == "map":
-                lines.append(tr(f"묶음: '{u['segment_raw']}' → {u['segment_code']}",
-                                f"Mapped: '{u['segment_raw']}' → {u['segment_code']}"))
-            else:
-                years = ",".join(map(str, u["years"]))
-                lines.append(tr(f"이어지지 않는 부문명: '{u['segment_raw']}' ({years}) — segment_map에서 묶을 수 있음",
-                                f"Name not continued: '{u['segment_raw']}' ({years}) — can be mapped in segment_map"))
-        return "\n".join(lines[:8])
 

@@ -7,7 +7,7 @@ import time
 import unittest
 
 from PyQt6.QtCore import QCoreApplication, Qt
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QLabel
 
 from data.dart import financials as fin
 from data.dart import query
@@ -346,7 +346,6 @@ class TestTab(unittest.TestCase):
         self.assertEqual([st.horizontalHeaderItem(j).text() for j in range(3)], ["2024", "2025 3Q누적*", "연평균"])
         dx = st.item(0, 0).text()                                             # 2024: amount, share of revenue
         self.assertTrue(dx.endswith("65%"), dx)                               # 300 / 460
-        self.assertIn("연간", t._seg_caption.text())
         self.assertEqual(st.horizontalScrollBarPolicy(), Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.assertEqual(t._seg_marker_ax.get_xlim(), t._results_ax.get_xlim())
         self.assertEqual(t._seg_marker_ax.get_position().bounds, t._results_ax.get_position().bounds)
@@ -367,7 +366,6 @@ class TestTab(unittest.TestCase):
         self.assertEqual(st.item(0, 0).text(), "—")
         t._on_chart_motion(_Ev(t._marker_ax, 6.0))                            # hover on the results chart
         self.assertEqual({i.column() for i in st.selectedIndexes()}, {6})
-        self.assertIn("분기", t._seg_caption.text())
         self.assertEqual(t.level_buttons, {})                                 # segments only: no switch
 
     def test_products_first_with_a_switch_to_segments(self):
@@ -379,13 +377,53 @@ class TestTab(unittest.TestCase):
         conn.close()
         t = self._tab()
         self.assertEqual(set(t.level_buttons), {"product", "segment"})
-        self.assertIn("분기 자료가 없습니다", t._seg_notes.text())             # products: annual only here
+        self.assertTrue(t.segment_no_data)                                    # products: annual only here
         t.set_mode("y")
+        self.assertFalse(t.segment_no_data)
         self.assertTrue(t.level_buttons["product"].isChecked())
         st = t.segment_table
         self.assertEqual({st.verticalHeaderItem(i).text() for i in range(2)}, {"메모리", "스마트폰"})
         t.set_segment_level("segment")
         self.assertEqual({st.verticalHeaderItem(i).text() for i in range(2)}, {"DX 부문", "DS 부문"})
+
+    def test_switching_views_moves_no_chart_or_table(self):
+        """User direction 2026-11-27: 분기 | 연간 and 제품별 | 부문별 change the
+        content, never where the charts and tables sit; no caption or notes
+        under the segment section."""
+        conn = connect(self.db)
+        c = seg.Candidate("biz_product", [("아주 긴 제품 이름이 들어간 품목", 300.0), ("스마트폰", 150.0)])
+        seg.store_segments(conn, SAMSUNG, 2024, 4, "20250310000001", "2025-03-10", c, "ytd", 10.0, "ok",
+                           "biz_product", level="product")
+        conn.commit()
+        conn.close()
+        t = self._tab()
+        t.resize(1400, 1200)
+        t.show()
+        self.addCleanup(t.close)
+        QApplication.processEvents()
+
+        def where():
+            QApplication.processEvents()
+            out = []
+            for w in (t._canvas, t._table, t._seg_canvas, t.segment_table):
+                out.append(w.mapTo(t, w.rect().topLeft()))
+                out.append(w.size())
+            for tbl in (t._table, t.segment_table):
+                out.append(tbl.verticalHeader().width())
+                out.append(tbl.columnWidth(0))
+            out.append(t._results_ax.get_position().bounds)
+            out.append(t._seg_marker_ax.get_position().bounds)
+            return out
+
+        first = where()
+        for step in (lambda: t.set_mode("y"), lambda: t.set_segment_level("segment"), lambda: t.set_mode("q"),
+                     lambda: t.set_segment_level("product")):
+            step()
+            self.assertEqual(where(), first)
+        # The two charts' plot areas coincide.
+        self.assertEqual(t._results_ax.get_position().bounds, t._seg_marker_ax.get_position().bounds)
+        labels = [w.text() for w in t._seg_canvas.parentWidget().findChildren(QLabel)]
+        self.assertFalse([x for x in labels if "누적 차이" in x or "검산" in x])
 
     def test_unknown_stock_shows_a_message(self):
         t = self._tab("999999")
