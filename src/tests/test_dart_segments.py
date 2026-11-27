@@ -474,6 +474,73 @@ class TestRegionTrees(unittest.TestCase):
         self.assertEqual((status, c.items), ("ok", [("본사소재지국가", 300 * E), ("유럽", 244 * E)]))
 
 
+_CONS = "ifrs-full_ConsolidatedAndSeparateFinancialStatementsAxis_ifrs-full_ConsolidatedMember"
+_GEO_AX = "ifrs-full_GeographicalAreasAxis"
+_SCI = "ifrs-full_SegmentConsolidationItemsAxis"
+
+
+def _te(value, period, *dims, code="ifrs-full_Revenue"):
+    """A tagged value cell (document.xml's XBRL notes): ACODE / ACONTEXT."""
+    ctx = "_".join((period, _CONS) + dims)
+    return f'<TE ACODE="{code}" ACONTEXT="{ctx}" ADECIMAL="-6">\n<P>{value}</P></TE>'
+
+
+def _tagged_regions(period="CFY2025dFQQ", unit="(단위 : 백만원)"):
+    """기아 2025 annual and later, cut down: each region's gross and its own
+    eliminations tagged, its net column untagged, the total untagged-member."""
+    home = (_GEO_AX, "ifrs-full_CountryOfDomicileMember")
+    kus = (_GEO_AX, "entity00106641_KusMmeberOfAmericaMemberOfDisclosureOfGeographicalAreasTableOfMember")
+    gross, elim = (_SCI, "ifrs-full_OperatingSegmentsMember"), (_SCI, "ifrs-full_EliminationOfIntersegmentAmountsMember")
+    head = ('<TR><TH></TH><TH COLSPAN="6">지역</TH><TH ROWSPAN="3">지역합계</TH></TR>'
+            '<TR><TH></TH><TH COLSPAN="3">본사소재지국가</TH><TH COLSPAN="3">KUS</TH></TR>'
+            '<TR><TH></TH><TH>영업부문</TH><TH>부문간제거한금액</TH><TH>기업전체총계합계</TH>'
+            '<TH>영업부문</TH><TH>부문간제거한금액</TH><TH>기업전체총계합계</TH></TR>')
+    row = ("<TR><TD>수익(매출액)</TD>" + _te("65", period, *home, *gross) + _te("(35)", period, *home, *elim)
+           + "<TD>30</TD>" + _te("42", period, *kus, *gross) + _te("0", period, *kus, *elim) + "<TD>42</TD>"
+           + _te("72", period) + "</TR>")
+    return f"<P>{unit}</P><TABLE>{head}{row}</TABLE>"
+
+
+class TestDocumentTags(unittest.TestCase):
+    """The document's XBRL-tagged cells (2026-11-27, idea from dartlab): each
+    cell says its account, period and members, whatever the table's layout."""
+
+    def test_context(self):
+        self.assertEqual(seg.parse_tag_context("CFY2025dHYA_" + _CONS + "_" + _GEO_AX + "_ifrs-full_CountryOfDomicileMember"),
+                         ("cur", "ytd", {"ConsolidatedAndSeparateFinancialStatementsAxis": "ConsolidatedMember",
+                                         "GeographicalAreasAxis": "CountryOfDomicileMember"}))
+        self.assertEqual(seg.parse_tag_context("PFY2024dTQQ")[:2], ("prev", "q"))
+        self.assertEqual(seg.parse_tag_context("CFY2025dFY")[:2], ("cur", "ytd"))
+        self.assertIsNone(seg.parse_tag_context("CFY2025eFY"))                       # an instant
+        # A filer's member token may hold "_" (SK가스: entity.._udf_NOTE_2023...Member).
+        dims = seg.parse_tag_context("CFY2026dFQA_ifrs-full_ProductsAndServicesAxis_entity00144164_udf_NOTE_1Member")[2]
+        self.assertEqual(dims, {"ProductsAndServicesAxis": "entity00144164_udf_NOTE_1Member"})
+
+    def test_regions_gross_with_own_eliminations_named_from_the_table(self):
+        doc = _doc(_tagged_regions())
+        cands = seg.tag_candidates(doc)
+        self.assertEqual([(c.source, c.when, c.span) for c in cands], [("tag_region", "cur", "q")])
+        c = cands[0]
+        self.assertEqual((c.items, c.adjust, c.total), ([("본사소재지국가", 30 * E), ("KUS", 42 * E)], [], 72 * E))
+        self.assertEqual(seg.choose(cands, 72 * E, 72 * E, 1)[3], "ok")
+        # No unit caption: ADECIMAL gives it.
+        self.assertEqual(seg.tag_candidates(_doc(_tagged_regions(unit="")))[0].items[1], ("KUS", 42 * E))
+
+    def test_parts_reconciling_members_and_kinds_of_sale(self):
+        seg_ax, prod = "ifrs-full_SegmentsAxis", "ifrs-full_ProductsAndServicesAxis"
+        p = "CFY2025dFY"
+        head = "<TR><TH>구분</TH><TH>DX</TH><TH>DS</TH><TH>메모리</TH><TH>조정</TH><TH>합계</TH></TR>"
+        row = ("<TR><TD>매출액</TD>" + _te("50", p, seg_ax, "entity1_DxMember") + _te("40", p, seg_ax, "entity1_DsMember")
+               + _te("30", p, seg_ax, "entity1_MemoryMemberOfDsMember")
+               + _te("(10)", p, seg_ax, "ifrs-full_MaterialReconcilingItemsMember") + _te("80", p) + "</TR>")
+        kinds = ("<TR><TH>구분</TH><TH>재화의 판매</TH><TH>용역의 제공</TH><TH>합계</TH></TR><TR><TD>매출액</TD>"
+                 + _te("70", p, prod, "entity1_SalesOfGoodsOfProductsAndServicesMemberOfXMember")
+                 + _te("10", p, prod, "ifrs-full_RenderingOfServicesMember") + _te("80", p) + "</TR>")
+        cands = seg.tag_candidates(f"<P>(단위 : 원)</P><TABLE>{head}{row}</TABLE><TABLE>{kinds}</TABLE>")
+        self.assertEqual([(c.source, c.items, c.adjust) for c in cands],
+                         [("tag_segment", [("DX", 50.0), ("DS", 40.0)], [("조정 항목", -10.0)])])
+
+
 class TestLevelMigration(_TmpMixin, unittest.TestCase):
     def test_old_segment_rows_get_a_level_and_are_read_again(self):
         import sqlite3
@@ -511,10 +578,9 @@ class TestLevelMigration(_TmpMixin, unittest.TestCase):
                            "ytd", 0.0, "ok", "biz_product", level="product")
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM segment_rev WHERE segment_raw = 'DX'").fetchone()[0], 2)
 
-    def test_schema_13_reads_the_note_table_periods_again(self):
-        """2026-11-27 (기아): failed periods and the ones the note tables or the
-        single-segment rule decided are read again; XBRL and business-section
-        periods never reached the note reader and stay."""
+    def test_schema_13_reads_every_period_again(self):
+        """2026-11-27 (기아): the note tables' new layouts and the document's
+        XBRL-tagged cells may change any period's segment or product level."""
         conn = connect(self.db)
         conn.executemany("INSERT INTO seg_fetch VALUES (?, ?, ?, '', '')",
                          [("x", "ok", "xbrl"), ("b", "ok", "biz_segment"), ("n", "na", None), ("h", "ok", "html_segment"),
@@ -525,7 +591,7 @@ class TestLevelMigration(_TmpMixin, unittest.TestCase):
         conn.close()
         conn = connect(self.db)
         self.addCleanup(conn.close)
-        self.assertEqual(sorted(r[0] for r in conn.execute("SELECT rcept_no FROM seg_fetch")), ["b", "n", "x"])
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM seg_fetch").fetchone()[0], 0)
 
 
 class TestSegmentSync(_TmpMixin, unittest.TestCase):
@@ -579,6 +645,33 @@ class TestSegmentSync(_TmpMixin, unittest.TestCase):
         n = len(self.fake.requests)
         self._seg(tickers=["005930", "123450"])
         self.assertEqual([ep for ep, _ in self.fake.requests[n:] if ep in ("fnlttXbrl.xml", "document.xml")], [])
+
+    def test_tagged_regions_after_the_business_sections_segments(self):
+        """The document's tagged regions fill a period without XBRL segments;
+        the business section's business lines still come first (a region
+        breakdown is the last resort, as in the notes)."""
+        self.fake.documents["20250515000001"] = _doc(_tagged_regions(unit="(단위 : 원)").replace("72", "100")
+                                                     .replace(">65<", ">93<"))
+        self.assertEqual(self._seg(tickers=["005930"]).status, "done")
+        conn = connect(self.db)
+        q1 = [(r["segment_raw"], r["revenue"], r["source"]) for r in query.get_segments("005930", conn=conn)
+              if (r["fiscal_year"], r["fiscal_q"]) == (2025, 1)]
+        self.assertEqual(q1, [("본사소재지국가", 58.0, "tag_region"), ("KUS", 42.0, "tag_region")])
+        conn.execute("DELETE FROM seg_fetch")
+        conn.commit()
+        conn.close()
+        import shutil
+        shutil.rmtree(os.path.join(self.cache, "segments"))      # the parsed document is cached per receipt
+        sales = _table([["가사업", "70"], ["나사업", "30"], ["합계", "100"]], [["사업부문", "매출액"]])
+        self.fake.documents["20250515000001"] = _biz_doc("", "<P>(단위 : 원)</P>" + sales,
+                                                         _tagged_regions(unit="(단위 : 원)").replace("72", "100")
+                                                         .replace(">65<", ">93<"))
+        self._seg(tickers=["005930"])
+        conn = connect(self.db)
+        self.addCleanup(conn.close)
+        q1 = [(r["segment_raw"], r["source"]) for r in query.get_segments("005930", conn=conn)
+              if (r["fiscal_year"], r["fiscal_q"]) == (2025, 1)]
+        self.assertEqual(q1, [("가사업", "biz_segment"), ("나사업", "biz_segment")])
 
     def test_business_section_products_come_before_xbrl(self):
         """User direction 2026-11-27: with a product table in the business

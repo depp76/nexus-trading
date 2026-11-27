@@ -233,7 +233,9 @@ Dev tooling is in `requirements-dev.txt`
   `--segment-report`) only calls `run_sync` or `query`. `segments.py` (stage 4: revenue by business
   segment from the XBRL package, else the business section's segment table, else the report's segment
   note / product table, chosen by the plan 5-3 check against fin_std revenue; since 2026-11-27 also the
-  business section's ("II. 사업의 내용") product table, stored beside it as `segment_rev.level='product'`
+  business section's ("II. 사업의 내용") product table, stored beside it as `segment_rev.level='product'`,
+  and the document's XBRL-tagged value cells (`ACODE`/`ACONTEXT`, `tag_candidates`: segments right after the XBRL
+  package, regions after the note tables, products after the business section's table; names from the table's labels)
   -- the 기업 정보 tab shows products by default; a table is first told apart by its caption, header path and
   item names (order books, cost tables and customer lists are not revenue breakdowns even when they add up) and a
   candidate is checked against its own period only (`Candidate.when/span/months`), plan 5 note "코드 리뷰 5차";

@@ -7,6 +7,13 @@ Sources, in plan 5-1 order:
    segments; IFRS reconciling members (intersegment elimination, unallocated,
    material reconciling items) are adjustments. Member names come from the
    Korean label linkbase. Large filers tag these from about 2023 on.
+   ``tag_segment`` / ``tag_region`` / ``tag_product`` (2026-11-27): the same
+   facts as the document's value cells carry them (``ACODE`` / ``ACONTEXT``
+   attributes of a filer that tags its notes, often not in the XBRL package --
+   기아): read by member, whatever the table's layout, names from the table's
+   labels (see "XBRL tags inside the document"). The tagged segments come
+   right after the package, the tagged regions after the note's tables, the
+   tagged products after the business section's product table.
 2. ``html_segment``: the segment note of the report's document ("영업부문",
    "부문별 정보"), consolidated notes for a consolidated filer.
 3. ``html_product``: a revenue table by product in that note -- what a filer
@@ -65,7 +72,7 @@ MAX_RESIDUAL_SHARE = 0.15
 # sold by several segments added up). The XBRL result gained the period's length,
 # which an older cached result gives through its label (_from_json): no bump.
 PARSER_VERSION = 12
-DOC_PARSER_VERSION = 15
+DOC_PARSER_VERSION = 16
 _GEO = ("국내", "한국", "대한민국", "내수", "수출", "해외", "북미", "미국", "미주", "유럽", "구주", "아시아", "중국",
         "일본", "베트남", "인도", "중남미", "남미", "중동", "아프리카", "오세아니아", "호주", "캐나다", "멕시코",
         "브라질", "독일", "러시아", "기타지역", "기타국가", "아태", "동남아")
@@ -1124,6 +1131,212 @@ def choose_biz(candidates: list[Candidate], revenue_q, revenue_ytd, source: str 
     return (best[1], best[2][0], best[2][1]) if best else None
 
 
+# ---- XBRL tags inside the document ------------------------------------------------
+#
+# A filer that tags its notes in XBRL (large companies from the 2023 annual
+# report, smaller ones later; 기아 from the 2025 half year) has its document.xml
+# value cells carry the fact: ACODE the account, ACONTEXT the period and the
+# dimension members ("CFY2025dHYA_ifrs-full_GeographicalAreasAxis_
+# ifrs-full_CountryOfDomicileMember_ifrs-full_SegmentConsolidationItemsAxis_
+# ifrs-full_OperatingSegmentsMember"). Each cell says what it is, so the table's
+# layout -- regions as columns, a tree of row labels, gross | eliminations | net
+# under each region -- no longer has to be worked out (2026-11-27; idea from
+# eddmpython/dartlab's decodeAcontext). The member names are the filer's own
+# English tokens, so a member's name is taken from the table's labels around its
+# cells: the series then runs on from years read from untagged tables.
+
+_TAG_REVENUE = ("ifrs-full_Revenue", "ifrs-full_RevenueFromContractsWithCustomers")
+_TAG_PERIOD = re.compile(r"^(C|P|BP)FY(\d{4})d(FY|HY|TQ|FQ)(A|Q)?$")
+_TAG_PART = re.compile(r"_(?=(?:ifrs-full|dart|entity\d+)_)")     # a member token may hold "_" (udf_NOTE_...)
+_TAG_BREAKDOWN = {"SegmentsAxis": "tag_segment", "GeographicalAreasAxis": "tag_region",
+                  "ProductsAndServicesAxis": "tag_product"}
+# IFRS's kinds of sale on the products axis: a breakdown by kind, not by product line.
+_TAG_KIND = re.compile(r"^(SalesOfGoods|RenderingOfServices|Royalties|Rental|Interest|Dividend|Construction|"
+                       r"Commission|FeeAndCommission|OtherRevenue|Other(Goods|Services)?Member)")
+_TAG_ALLOWED = {"ConsolidatedAndSeparateFinancialStatementsAxis", "SegmentConsolidationItemsAxis"}
+_TAG_GROSS = {"OperatingSegmentsMember", "ReportableSegmentsMember"}
+_TAG_ADJUST = {"EliminationOfIntersegmentAmountsMember", "MaterialReconcilingItemsMember", "ReconcilingItemsMember",
+               "UnallocatedAmountsMember", "CorporateMember"}
+
+
+def parse_tag_context(ctx: str):
+    """(when, span, {axis: member}) of an ACONTEXT, or None for an instant or an
+    unknown period. "C" is the report's period, "P"/"BP" earlier ones; "A" a
+    cumulative span, "Q" three months, an annual "FY" cumulative."""
+    head, _sep, rest = ctx.partition("_")
+    m = _TAG_PERIOD.match(head)
+    if not m:
+        return None
+    when = "cur" if m.group(1) == "C" else "prev"
+    span = "q" if m.group(4) == "Q" else "ytd" if (m.group(4) == "A" or m.group(3) == "FY") else None
+    dims, axis = {}, None
+    for part in _TAG_PART.split("_" + rest):
+        ns, _sep, name = part.lstrip("_").partition("_")
+        if not name:
+            continue
+        if name.endswith("Axis"):
+            axis = name
+        elif axis is not None:
+            dims[axis] = f"{ns}_{name}" if ns.startswith("entity") else name
+            axis = None
+    return when, span, dims
+
+
+def _tag_cells(table: str):
+    """(first row, last row, first column, last column, attrs, body) of every
+    cell of a table, laid out as docs._grid does (row / column spans resolved)."""
+    out, carry = [], {}
+    for r, tr in enumerate(docs._TR.findall(table)):
+        col = 0
+        for attrs, body in docs._CELL_TAG.findall(tr):
+            while carry.get(col, 0) > 0:
+                col += 1
+            spans = {k.upper(): int(v) for k, v in docs._SPAN.findall(attrs)}
+            width, height = max(1, spans.get("COLSPAN", 1)), max(1, spans.get("ROWSPAN", 1))
+            out.append((r, r + height - 1, col, col + width - 1, attrs, body))
+            if height > 1:
+                for c in range(col, col + width):
+                    carry[c] = height
+            col += width
+        for c in list(carry):
+            carry[c] -= 1
+            if carry[c] <= 0:
+                del carry[c]
+    return out
+
+
+def _member_stem(member: str) -> str:
+    """"entity00106641_KusMmeberOfAmericaMemberOf..." -> "Kus";
+    "ifrs-full CountryOfDomicileMember" -> "CountryOfDomicile"."""
+    name = member.split("_", 1)[-1]
+    first = re.split(r"M(?:em|me)ber", name)[0]
+    return first if first else name
+
+
+def tag_table_candidates(table: str, unit: float | None, fs_div: str = "CFS") -> list[Candidate]:
+    """Candidates of one tagged table: per breakdown axis (segments, regions,
+    products) and period, an item per member -- its own amount, else its gross
+    amount plus its own eliminations (기아: each region's 영업부문 and
+    부문간제거한금액) -- with the table-level eliminations and reconciling items
+    as adjustments and the revenue without a member as the total. `unit`: the
+    table's unit caption, None without one (each cell's ADECIMAL then).
+
+    The member names are the table's (_tag_names)."""
+    cells = _tag_cells(table)
+    labels = [(r0, r1, c0, c1, _clean(body)) for r0, r1, c0, c1, attrs, body in cells
+              if "ACONTEXT" not in attrs and docs._amount(body) is None and _clean(body)]
+
+    def path(r, c):
+        above = [(r0, t) for r0, r1, c0, c1, t in labels if c0 <= c <= c1 and r1 < r]
+        left = [(c0, t) for r0, r1, c0, c1, t in labels if r0 <= r <= r1 and c1 < c]
+        return [t for _k, t in sorted(above)] + [t for _k, t in sorted(left)]
+
+    want = "SeparateMember" if fs_div == "OFS" else "ConsolidatedMember"
+    facts = []                       # (when, span, dims, value, label path)
+    for r0, _r1, c0, _c1, attrs, body in cells:
+        code = re.search(r'ACODE="([^"]*)"', attrs)
+        ctx = re.search(r'ACONTEXT="([^"]*)"', attrs)
+        if not code or not ctx or code.group(1) not in _TAG_REVENUE:
+            continue
+        parsed = parse_tag_context(ctx.group(1))
+        v = docs._amount(body)
+        if parsed is None or v is None:
+            continue
+        when, span, dims = parsed
+        if dims.get("ConsolidatedAndSeparateFinancialStatementsAxis", want) != want:
+            continue
+        dec = re.search(r'ADECIMAL="(-?\d+)"', attrs)
+        scale = unit if unit is not None else 10.0 ** -int(dec.group(1)) if dec else 1.0
+        facts.append((when, span, dims, v * scale, path(r0, c0)))
+    out = []
+    for axis, source in _TAG_BREAKDOWN.items():
+        mine = [f for f in facts if axis in f[2] and set(f[2]) - {axis} <= _TAG_ALLOWED]
+        if not mine:
+            continue
+        rest = [f for f in facts if axis not in f[2] and set(f[2]) <= _TAG_ALLOWED]
+        members = list(dict.fromkeys(f[2][axis] for f in mine))
+        # A member whose name says it is part of another present member
+        # ("MemoryMemberOfDsSegmentsMember"): the parent's amount holds it.
+        stems = {m: _member_stem(m) for m in members}
+        parts = {m for m in members for n in members
+                 if n != m and f"Of{stems[n]}M" in m.split("_", 1)[-1]}
+        if axis == "ProductsAndServicesAxis" and sum(1 for m in members if _TAG_KIND.match(m.split("_", 1)[-1])) * 2                 > len(members):
+            continue                 # kinds of sale, standard or wrapped in the filer's own member (기아)
+        names = _tag_names(mine, axis, members)
+        for when, span in dict.fromkeys((f[0], f[1]) for f in mine):
+            items, adjust, total = [], [], None
+            for m in members:
+                if m in parts:
+                    continue
+                if m in _TAG_ADJUST or m == "EliminationOfIntersegmentAmountsMember":
+                    adjust += [(_ADJ_NAMES.get(m, "조정 항목"), f[3]) for f in mine
+                               if f[0] == when and f[1] == span and f[2][axis] == m
+                               and f[2].get("SegmentConsolidationItemsAxis") is None]
+                    continue
+                vals = [f for f in mine if f[0] == when and f[1] == span and f[2][axis] == m]
+                plain = [f[3] for f in vals if "SegmentConsolidationItemsAxis" not in f[2]]
+                gross = [f[3] for f in vals if f[2].get("SegmentConsolidationItemsAxis") in _TAG_GROSS]
+                own_adj = [f[3] for f in vals if f[2].get("SegmentConsolidationItemsAxis") in _TAG_ADJUST]
+                if plain:
+                    items.append((names[m], plain[0]))
+                elif gross:
+                    items.append((names[m], gross[0] + sum(own_adj)))
+            for f in rest:
+                if f[0] != when or f[1] != span:
+                    continue
+                ci = f[2].get("SegmentConsolidationItemsAxis")
+                if ci in _TAG_ADJUST:
+                    adjust.append((_ADJ_NAMES.get(ci, "조정 항목"), f[3]))
+                elif ci is None and total is None:
+                    total = f[3]
+            if len(items) >= 2:
+                out.append(Candidate(source, items, adjust, total, label=f"tag {axis}", when=when, span=span))
+    return out
+
+
+def _tag_names(facts, axis: str, members: list[str]) -> dict:
+    """Per member, its name from the table: the labels over or beside all its
+    cells that not every member's cells share (기아: "KUS" under
+    "지역 > 외국 > 북중미"), the deepest one; the member's own token when the
+    table names none."""
+    shared: dict = {}
+    for m in members:
+        paths = [f[4] for f in facts if f[2][axis] == m]
+        common = set(paths[0])
+        for p in paths[1:]:
+            common &= set(p)
+        shared[m] = (paths[0], common)
+    everywhere = set.intersection(*(c for _p, c in shared.values())) if len(shared) > 1 else set()
+    out = {}
+    for m, (first, common) in shared.items():
+        own = [t for t in first if t in common and t not in everywhere and not _is_axis(t) and not _ADJ.search(t)
+               and not _PERIOD.match(t.replace(" ", ""))]
+        out[m] = own[-1] if own else _member_stem(m)
+    return out
+
+
+def tag_candidates(doc: str, fs_div: str = "CFS") -> list[Candidate]:
+    """Candidates of every tagged table of a document with revenue by segment,
+    region or product (the note tables mostly, the business section's too)."""
+    out = []
+    for tm in docs._TABLE.finditer(doc):
+        t = tm.group(0)
+        if "ACONTEXT" not in t or not any(a in t for a in _TAG_BREAKDOWN) or not any(c in t for c in _TAG_REVENUE):
+            continue
+        before = _SPLIT.sub("", docs._text(doc[max(0, tm.start() - 3000):tm.start()]))
+        captioned = bool(re.search(r"단위[:：]?", before)) or "단위" in docs._text(t)
+        unit = None
+        if captioned:
+            inner = re.findall(r"단위[:：]?([^)\]]{1,15})", _SPLIT.sub("", docs._text(t)))
+            if inner:
+                u = inner[-1]
+                unit = 1e8 if "억" in u else 1e6 if "백만" in u else 1e3 if "천" in u else 1.0
+            else:
+                unit = _unit_before(doc, tm.start())
+        out.extend(tag_table_candidates(t, unit, fs_div))
+    return out
+
+
 # ---- fetching ---------------------------------------------------------------------
 
 def _cache_path(cache_dir: str, kind: str, rcept_no: str, version: int = PARSER_VERSION) -> str:
@@ -1187,10 +1400,10 @@ def fetch_xbrl(client, rcept_no: str, reprt_code: str, fs_div: str, cache_dir: s
     return _from_json(data)
 
 
-def fetch_document(client, rcept_no: str, fs_div: str, cache_dir: str) -> tuple[list[Candidate], bool, list[Candidate]]:
+def fetch_document(client, rcept_no: str, fs_div: str, cache_dir: str)         -> tuple[list[Candidate], bool, list[Candidate], list[Candidate]]:
     """Document candidates of a filing: the segment note's, the single-segment
-    flag and the business section's (biz_candidates); the parsed result is
-    cached, not the document."""
+    flag, the business section's (biz_candidates) and the XBRL-tagged cells'
+    (tag_candidates); the parsed result is cached, not the document."""
     path = _cache_path(cache_dir, f"doc_{fs_div}", rcept_no, DOC_PARSER_VERSION)
     data = _cached(path)
     if data is None:
@@ -1205,15 +1418,17 @@ def fetch_document(client, rcept_no: str, fs_div: str, cache_dir: str) -> tuple[
                 rc, rs = document_candidates(region)
                 cands += rc
                 single = single or rs
-            data = {"cands": _to_json(cands), "single": single, "biz": _to_json(biz_candidates(doc))}
+            data = {"cands": _to_json(cands), "single": single, "biz": _to_json(biz_candidates(doc)),
+                    "tags": _to_json(tag_candidates(doc, fs_div))}
         except DartApiError as e:
             if not is_no_file(e):
                 raise
-            data = {"cands": [], "single": False, "biz": []}
+            data = {"cands": [], "single": False, "biz": [], "tags": []}
         except (zipfile.BadZipFile, IndexError, KeyError) as e:
             raise DartApiError("bad_reply", f"document.xml of {rcept_no} is not a readable zip") from e
         _save(path, data)
-    return _from_json(data["cands"]), bool(data["single"]), _from_json(data.get("biz") or [])
+    return (_from_json(data["cands"]), bool(data["single"]), _from_json(data.get("biz") or []),
+            _from_json(data.get("tags") or []))
 
 
 # ---- storing ----------------------------------------------------------------------

@@ -161,7 +161,7 @@ CREATE TABLE IF NOT EXISTS fin_fetch (
 CREATE TABLE IF NOT EXISTS seg_fetch (
   rcept_no TEXT PRIMARY KEY,
   status TEXT NOT NULL,              -- ok / sum_mismatch / review / na (no revenue to check against)
-  source TEXT,                       -- the segment level's: xbrl / biz_segment / html_segment / html_product / single
+  source TEXT,                       -- xbrl / tag_segment / tag_region / biz_segment / html_segment / html_product / single (product level: biz_product / tag_product / html_product)
   detail TEXT,
   fetched_at TEXT
 );
@@ -309,12 +309,12 @@ def _migrate(conn: sqlite3.Connection, old: int | None) -> None:
         # the misread rows (order books, cost tables, customers) in place.
         conn.execute("DELETE FROM seg_fetch")
     elif old is not None and old < 13:
-        # 13: segment note tables whose labels run over several row columns, and a
-        # region's own eliminations inside its total (기아 2025-2026): the periods
-        # the note reader decided -- or failed to -- are read again. Periods from
-        # the XBRL package or the business section never reached the note tables.
-        conn.execute("DELETE FROM seg_fetch WHERE status IN ('review', 'sum_mismatch') "
-                     "OR source IN ('html_segment', 'html_product', 'single')")
+        # 13 (2026-11-27, 기아): segment note tables whose labels run over several
+        # row columns, a region's own eliminations inside its total, and the
+        # document's XBRL-tagged cells as a source ahead of the table readers --
+        # every period not settled by the XBRL package is read again (a tagged
+        # product breakdown may fill the product level of those too: all of them).
+        conn.execute("DELETE FROM seg_fetch")
     if old is not None and old < 8:
         # A correction marked done although the numbers stored for it came from an
         # older receipt (closed after the 7-day wait before schema 8) is asked

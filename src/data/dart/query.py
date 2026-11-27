@@ -464,6 +464,7 @@ def segment_report(tickers=None, conn: sqlite3.Connection | None = None, db_path
 
 
 _SOURCE_LABEL = {"biz_product": "사업의 내용 제품표", "biz_segment": "사업의 내용 부문표", "xbrl": "XBRL",
+                 "tag_segment": "원문 XBRL 태그 부문", "tag_region": "원문 XBRL 태그 지역", "tag_product": "원문 XBRL 태그 제품",
                  "html_segment": "원문 부문표", "html_product": "원문 제품표", "single": "단일부문"}
 
 

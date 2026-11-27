@@ -783,13 +783,23 @@ class _Job:
         xc = seg.fetch_xbrl(self.client, rcept, reprt, fs_div, cache)
         chosen, basis, residual, status = seg.choose(xc, rq, ry, q)
         # The document is read for every period (user direction 2026-11-27):
-        # the segment level is XBRL, else the business section's segment
-        # table, else the segment note; the business section's product table,
-        # when it adds up, is kept beside it at the product level.
+        # the segment level is XBRL, else the document's XBRL-tagged segments,
+        # else the business section's segment table, else the segment note,
+        # else the tagged regions, else the single segment; the business
+        # section's product table (else the tagged products), when it adds up,
+        # is kept beside it at the product level. Tagged cells say what they
+        # are whatever the table's layout (2026-11-27), so the tagged segments
+        # come before the table readers; a region breakdown stays the last
+        # resort, as it is among the note's tables.
         self._check()
-        dc, single, bc = seg.fetch_document(self.client, rcept, fs_div, cache)
-        biz = seg.choose_biz(bc, rq, ry, source="biz_segment", fiscal_q=q) if status != "ok" else None
+        dc, single, bc, tc = seg.fetch_document(self.client, rcept, fs_div, cache)
         note_product = None
+        if status != "ok":
+            hit = self._tagged(tc, "tag_segment", rq, ry, q)
+            if hit is not None:
+                chosen, basis, residual = hit
+                status = "ok"
+        biz = seg.choose_biz(bc, rq, ry, source="biz_segment", fiscal_q=q) if status != "ok" else None
         if biz is not None:
             chosen, basis, residual = biz
             status = "ok"
@@ -809,6 +819,9 @@ class _Job:
                 chosen, basis, residual, status = d_chosen, d_basis, d_residual, d_status
                 if d_chosen.source == "html_product":
                     note_product = (d_chosen, d_basis, d_residual)
+            elif (region := self._tagged(tc, "tag_region", rq, ry, q)) is not None:
+                chosen, basis, residual = region
+                status = "ok"
             elif single:
                 chosen, basis = seg.single_segment(rq, ry, reprt)
                 residual, status = 0.0, "ok"
@@ -818,6 +831,8 @@ class _Job:
         # direction 2026-11-27), else the notes' product table when it lists
         # products (not regions, kinds of sale or companies).
         product = seg.choose_biz(bc, rq, ry, source="biz_product", fiscal_q=q)
+        if product is None:
+            product = self._tagged([c for c in tc if seg.is_product_breakdown(c)], "tag_product", rq, ry, q)
         if product is None and note_product is not None and seg.is_product_breakdown(note_product[0]):
             product = note_product
         source = chosen.source if chosen is not None else None
@@ -830,6 +845,13 @@ class _Job:
             detail = f"{detail} | product: {product[0].label}".strip(" |")
         seg.record_fetch(self.conn, rcept, status, source, detail)
         return True
+
+    @staticmethod
+    def _tagged(cands, source: str, rq, ry, q):
+        """(candidate, basis, residual) of the tagged breakdown of one kind that
+        reconciles with revenue, or None."""
+        c, basis, residual, status = seg.choose([c for c in cands if c.source == source], rq, ry, q)
+        return (c, basis, residual) if status == "ok" else None
 
     def _is_recent(self, member) -> bool:
         return (self.today - _dt.date.fromisoformat(member["rcept_dt"][:10])).days <= RECENT_FILING_DAYS
