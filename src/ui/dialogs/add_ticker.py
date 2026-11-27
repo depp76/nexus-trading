@@ -50,8 +50,8 @@ class AddTickerDialog(QDialog):
         form.addRow(tr("종목코드", "Ticker"), self.ticker_input)
         root.addLayout(form)
 
-        hint = QLabel(tr("유니버스에 없는 종목을 하나 받아 와 표에 더합니다. 결과는 표 아래 상태 줄에 표시됩니다.",
-                         "Fetches one name that is not in the universe and adds it to the table; "
+        hint = QLabel(tr("유니버스에 없는 종목을 표에 추가합니다. 결과는 표 아래 상태 줄에 표시됩니다.",
+                         "Adds a name that is not in the universe to the table; "
                          "the result shows in the status line under the table."))
         hint.setObjectName("muted")
         hint.setWordWrap(True)

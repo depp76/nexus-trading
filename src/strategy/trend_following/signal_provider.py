@@ -193,8 +193,7 @@ def _score_check(vid: str, ticker: str, picks: SignalPicks | None, p: StrategyPa
     caption = tr("주간 평균", "Weekly avg")
     if rec is None:
         return StockCheck(vid, ticker, None, "na", tr("유니버스 계산 필요", "Needs a universe run"), entry, [],
-                          note=tr("점수는 유니버스 안 순위라 전체 종목 계산이 필요합니다",
-                                  "Scores are ranks within the universe, so the whole universe is computed"),
+                          note=tr("점수는 유니버스 안 순위입니다", "Scores are ranks within the universe"),
                           score="-", score_caption=caption, metrics=metrics)
     if s is None:
         return StockCheck(vid, ticker, rec.as_of, "na", tr("채점 제외", "Not scored"), entry, [],
@@ -368,15 +367,13 @@ def breakout_channel(dates, high, low, params: StrategyParams,
     return [
         ChartLine("breakout_high", tr(f"직전 {bw}일 최고가", f"Prior {bw}-day high"), days, _values(hi),
                   provisional_from=prov,
-                  tooltip=tr(f"당일 제외, 직전 {bw}거래일 고가의 최고값 — 종가가 넘으면 돌파(진입 조건)",
-                             f"Highest high of the prior {bw} sessions, today excluded; "
-                             "a close above it is a breakout"),
+                  tooltip=tr("종가가 넘으면 돌파(진입 조건) · 당일 제외",
+                             "A close above it is a breakout (entry); today excluded"),
                   short_label=tr(f"{bw}일 최고", f"{bw}d high")),
         ChartLine("exit_low", tr(f"직전 {ew}일 최저가", f"Prior {ew}-day low"), days, _values(lo),
                   provisional_from=prov,
-                  tooltip=tr(f"당일 제외, 직전 {ew}거래일 저가의 최저값 — 종가가 밑돌면 추세 이탈(청산)",
-                             f"Lowest low of the prior {ew} sessions, today excluded; "
-                             "a close below it is a trend-break exit"),
+                  tooltip=tr("종가가 밑돌면 추세 이탈(청산) · 당일 제외",
+                             "A close below it is a trend-break exit; today excluded"),
                   short_label=tr(f"{ew}일 최저", f"{ew}d low")),
     ]
 
@@ -483,13 +480,12 @@ class _TrendFollowingSignals:
         ma, lb = p.regime_ma, p.regime_slope_lookback
         return (tr("L1 Risk-on(종가 판단)", "L1 risk-on (judged at the close)"),
                 tr(f"지수 종가 > {ma}일선이고 {ma}일선이 {lb}거래일 전보다 높음. 매주 점검일 종가로 판단해 "
-                   "다음 점검일까지 유지하며, 다음 거래일부터의 신규 매수 허용 조건 중 하나다(추세·돌파 등 다른 "
-                   "매수 조건도 따로 있고, A0은 이 조건을 쓰지 않는다). 옅은 칸은 장중 값이나 끝나지 않은 주로 "
-                   "판단한 잠정 구간.",
+                   "다음 점검일까지 유지하며, 다음 거래일부터의 신규 매수 허용 조건 중 하나(A0은 쓰지 않음). "
+                   "옅은 칸은 잠정 구간(장중 값·끝나지 않은 주).",
                    f"Index close > MA{ma} and MA{ma} above its value {lb} sessions back, judged at the weekly "
                    "check day's close and held to the next check; one of the conditions for new entries from "
-                   "the next session (trend, breakout and the rest still apply; A0 does not use it). Paler "
-                   "cells: provisional (intraday bar or unfinished week)."))
+                   "the next session (A0 does not use it). Paler cells: provisional (intraday bar or "
+                   "unfinished week)."))
 
     def chart_overlays(self, vid, ticker, market, ohlc, provisional_last=False) -> list[ChartLine]:
         if market not in MARKETS:

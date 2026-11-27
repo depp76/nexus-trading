@@ -189,8 +189,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         # read as "all markets"). 전체 = unchecked, 보유/관심 = checked; the
         # width fits the longest label, so a click never resizes it.
         self.tg_filter_btn = self._filter_button(self._STATUS_FILTER_STATES[0][1])
-        self.tg_filter_btn.setToolTip(tr("누를 때마다 종목(전체) → 종목(보유) → 종목(관심) 순으로 표의 행을 거릅니다",
-                                         "Each click cycles the rows shown: Stocks (All) -> (Held) -> (Target)"))
+        self.tg_filter_btn.setToolTip(tr("표시할 종목: 전체 → 보유 → 관심",
+                                         "Rows shown: All -> Held -> Target"))
         self.tg_filter_btn.clicked.connect(self._on_status_filter_clicked)
         bar.addWidget(self.tg_filter_btn)
 
@@ -213,10 +213,10 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         for m, label in MARKETS.items():
             text = self._MARKET_BUTTON_TEXT.get(m, label)
             btn = self._filter_button(text.replace("&", "&&"), checked=(m in DEFAULT_UNIVERSE_MARKETS))
-            btn.setToolTip(tr(f"{label}: 켜면 새로고침이 이 시장(상위 {UNIVERSE_MARKET_SIZES[m]}종목)을 받아 와 "
-                              "표에 보여 줍니다. 최소 한 시장은 켜져 있어야 합니다.",
-                              f"{label}: when on, Refresh fetches this market (top {UNIVERSE_MARKET_SIZES[m]} names) "
-                              "and shows it in the table. At least one market must stay on.")
+            btn.setToolTip(tr(f"{label}: 켜면 새로고침 때 상위 {UNIVERSE_MARKET_SIZES[m]}종목을 받아 표시합니다 "
+                              "(최소 한 시장 선택).",
+                              f"{label}: when on, Refresh fetches and shows its top {UNIVERSE_MARKET_SIZES[m]} names "
+                              "(at least one market stays on).")
                            + self._MARKET_TOOLTIP_NOTE.get(m, ""))
             btn.clicked.connect(lambda checked, mk=m: self._on_market_toggled(mk, checked))
             bar.addWidget(btn)
@@ -232,11 +232,10 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
         # Checked while a run is pinned; "선택 안 함" in the menu unpins.
         self.signal_btn = make_button(tr("전략 신호", "Signals"), checkable=True)
         self.signal_btn.setToolTip(tr(
-            "구현된 매매전략 중 하나를 골라 KOSPI/KOSDAQ 종목의 매수 후보(상위)와 매도·회피 신호(하위)를 "
-            "최대 10개씩 표 맨 위에 고정합니다. 백테스트와 같은 조건 코드로 계산하며, 연구용 신호입니다.",
-            "Pick one of the implemented strategies: its buy candidates (top) and sell / avoid signals "
-            "(bottom), up to ten each, are pinned to the top of the table. Same signal code as the "
-            "backtest; research signals, not advice."))
+            "고른 매매전략의 매수 후보(상위)와 매도·회피 신호(하위)를 최대 10개씩 표 맨 위에 고정합니다 "
+            "(KOSPI/KOSDAQ, 연구용 신호).",
+            "Pins the picked strategy's buy candidates (top) and sell / avoid signals (bottom), "
+            "up to ten each, to the top of the table (KOSPI/KOSDAQ; research signals)."))
         self._signal_menu = self._build_signal_menu()
         self.signal_btn.setMenu(self._signal_menu)
         bar.addWidget(self.signal_btn)
@@ -741,9 +740,8 @@ class UniverseTab(StockMaLauncherMixin, ThreadOwnerMixin, QWidget):
             summary = (summary + "\n" if summary else "") + tr(f"꺼짐: {off}", f"Off: {off}")
         self.filters_btn.setToolTip(
             summary or
-            tr("추가한 신호(시총, PER, 등락, 52주 위치, MA Div, 모멘텀의 범위 조건)를 체크 박스로 켜고 끕니다",
-               "Switch the added signals (range conditions on Cap, PER, change, 52W position, MA Div, "
-               "momentum) on and off with their check boxes"))
+            tr("추가한 신호(범위 조건)를 체크 박스로 켜고 끕니다",
+               "Switch the added signals (range conditions) on and off"))
 
     def _open_range_filters(self):
         """The 신호 포착 panel: the added signals as check boxes (docs/ui.md 8.9)."""

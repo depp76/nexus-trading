@@ -230,11 +230,10 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         # into the account lowers 출금 (net withdrawal) and lands in 예수금, so
         # 총자산 does not jump on the day it comes back; only money beyond
         # everything withdrawn so far is new principal.
-        self._principal_edit.setToolTip(tr("처음 넣은 돈. 출금했던 돈을 다시 넣으면 원금이 아니라 출금에서 빼고, "
-                                           "출금 누계보다 많이 넣은 초과분만 원금에 더합니다.",
-                                           "The money first put in. Money taken out and put back lowers the "
-                                           "withdrawal instead; only a deposit beyond all withdrawals so far "
-                                           "adds to the principal."))
+        self._principal_edit.setToolTip(tr("처음 넣은 돈. 출금 후 다시 넣은 돈은 출금에서 빼고, "
+                                           "출금 누계를 넘는 초과분만 원금에 더합니다.",
+                                           "The money first put in. Money put back lowers the withdrawal; "
+                                           "only the excess over all withdrawals adds to the principal."))
         # Left-aligned like the figures around them (all three inputs).
         for edit in (self._principal_edit,):
             edit.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -311,8 +310,8 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         self._sort_by_date = False
         self._hide_stale_closed = True
         self._period_btn = self._cycle_button(
-            _PERIOD_STATES, tr("누를 때마다 매수일 기준 기간이 바뀝니다: 전체 → 1개월 → 3개월 → 올해",
-                               "Each click changes the buy-date period: All -> 1M -> 3M -> YTD"),
+            _PERIOD_STATES, tr("매수일 기준 기간: 전체 → 1개월 → 3개월 → 올해",
+                               "Buy-date period: All -> 1M -> 3M -> YTD"),
             lambda: self._on_period_filter_changed(self._next_value(_PERIOD_STATES, self._period_filter)))
         self._group_btn = self._cycle_button(
             _GROUP_STATES, tr("상태별: 매도 완료 → 보유 순 / 월별: 매수일 최신순 + 월 요약 행",
@@ -321,7 +320,7 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         # docs/ui.md 3.5: the 30-day rule used to be hardcoded with no UI
         # trace of it, so a blank current-price cell had no explanation.
         self._stale_btn = self._cycle_button(
-            _STALE_STATES, tr("시세(30일): 매도 후 30일이 지난 거래의 현재가를 숨깁니다 / 시세(전체): 모두 표시합니다",
+            _STALE_STATES, tr("시세(30일): 매도 후 30일이 지난 거래의 현재가 숨김 / 시세(전체): 모두 표시",
                               "Prices (30d): hide the current price of trades closed more than 30 days ago / Prices (All): show all"),
             lambda: self._on_stale_toggle_changed(not self._hide_stale_closed))
         for btn in (self._period_btn, self._group_btn, self._stale_btn):
@@ -332,8 +331,8 @@ class TradingHistoryTab(ThreadOwnerMixin, QWidget):
         # KIS 조회 (was 예수금 조회; 2026-11-18, docs/ui.md 8.28): deposit + executed orders in one go.
         self._fetch_dep_btn = make_button(
             tr("KIS 조회", "KIS Sync"), on_click=self._fetch_kis_account,
-            tooltip=tr("KIS 계좌의 예수금과 새 체결 내역을 가져와, 확인 후 Trading History에 반영합니다",
-                       "Fetch the KIS account's deposit and new executions and apply them after a review"))
+            tooltip=tr("KIS 계좌의 예수금과 새 체결 내역을 가져와 확인 후 반영합니다",
+                       "Fetch the KIS account's deposit and new executions; applied after a review"))
         # No 다시 읽기 (Reload) button since 2026-11-18 (user decision, docs/ui.md 8.27): every
         # Trading Universe refresh runs _reload_current (MainWindow wires refresh_started),
         # this tab refreshes itself after its own edits, and portfolio.db is not edited

@@ -94,9 +94,8 @@ def _title(v: Variant) -> str:
 
 def _summary(v: Variant) -> str:
     return {
-        "A0": tr("A 계열의 기준선. 시장 필터 없이 Donchian 돌파만 쓰며, 나머지 행은 모두 이것과 비교합니다.",
-                 "Baseline of the A-series: the Donchian breakout with no market filter, so every other row "
-                 "is measured against it."),
+        "A0": tr("A 계열의 기준선: 시장 필터 없이 Donchian 돌파만 사용.",
+                 "Baseline of the A-series: the Donchian breakout with no market filter."),
         "A1": tr("주간 KOSPI 국면 필터가 도움이 되는가? A0에 L1을 더한 것.",
                  "Does the weekly KOSPI regime filter help? Same as A0 plus L1."),
         "A2": tr("돌파일 거래량 급증 확인이 도움이 되는가? A1에 V 필터를 더한 것.",
@@ -112,9 +111,8 @@ def _summary(v: Variant) -> str:
         "C1": tr("2-5 스코어링 모드: 추세가 강하면서 최근 며칠 쉬어간(눌린) 종목을 삽니다.",
                  "The 2-5 scoring mode: buy names in a strong trend that have pulled back over the last "
                  "few days."),
-        "C2": tr("C1에서 단기 지표를 ATR%로 나누지 않음. 변동성 정규화가 의미 있는지 확인합니다.",
-                 "C1 without dividing the short-term indicators by ATR%, to see if volatility "
-                 "normalisation matters."),
+        "C2": tr("C1에서 단기 지표를 ATR%로 나누지 않음.",
+                 "C1 without dividing the short-term indicators by ATR%."),
         "C3": tr("C1에서 추세 위치를 Range52 대신 종가 / 52주 최고가로 잽니다.",
                  "C1 with the trend position measured as close / 52-week high instead of Range52."),
     }.get(v.id, v.label)
@@ -240,8 +238,8 @@ def _score_buy_section(p: StrategyParams) -> Section:
 
 def _score_sell_section(p: StrategyParams) -> Section:
     return (tr("매도", "Sell"), (
-        tr(f"매주: 총점 순위 < {p.score_sell_pct:g} (매수 문턱보다 낮게 두어 잦은 매매를 막음).",
-           f"Weekly: score percentile < {p.score_sell_pct:g} (a lower bar than the buy, to avoid churning)."),
+        tr(f"매주: 총점 순위 < {p.score_sell_pct:g}.",
+           f"Weekly: score percentile < {p.score_sell_pct:g}."),
         tr(f"매일: 종가가 {p.score_ma_long}일선 아래, 또는 초기 손절"
            f"(종가 < 진입가 − {p.stop_atr_multiple:g} × ATR{p.atr_window}).",
            f"Daily: close below MA{p.score_ma_long}, or the initial stop "
@@ -254,10 +252,8 @@ def _score_sell_section(p: StrategyParams) -> Section:
 def _data_section(v: Variant) -> Section:
     """Which data the row needs (flows for A3-A5)."""
     if v.needs_flows:
-        data = [tr("투자자 수급 데이터 필요(고르면 실행할 때 함께 받음, 한국 종목만). 받지 못하면 실행에서 제외됩니다.",
-                   "Needs investor-flow data (fetched with the run when picked, KR stocks only); "
-                   "skipped if it cannot be loaded.")]
+        data = [tr("투자자 수급 데이터 필요(한국 종목만). 받지 못하면 실행에서 제외됩니다.",
+                   "Needs investor-flow data (KR stocks only); skipped if it cannot be loaded.")]
     else:
-        data = [tr("가격 데이터만 사용. 수급 데이터 없이 실행됩니다.",
-                   "Price data only; runs without investor flows.")]
+        data = [tr("가격 데이터만 사용.", "Price data only.")]
     return (tr("데이터", "Data"), tuple(data))
