@@ -68,6 +68,10 @@ working directory:
 
 Run pytest from the repo root or from `src/` (`tests/conftest.py` puts `src/` on `sys.path`;
 the `tests/` folder is a package).
+A project PreToolUse hook (`.claude/settings.json` -> `.claude/hooks/precommit_check.py`) runs both
+commands before Claude's `git commit` and blocks it on failure (skipped when nothing under `src/` or
+`requirements*` changed); the judgement items are the `/precommit-check` skill
+(`.claude/skills/precommit-check/SKILL.md`).
 Tests patch the implementation modules (`data.cache`, `data.history`, `data.fx`, `data.collectors.yahoo`),
 never names on the `data_fetcher` facade. Widgets can be built and driven headlessly with
 `QT_QPA_PLATFORM=offscreen` (the tests construct tabs and dialogs that way), but nothing can be
