@@ -299,11 +299,11 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         banner.setObjectName("DashboardCard")
         banner_layout = QHBoxLayout(banner)
         banner_layout.setContentsMargins(10, 6, 10, 6)
-        notice = QLabel(tr("연구·백테스트용 신호 생성기이며 투자 권유가 아닙니다. 백테스트는 현재 KOSPI 구성 종목"
-                           "(생존 편향)과 trend_following.md 4-1의 비용 가정을 쓰며, 이 화면은 주문을 내지 않습니다.",
-                           "Research and backtesting signal generator, not investment advice. Backtests use today's "
-                           "KOSPI constituents (survivorship bias) and the cost assumptions of trend_following.md 4-1; "
-                           "nothing here places orders."))
+        notice = QLabel(tr("연구·백테스트용이며 투자 권유가 아닙니다. 현재 구성 종목(생존 편향)과 "
+                           "trend_following.md 4-1의 비용 가정을 쓰며, 주문은 내지 않습니다.",
+                           "For research and backtesting, not investment advice. Uses today's constituents "
+                           "(survivorship bias) and the cost assumptions of trend_following.md 4-1; "
+                           "places no orders."))
         notice.setWordWrap(True)
         notice.setFont(create_font(FONT_BODY))
         # Information, not an error: muted text on the card, not DANGER red (docs/ui.md 8.3).
@@ -342,11 +342,10 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         ml.setSpacing(6)
         for m in MARKETS:
             btn = make_button(m, checkable=True, checked=(m == "KOSPI"),
-                              tooltip=tr(f"{m}: 켜면 이 시장 종목도 백테스트 유니버스에 넣습니다. 여러 시장을 고르면 "
-                                         "선택한 시장 전체를 원화 시가총액 합산 순위로 종목을 고릅니다. 최소 한 시장은 켜져 있어야 합니다.",
-                                         f"{m}: when on, this market's names join the backtest universe. With several "
-                                         "markets, names are picked from one KRW market-cap ranking of all of them. "
-                                         "At least one market must stay on."))
+                              tooltip=tr(f"{m} 종목을 백테스트 유니버스에 넣습니다 (여러 시장은 원화 시가총액 합산 순위, "
+                                         "최소 한 시장 선택).",
+                                         f"Include {m} names in the backtest universe (several markets share one "
+                                         "KRW market-cap ranking; at least one stays on)."))
             btn.toggled.connect(lambda checked, m=m: self._on_market_toggled(m, checked))
             self.market_buttons[m] = btn
             ml.addWidget(btn)
@@ -395,16 +394,15 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         al.addWidget(self.run_btn)
         # Saving belongs to the shown result: it sits on the result head.
         self.save_btn = make_button(tr("리포트 저장", "Save Report"), on_click=self._on_save_clicked,
-                                    tooltip=tr("지금 표시 중인 결과(현재 결과 기준 줄)를 reports/에 저장합니다",
-                                               "Save the shown result (the basis line above) to reports/"))
+                                    tooltip=tr("표시 중인 결과를 reports/에 저장합니다",
+                                               "Save the shown result to reports/"))
         self.save_btn.setEnabled(False)
         # Back to the empty screen after a run (user direction 2026-11-16):
         # also on the result head, so it exists only while a result is shown.
         self.reset_btn = make_button(tr("초기화", "Reset"), on_click=self._on_reset_clicked,
-                                     tooltip=tr("표시 중인 결과를 지우고 실행 전 화면으로 돌아갑니다. "
-                                                "시장·기간·매매전략은 그대로 둡니다.",
-                                                "Clear the shown result and go back to the screen before a run; "
-                                                "markets, period and trading strategy stay."))
+                                     tooltip=tr("표시 중인 결과를 지웁니다 (시장·기간·매매전략은 유지)",
+                                                "Clear the shown result (markets, period and "
+                                                "trading strategy stay)"))
         self.reset_btn.setEnabled(False)
 
         # One button width with the other tabs' toolbars (user direction
@@ -574,11 +572,10 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         # (docs/ui.md 8.17): a segment click only adds or removes a run.
         lbl = QLabel(tr("비교 대상", "Compare"))
         lbl.setObjectName("muted")
-        lbl.setToolTip(tr("차트·비교표에 함께 그릴 실행(전략과 BM 모두). 버튼을 누르면 추가하거나 뺍니다(마지막 하나는 남음). "
-                          "비교표에서는 Ctrl/Shift 클릭으로 여러 행을 고릅니다.",
-                          "Runs drawn together in the chart and comparison table (strategies and BMs). A click "
-                          "adds or removes one (the last one stays). In the table, Ctrl/Shift-click picks "
-                          "several rows."))
+        lbl.setToolTip(tr("차트·비교표에 함께 그릴 실행. 버튼으로 추가·제외(마지막 하나는 남음), "
+                          "비교표에서는 Ctrl/Shift 클릭.",
+                          "Runs drawn together in the chart and comparison table. A click adds or removes "
+                          "one (the last one stays); in the table, Ctrl/Shift-click."))
         row.addWidget(lbl)
         self.variant_seg = SegmentRow(width=52, multi=True)
         self.variant_seg.toggled_key.connect(self._on_variant_toggled)
@@ -586,10 +583,9 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         row.addSpacing(14)
         lbl = QLabel(tr("상세 기준", "Detail"))
         lbl.setObjectName("muted")
-        lbl.setToolTip(tr("KPI 카드·목표 점검·월별 수익률·매매 내역이 보여 줄 실행(비교 대상 중 하나). "
-                          "버튼에는 진한 테두리로 표시됩니다.",
-                          "The run the KPI cards, target check, monthly returns and trades show (one of the "
-                          "compared runs). Its button has a bold outline."))
+        lbl.setToolTip(tr("KPI 카드·목표 점검·월별 수익률·매매 내역이 보여 줄 실행 (버튼의 진한 테두리)",
+                          "The run the KPI cards, target check, monthly returns and trades show "
+                          "(bold outline on its button)"))
         row.addWidget(lbl)
         self.focus_combo = QComboBox()
         self.focus_combo.setMinimumWidth(80)
@@ -624,9 +620,8 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         self.basis_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.pending_lbl = QLabel(tr("다음 실행에 적용", "Applies to next run"))
         self.pending_lbl.setObjectName("warn")
-        self.pending_lbl.setToolTip(tr("실행 설정이 지금 결과와 다릅니다. 바뀐 값은 다음 백테스트 실행에 적용됩니다.",
-                                       "The run settings differ from the shown result; the changes apply to "
-                                       "the next backtest run."))
+        self.pending_lbl.setToolTip(tr("실행 설정이 표시 중인 결과와 다릅니다",
+                                       "The run settings differ from the shown result"))
         self.pending_lbl.setVisible(False)
         row.addWidget(self.basis_lbl, 1)
         row.addWidget(self.pending_lbl)
@@ -738,10 +733,9 @@ class TrendFollowingTab(ThreadOwnerMixin, QWidget):
         line with "자세히" (was "크게 보기") at its right end. 자세히, a
         double-click or Enter on a row opens StrategyTradesDialog."""
         self.trades_detail_btn = make_button(tr("자세히", "Details"), on_click=self.open_trades_dialog,
-                                             tooltip=tr("같은 매매 내역을 모든 열이 한 번에 보이는 큰 창으로 엽니다"
-                                                        "(종목 검색 · 청산 사유 필터 포함)",
-                                                        "Open the same trades in a larger window with every "
-                                                        "column visible (with the name search and exit-reason filter)"))
+                                             tooltip=tr("매매 내역을 큰 창으로 엽니다 (종목 검색 · 청산 사유 필터 포함)",
+                                                        "Open the trades in a larger window "
+                                                        "(with the name search and exit-reason filter)"))
         self.trades_detail_btn.setEnabled(False)
         self.trades_view = StrategyTradesView(empty_text=_TRADES_EMPTY, on_activate=self._on_trade_activated,
                                               extra_widgets=(self.trades_detail_btn,), filters=False)

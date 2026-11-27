@@ -86,13 +86,11 @@ class AssetsReportDialog(QDialog):
         title.setFont(create_font(FONT_HEADING, QFont.Weight.Bold))
         v.addWidget(title)
         note = QLabel(tr(
-            "Trading History 거래 기록으로 다시 계산하며, 각 날짜의 종가로 평가합니다 (미국 종목은 "
-            "그날의 USD/KRW 적용). 현금은 현재 예수금에 누적 출금액을 더한 값에서 거꾸로 계산합니다 "
-            "(날짜별 입출금은 기록되지 않음). 누적 %는 첫 행 대비입니다.",
-            "Rebuilt from the Trading History trade log, valued at each day's close (US positions at "
-            "that day's USD/KRW). Cash is rolled back from the current Deposit with cumulative "
-            "Withdrawals added back (dated deposits/withdrawals are not recorded). "
-            "Cumulative % is relative to the first row."
+            "Trading History 거래 기록을 각 날짜의 종가로 평가합니다 (미국 종목은 그날의 USD/KRW). "
+            "현금은 현재 예수금 + 누적 출금액에서 거꾸로 계산합니다. 누적 %는 첫 행 대비입니다.",
+            "Rebuilt from the Trading History trade log at each day's close (US positions at "
+            "that day's USD/KRW). Cash is rolled back from the current Deposit + cumulative "
+            "Withdrawals. Cumulative % is relative to the first row."
         ))
         note.setObjectName("muted")
         note.setWordWrap(True)

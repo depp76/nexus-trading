@@ -48,10 +48,9 @@ class SignalConditionsDialog(QDialog):
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 10, 12, 10)
         root.setSpacing(6)
-        hint = QLabel(tr("값을 넣은 조건이 신호 포착에 체크 박스로 추가됩니다. 빈 칸은 제한 없음, "
-                         "두 칸을 모두 비우면 그 신호를 지웁니다.",
-                         "Each condition with a value is added to Signal Scan as a check box. Blank = no limit; "
-                         "empty both fields to remove that signal."))
+        hint = QLabel(tr("값을 넣은 조건이 신호로 추가됩니다. 빈 칸은 제한 없음, 두 칸을 모두 비우면 삭제.",
+                         "Each condition with a value becomes a signal. Blank = no limit; "
+                         "empty both fields to remove it."))
         hint.setObjectName("muted")
         hint.setWordWrap(True)
         root.addWidget(hint)

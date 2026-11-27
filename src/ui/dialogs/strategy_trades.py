@@ -269,11 +269,10 @@ class StrategyTradesDialog(QDialog):
         root = QVBoxLayout(self)
         self.view = StrategyTradesView(self)
         root.addWidget(self.view, 1)
-        note = QLabel(tr("가격·금액은 원화(미국 종목은 그날 USD/KRW로 환산). 손익은 양쪽 비용을 뺀 값이고, "
-                         "비용은 매입분 몫과 매도 비용의 합입니다. 열 머리글을 누르면 정렬, Ctrl+C로 선택 행 복사.",
-                         "Prices and amounts in KRW (US names at that day's USD/KRW). P&L is net of both "
-                         "sides' costs; cost is the entry share plus the exit cost. Click a header to sort, "
-                         "Ctrl+C copies the selected rows."))
+        note = QLabel(tr("가격·금액은 원화(미국 종목은 그날 USD/KRW로 환산). 손익은 비용 차감 후, "
+                         "비용 = 매입분 몫 + 매도 비용. 머리글 클릭으로 정렬, Ctrl+C로 복사.",
+                         "Prices and amounts in KRW (US names at that day's USD/KRW). P&L is net of costs; "
+                         "cost = entry share + exit cost. Click a header to sort, Ctrl+C to copy."))
         note.setObjectName("faint")
         note.setWordWrap(True)
         root.addWidget(note)

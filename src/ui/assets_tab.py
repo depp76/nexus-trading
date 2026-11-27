@@ -269,8 +269,8 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         row.setSpacing(6)
         self._currency_btn = make_button(
             _CURRENCY_STATES[0][1], checkable=True,
-            tooltip=tr("누를 때마다 표와 차트의 통화가 KRW ↔ USD로 바뀝니다",
-                       "Each click switches the table and chart between KRW and USD"),
+            tooltip=tr("표와 차트의 통화 전환 (KRW ↔ USD)",
+                       "Switch the table and chart between KRW and USD"),
             on_click=self._on_currency_clicked)
         row.addWidget(self._currency_btn)
         row.addSpacing(_GROUP_GAP)
@@ -300,8 +300,8 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         # last. Delete lives on the table's right-click menu and the Delete
         # key, as in the other tabs -- never an always-visible button.
         self._add_btn = make_button(tr("기록 추가", "Add Record"), "primary", self._on_add_record_clicked,
-                                    tooltip=tr("주(금요일)와 총자산을 골라 주간 기록을 추가하거나 바꿉니다",
-                                               "Add or replace a weekly record: pick the week (Friday) and the total"))
+                                    tooltip=tr("주간 기록을 추가하거나 바꿉니다",
+                                               "Add or replace a weekly record"))
         row.addWidget(self._graph_btn)
         row.addSpacing(_GROUP_GAP)
         row.addWidget(self._add_btn)
@@ -314,7 +314,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         # "실시간": the live estimate from Trading History, not a saved
         # weekly record (docs/ui.md 8.16).
         live_asset_title = QLabel(tr("현재 총자산(실시간):", "Current Total Assets (live):"))
-        live_asset_title.setToolTip(tr("계좌 평가액 + 누적 출금액 (Trading History 기준 실시간 추정, 저장된 주간 기록이 아님)", "Account valuation + cumulative withdrawals (live estimate from Trading History, not a saved weekly record)"))
+        live_asset_title.setToolTip(tr("계좌 평가액 + 누적 출금액 (Trading History 기준 실시간 추정)", "Account valuation + cumulative withdrawals (live estimate from Trading History)"))
         live_asset_title.setFont(create_font(FONT_BODY, style_name="Semilight"))
 
         # docs/ui.md issue #7 (mockup): these were QLineEdit(readOnly), which
@@ -587,7 +587,7 @@ class TradingRecordTab(ThreadOwnerMixin, QWidget):
         # has warmed the USD/KRW and KOSPI caches, _rate_kospi_for_date()
         # would do its first-call network fetch right here on the UI thread.
         if not self._metrics_ready:
-            self.status_message.emit(tr("그래프: USD/KRW와 KOSPI 시세를 아직 불러오는 중입니다 -- 잠시 후 다시 시도하세요", "Graph: USD/KRW and KOSPI history are still loading -- try again in a moment"))
+            self.status_message.emit(tr("그래프: 시세를 불러오는 중입니다 -- 잠시 후 다시 시도하세요", "Graph: prices are still loading -- try again in a moment"))
             return
 
         dates = []

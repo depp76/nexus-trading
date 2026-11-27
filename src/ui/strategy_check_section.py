@@ -393,10 +393,8 @@ class StrategyCheckSection(QWidget):
         row = QHBoxLayout()
         self.calc_btn = make_button(
             tr("계산", "Compute"), on_click=self._on_calc_clicked,
-            tooltip=tr(f"이 전략을 Trading Universe의 {'/'.join(signal_api.markets(vid))} 종목 전체로 계산합니다 "
-                       "(점수가 유니버스 안 순위라 전체 계산이 필요)",
-                       f"Compute this strategy over the Universe's {'/'.join(signal_api.markets(vid))} rows "
-                       "(the scores are ranks within the universe)"))
+            tooltip=tr(f"Trading Universe의 {'/'.join(signal_api.markets(vid))} 종목 전체로 계산합니다",
+                       f"Compute over the Universe's {'/'.join(signal_api.markets(vid))} rows"))
         running = vid in self._running
         self.calc_btn.setEnabled(bool(rows) and not running)
         row.addWidget(self.calc_btn)
@@ -464,8 +462,8 @@ class StrategyCheckSection(QWidget):
         elif not self._ctx.cache.put(picks, generation=getattr(thread, "cache_generation", None)):
             # The Universe was refreshed after this dialog opened: its rows (this run's
             # input) are old, so the run is neither cached nor shown.
-            self._errors[vid] = tr("유니버스가 새로 고쳐져 이전 종목 목록의 계산 결과를 버렸습니다. 창을 다시 열어 계산하세요.",
-                                   "The universe was refreshed, so this run on the old rows was dropped. "
+            self._errors[vid] = tr("유니버스가 새로 고쳐져 계산 결과를 버렸습니다. 창을 다시 열어 계산하세요.",
+                                   "The universe was refreshed, so this run was dropped. "
                                    "Reopen the chart and compute again.")
         else:
             self._checks.pop(vid, None)       # cached for the Universe tab too; a B check may now show its rank

@@ -112,8 +112,8 @@ class TrendConditionsDialog(VariantPickerDialog):
         self.cost_combo = QComboBox()
         self.cost_combo.addItems([label for label, _ in COST_CHOICES])
         self.cost_combo.setCurrentIndex(conditions.cost_choice)
-        self.cost_combo.setToolTip(tr("trend_following.md 4-1 비용 민감도: 0·1·2배를 함께 돌리거나 1배만 돌립니다",
-                                       "trend_following.md 4-1 cost sensitivity: run 0x, 1x and 2x together, "
+        self.cost_combo.setToolTip(tr("비용 민감도(trend_following.md 4-1): 0·1·2배 함께 또는 1배만",
+                                       "Cost sensitivity (trend_following.md 4-1): 0x, 1x and 2x together, "
                                        "or 1x only"))
         self.target_spin = QDoubleSpinBox()
         self.target_spin.setRange(*TARGET_SHARPE_RANGE)
@@ -122,10 +122,10 @@ class TrendConditionsDialog(VariantPickerDialog):
         self.target_spin.setValue(conditions.target_sharpe)
         self.target_spin.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.target_spin.setMinimumWidth(_SPIN_W)
-        self.target_spin.setToolTip(tr("결과를 판정할 Sharpe 목표(기본 1.0). 실행 시점의 값이 그 결과에 적용됩니다. "
+        self.target_spin.setToolTip(tr("결과를 판정할 Sharpe 목표(기본 1.0). "
                                        f"MDD 목표는 {TARGET_MDD * 100:g}% 고정.",
-                                       "The Sharpe target the result is judged by (default 1.0); the value at "
-                                       f"Run applies to that result. The MDD target is fixed at {TARGET_MDD * 100:g}%."))
+                                       "The Sharpe target the result is judged by (default 1.0). "
+                                       f"The MDD target is fixed at {TARGET_MDD * 100:g}%."))
 
     def _lay_out_fields(self, grid: QGridLayout) -> None:
         """Two rows of three: 종목·보유 조건 / 운용·평가, the name above each
@@ -149,9 +149,8 @@ class TrendConditionsDialog(VariantPickerDialog):
             grid.addWidget(w, 2 * r + 1, c, Qt.AlignmentFlag.AlignLeft)
         for c in range(3):
             grid.setColumnStretch(c, 1)
-        self.market_note = QLabel(tr("여러 시장을 고르면 선택한 시장 전체를 원화 시가총액으로 합산한 순위에서 상위 N개를 고릅니다.",
-                                   "With several markets, the top N come from one ranking of all selected "
-                                   "markets by market cap in KRW."))
+        self.market_note = QLabel(tr("여러 시장을 고르면 원화 시가총액 합산 순위에서 상위 N개를 고릅니다.",
+                                   "With several markets, the top N come from one KRW market-cap ranking."))
         self.market_note.setObjectName("muted")
         self.market_note.setWordWrap(True)
         grid.addWidget(self.market_note, 4, 0, 1, 3)

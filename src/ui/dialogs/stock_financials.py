@@ -253,11 +253,10 @@ class StockFinancialsTab(QWidget):
         col.addWidget(self._build_results_card())
         foot = QLabel(tr("† 4분기 = 사업보고서 연간값 − 3분기 누적(계산값). ⓡ 정정보고서 반영. "
                          "‡ 사업보고서 이후 정정된 3분기로 계산한 값. YoY = 전년 동기 대비, QoQ = 직전 분기 대비. "
-                         "출처 OpenDART 정기공시, 접수일 기준 저장.",
+                         "출처: OpenDART 정기공시.",
                          "† Q4 = annual report total − Q3 cumulative (derived). ⓡ corrected report. "
                          "‡ derived from a Q3 corrected after the annual report. YoY = vs the same quarter a year "
-                         "earlier, QoQ = vs the previous quarter. Source: OpenDART periodic reports, stored by "
-                         "receipt date."))
+                         "earlier, QoQ = vs the previous quarter. Source: OpenDART periodic reports."))
         foot.setObjectName("faint")
         foot.setWordWrap(True)
         foot.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
@@ -861,12 +860,12 @@ class StockFinancialsTab(QWidget):
                     label = f"{label} · {axis}"
                 item = QTableWidgetItem(label)
                 if c["status"] == "basis_unknown":
-                    item.setToolTip(tr("합계는 매출과 맞지만 표가 3개월·누적 중 어느 기간인지 밝히지 않아 분기 환산과 증감 계산에서 뺍니다.",
-                                       "The amounts add up to revenue, but the table does not say whether they are "
-                                       "3-month or cumulative, so no quarter split or growth is derived."))
+                    item.setToolTip(tr("표가 3개월·누적 중 어느 기간인지 밝히지 않아 분기 환산과 증감 계산에서 뺍니다.",
+                                       "The table does not say whether it is 3-month or cumulative, "
+                                       "so no quarter split or growth is derived."))
                 elif axis:
-                    item.setToolTip(tr(f"이 기간의 항목은 {axis} 기준입니다. 분류 기준이 다른 기간과는 증감을 계산하지 않습니다.",
-                                       f"This period is broken down by {axis}; no growth is computed against a "
+                    item.setToolTip(tr(f"분류 기준({axis})이 다른 기간과는 증감을 계산하지 않습니다.",
+                                       f"Broken down by {axis}; no growth is computed against a "
                                        "period on another axis."))
                 item.setTextAlignment(int(Qt.AlignmentFlag.AlignCenter))
                 item.setForeground(QColor(_CHECK_KIND.get(c["status"], TEXT_EMPTY)))
