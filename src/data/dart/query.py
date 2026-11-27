@@ -376,6 +376,58 @@ def segment_periods(code: str, as_of=None, *, conn: sqlite3.Connection | None = 
         return out
 
 
+def _period_label(fy: int, q: int) -> str:
+    return f"{fy} 연간" if q == 4 else f"{fy} {q}Q"
+
+
+def segment_breaks(db: sqlite3.Connection, tickers=None) -> list[dict]:
+    """Companies whose segment check passed for a period and failed for a later
+    one (2026-11-27, 기아): usually the report's table changed its layout and the
+    reader does not know the new one yet. Per company the newest receipt of each
+    period is taken (as segment_periods does); a "na" period (financial filer)
+    is neither. Each entry: the last pass before the first failure (its source
+    and table label), the failing periods after it (status, receipt, label), and
+    whether a later period passed again. Newest first failure first."""
+    sql = ("SELECT c.corp_code, c.stock_code, c.corp_name, f.bsns_year, f.reprt_code, s.rcept_no, s.status, "
+           "s.source, s.detail FROM seg_fetch s JOIN filing f ON f.rcept_no = s.rcept_no "
+           "JOIN company c ON c.corp_code = f.corp_code")
+    args: list = []
+    if tickers:
+        sql += f" WHERE c.stock_code IN ({','.join('?' * len(tickers))})"
+        args = [str(t).zfill(6) for t in tickers]
+    q_of = {"11013": 1, "11012": 2, "11014": 3, "11011": 4}
+    latest: dict = {}
+    for r in db.execute(sql, args):
+        key = (r["corp_code"], r["bsns_year"], q_of.get(r["reprt_code"], 0))
+        if r["rcept_no"] > latest.get(key, {}).get("rcept_no", ""):
+            latest[key] = dict(r)
+    by: dict = {}
+    for (corp, fy, q), r in latest.items():
+        if r["status"] != "na":
+            by.setdefault(corp, []).append(((fy, q), r))
+    out = []
+    for corp, periods in by.items():
+        periods.sort(key=lambda x: x[0])
+        first_ok = next((i for i, (_k, r) in enumerate(periods) if r["status"] == "ok"), None)
+        if first_ok is None:
+            continue
+        fail_at = next((i for i in range(first_ok, len(periods)) if periods[i][1]["status"] != "ok"), None)
+        if fail_at is None:
+            continue
+        last_ok = periods[fail_at - 1]
+        after = periods[fail_at:]
+        some = after[0][1]
+        out.append({
+            "corp_code": corp, "stock_code": some["stock_code"], "corp_name": some["corp_name"],
+            "last_ok": {"period": last_ok[0], "source": last_ok[1]["source"], "detail": last_ok[1]["detail"] or ""},
+            "failed": [{"period": k, "status": r["status"], "rcept_no": r["rcept_no"], "source": r["source"],
+                        "detail": r["detail"] or ""} for k, r in after if r["status"] != "ok"],
+            "passed_again": any(r["status"] == "ok" for _k, r in after),
+        })
+    out.sort(key=lambda d: (d["failed"][0]["period"], d["stock_code"] or ""), reverse=True)
+    return out
+
+
 def segment_report(tickers=None, conn: sqlite3.Connection | None = None, db_path: str | None = None) -> dict:
     """Per company: periods read and their check status / source counts, the
     pass rate (plan 7, stage 4 completion), and the segment names that do not
@@ -383,7 +435,7 @@ def segment_report(tickers=None, conn: sqlite3.Connection | None = None, db_path
     from data.dart.segments import unmatched_codes
     with _reader(conn, db_path) as db:
         if db is None:
-            return {"companies": [], "unmatched": {}}
+            return {"companies": [], "unmatched": {}, "breaks": []}
         sql = ("SELECT c.corp_code, c.stock_code, c.corp_name, s.status, s.source, COUNT(*) AS n FROM seg_fetch s "
                "JOIN filing f ON f.rcept_no = s.rcept_no JOIN company c ON c.corp_code = f.corp_code")
         args: list = []
@@ -398,6 +450,7 @@ def segment_report(tickers=None, conn: sqlite3.Connection | None = None, db_path
             if r["source"]:
                 d["source"][r["source"]] = d["source"].get(r["source"], 0) + r["n"]
         unmatched = {corp: unmatched_codes(db, corp) for corp in by}
+        breaks = segment_breaks(db, tickers)
     companies = []
     for corp, d in by.items():
         st = d["status"]
@@ -407,7 +460,7 @@ def segment_report(tickers=None, conn: sqlite3.Connection | None = None, db_path
         d["corp_code"] = corp
         companies.append(d)
     companies.sort(key=lambda d: d["stock_code"] or "")
-    return {"companies": companies, "unmatched": {k: v for k, v in unmatched.items() if v}}
+    return {"companies": companies, "unmatched": {k: v for k, v in unmatched.items() if v}, "breaks": breaks}
 
 
 _SOURCE_LABEL = {"biz_product": "사업의 내용 제품표", "biz_segment": "사업의 내용 부문표", "xbrl": "XBRL",
@@ -436,6 +489,19 @@ def format_segment_report(tickers=None, **kw) -> str:
     lines.append(f"합계 {len(rep['companies'])}개사 · 기간 {sum(tot.values())} · ok {tot.get('ok', 0)} · 불일치 "
                  f"{tot.get('sum_mismatch', 0)} · review {tot.get('review', 0)} · 해당없음 {tot.get('na', 0)} · 통과율 "
                  + (f"{tot.get('ok', 0) / checked * 100:.0f}%" if checked else "-"))
+    lines.append("")
+    lines.append("== 통과하다 실패로 바뀐 회사 (보고서 표 모양이 바뀌었을 수 있음: 첫 실패 접수번호의 원문을 볼 것)")
+    if not rep["breaks"]:
+        lines.append("  없음")
+    status_label = {"sum_mismatch": "불일치", "review": "review"}
+    for b in rep["breaks"]:
+        lo, f0 = b["last_ok"], b["failed"][0]
+        src = _SOURCE_LABEL.get(lo["source"], lo["source"] or "-") + (f" · {lo['detail']}" if lo["detail"] else "")
+        lines.append(f"  {b['stock_code']} {b['corp_name']}: 마지막 통과 {_period_label(*lo['period'])} ({src})"
+                     f" → 첫 실패 {_period_label(*f0['period'])} {status_label.get(f0['status'], f0['status'])} "
+                     f"접수 {f0['rcept_no']}" + (" · 이후 다시 통과한 기간 있음" if b["passed_again"] else ""))
+        lines.append("      실패 기간: " + ", ".join(
+            f"{_period_label(*f['period'])} {status_label.get(f['status'], f['status'])}" for f in b["failed"]))
     names = {d["corp_code"]: (d["stock_code"], d["corp_name"]) for d in rep["companies"]}
     lines.append("")
     lines.append("== 매핑 안 된 부문명 (모든 연도에 이어지지 않는 이름: segment_map에서 묶을 후보)")

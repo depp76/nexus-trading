@@ -663,6 +663,39 @@ class TestSegmentSync(_TmpMixin, unittest.TestCase):
         self.assertEqual(seg.unmatched_codes(conn, SAMSUNG), [])
         self.assertEqual(seg._segment_code(conn, SAMSUNG, "CE부문", 2026), "DX")
 
+    def test_report_lists_companies_that_passed_then_failed(self):
+        """2026-11-27 (기아): a pass followed by failures is listed with the last
+        pass and the first failing receipt; a company that never passed, a
+        financial filer's "na" and an older superseded receipt are not."""
+        conn = connect(self.db)
+        self.addCleanup(conn.close)
+        conn.execute("INSERT INTO company(corp_code, stock_code, corp_name) VALUES ('K', '000270', '기아')")
+        conn.execute("INSERT INTO company(corp_code, stock_code, corp_name) VALUES ('N', '000001', '늘실패')")
+        rows = [("K", 2024, "11011", "20250313000001", "ok", "html_segment", "row 순매출액"),
+                ("K", 2025, "11013", "20250515000001", "ok", "html_segment", ""),       # superseded below
+                ("K", 2025, "11013", "20250520000001", "review", None, ""),
+                ("K", 2025, "11012", "20250814000001", "na", None, ""),
+                ("K", 2025, "11011", "20260312000001", "sum_mismatch", "html_segment", "row 수익"),
+                ("K", 2026, "11013", "20260515000001", "ok", "html_segment", ""),
+                ("N", 2025, "11011", "20260312000002", "review", None, "")]
+        for corp, fy, reprt, r, status, source, detail in rows:
+            conn.execute("INSERT INTO filing(rcept_no, corp_code, reprt_code, bsns_year, rcept_dt) VALUES (?, ?, ?, ?, ?)",
+                         (r, corp, reprt, fy, f"{r[:4]}-{r[4:6]}-{r[6:8]}"))
+            seg.record_fetch(conn, r, status, source, detail)
+        conn.commit()
+        rep = query.segment_report(conn=conn)
+        self.assertEqual(len(rep["breaks"]), 1)
+        b = rep["breaks"][0]
+        self.assertEqual((b["stock_code"], b["last_ok"]["period"], b["last_ok"]["detail"]),
+                         ("000270", (2024, 4), "row 순매출액"))
+        self.assertEqual([(f["period"], f["status"]) for f in b["failed"]],
+                         [((2025, 1), "review"), ((2025, 4), "sum_mismatch")])
+        self.assertEqual((b["failed"][0]["rcept_no"], b["passed_again"]), ("20250520000001", True))
+        text = query.format_segment_report(conn=conn)
+        self.assertIn("000270 기아: 마지막 통과 2024 연간 (원문 부문표 · row 순매출액) → 첫 실패 2025 1Q review "
+                      "접수 20250520000001 · 이후 다시 통과한 기간 있음", text)
+        self.assertIn("실패 기간: 2025 1Q review, 2025 연간 불일치", text)
+
     def test_auto_reads_the_whole_backlog_stock_by_stock(self):
         """User direction 2026-11-26: the background run reads every pending
         segment period of the target stocks (it used to take only the reports
