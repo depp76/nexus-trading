@@ -780,56 +780,98 @@ class _Job:
             return False
         rq, ry, fs_div = rev["value_q"], rev["value_ytd"], rev["fs_div"]
         cache = self._cache_dir()
-        xc = seg.fetch_xbrl(self.client, rcept, reprt, fs_div, cache)
+        # A result of the parser version before is kept when it has no segments
+        # or they reconcile; only a package that did not add up is asked for again.
+        xc = seg.fetch_xbrl(self.client, rcept, reprt, fs_div, cache,
+                            accept=lambda old: not old or seg.choose(old, rq, ry, q)[3] == "ok")
         chosen, basis, residual, status = seg.choose(xc, rq, ry, q)
         # The document is read for every period (user direction 2026-11-27):
-        # the segment level is XBRL, else the business section's segment
-        # table, else the segment note; the business section's product table,
-        # when it adds up, is kept beside it at the product level.
+        # the segment level is XBRL, else the document's XBRL-tagged segments,
+        # else the business section's segment table, else the segment note
+        # (what its table lists permitting: seg.is_segment_reading), else the
+        # tagged regions, else the single segment; the business
+        # section's product table (else the tagged products), when it adds up,
+        # is kept beside it at the product level. Tagged cells say what they
+        # are whatever the table's layout (2026-11-27), so the tagged segments
+        # come before the table readers; a region breakdown stays the last
+        # resort, as it is among the note's tables.
         self._check()
-        dc, single, bc = seg.fetch_document(self.client, rcept, fs_div, cache)
-        biz = seg.choose_biz(bc, rq, ry, source="biz_segment", fiscal_q=q) if status != "ok" else None
+        dc, single, bc, tc = seg.fetch_document(self.client, rcept, fs_div, cache)
         note_product = None
+        if status != "ok":
+            hit = self._tagged(tc, "tag_segment", rq, ry, q)
+            if hit is not None:
+                chosen, basis, residual = hit
+                status = "ok"
+        biz = seg.choose_biz(bc, rq, ry, source="biz_segment", fiscal_q=q) if status != "ok" else None
         if biz is not None:
             chosen, basis, residual = biz
             status = "ok"
         elif status != "ok":
             d_chosen, d_basis, d_residual, d_status = seg.choose(dc, rq, ry, q)
-            if d_status == "ok" and d_chosen.source == "html_product" and single:
-                # A single-segment company's product table in the notes is its
-                # product breakdown, not its segments (review_codex 5 P1): the
-                # segment level is the one segment, the table goes to the product level.
+            d_ok = d_status == "ok"
+            if d_ok and d_chosen.source == "html_product":
+                # The notes' product table: the product level's last resort
+                # (when it lists products -- is_product_breakdown below).
                 note_product = (d_chosen, d_basis, d_residual)
-                chosen, basis = seg.single_segment(rq, ry, reprt)
-                residual, status = 0.0, "ok"
-            elif d_status == "ok":
-                # Without the single-segment statement a product table is still
-                # the only breakdown the notes give: kept at the segment level
-                # (source html_product says what it is) and at the product level.
+            # Adding up to the revenue does not make a table the operating
+            # segments (review_agy 2 P1, seg.is_segment_reading): kinds of sale
+            # never are, regions only as the segment note's own table (기아;
+            # stored with axis "region"), a product table only without the
+            # single-segment statement (the only breakdown the notes give; its
+            # axis says "product").
+            if d_ok and seg.is_segment_reading(d_chosen, single):
                 chosen, basis, residual, status = d_chosen, d_basis, d_residual, d_status
-                if d_chosen.source == "html_product":
-                    note_product = (d_chosen, d_basis, d_residual)
-            elif single:
+            elif (region := self._tagged(tc, "tag_region", rq, ry, q)) is not None:
+                chosen, basis, residual = region
+                status = "ok"
+            elif single or (d_ok and chosen is None):
+                # A single segment by the company's own statement (review_codex 5
+                # P1), or by what its notes show: a table of kinds of sale or of
+                # regions under a product caption that makes up the whole revenue
+                # and no segment table at all. An XBRL reading that did not add
+                # up (`chosen`) is kept as the mismatch it is instead.
                 chosen, basis = seg.single_segment(rq, ry, reprt)
                 residual, status = 0.0, "ok"
-            elif status != "sum_mismatch" and d_status == "sum_mismatch":
+            elif not d_ok and status != "sum_mismatch" and d_status == "sum_mismatch":
                 chosen, basis, residual, status = d_chosen, d_basis, d_residual, d_status
         # The product level: the business section's product table first (user
         # direction 2026-11-27), else the notes' product table when it lists
         # products (not regions, kinds of sale or companies).
         product = seg.choose_biz(bc, rq, ry, source="biz_product", fiscal_q=q)
+        if product is None:
+            product = self._tagged([c for c in tc if seg.is_product_breakdown(c)], "tag_product", rq, ry, q)
         if product is None and note_product is not None and seg.is_product_breakdown(note_product[0]):
             product = note_product
         source = chosen.source if chosen is not None else None
+        if status == "ok" and any(chosen.ops.get(n) is None for n, _v in chosen.items):
+            # Segments without operating income (the business section's table,
+            # an XBRL net-revenue table, a table that has it for some segments
+            # only): each missing one from another reading of the same period,
+            # axis and names; a value already there is kept (review_agy 2 P2).
+            seg.fill_ops(chosen, basis, [*xc, *(c for c in tc if c.source == "tag_segment"),
+                                         *(c for c in dc if c.source == "html_segment")], rq, ry, q)
         seg.store_segments(self.conn, corp, fy, q, rcept, rcept_dt, chosen, basis, residual, status, source or "")
         p_chosen, p_basis, p_residual = product if product is not None else (None, None, 0.0)
         seg.store_segments(self.conn, corp, fy, q, rcept, rcept_dt, p_chosen, p_basis, p_residual, "ok",
                            p_chosen.source if p_chosen is not None else "", level="product")
         detail = chosen.label if chosen is not None else ""
+        if chosen is not None and source != "single":
+            # What was read apart from the check: the axis, a period the table
+            # does not settle, and how many segments have an operating income.
+            have = sum(1 for n, _v in chosen.items if chosen.ops.get(n) is not None)
+            detail = f"{detail} | axis {chosen.axis()}{'' if basis or status != 'ok' else ' | basis open'}"                      f" | op {have}/{len(chosen.items)}"
         if product is not None:
             detail = f"{detail} | product: {product[0].label}".strip(" |")
         seg.record_fetch(self.conn, rcept, status, source, detail)
         return True
+
+    @staticmethod
+    def _tagged(cands, source: str, rq, ry, q):
+        """(candidate, basis, residual) of the tagged breakdown of one kind that
+        reconciles with revenue, or None."""
+        c, basis, residual, status = seg.choose([c for c in cands if c.source == source], rq, ry, q)
+        return (c, basis, residual) if status == "ok" else None
 
     def _is_recent(self, member) -> bool:
         return (self.today - _dt.date.fromisoformat(member["rcept_dt"][:10])).days <= RECENT_FILING_DAYS

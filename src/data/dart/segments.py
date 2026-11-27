@@ -7,6 +7,13 @@ Sources, in plan 5-1 order:
    segments; IFRS reconciling members (intersegment elimination, unallocated,
    material reconciling items) are adjustments. Member names come from the
    Korean label linkbase. Large filers tag these from about 2023 on.
+   ``tag_segment`` / ``tag_region`` / ``tag_product`` (2026-11-27): the same
+   facts as the document's value cells carry them (``ACODE`` / ``ACONTEXT``
+   attributes of a filer that tags its notes, often not in the XBRL package --
+   기아): read by member, whatever the table's layout, names from the table's
+   labels (see "XBRL tags inside the document"). The tagged segments come
+   right after the package, the tagged regions after the note's tables, the
+   tagged products after the business section's product table.
 2. ``html_segment``: the segment note of the report's document ("영업부문",
    "부문별 정보"), consolidated notes for a consolidated filer.
 3. ``html_product``: a revenue table by product in that note -- what a filer
@@ -31,6 +38,23 @@ revenue only. A table whose total matches but whose segment rows do not add up
 adjustment row. Nothing matching: the first segment candidate is stored as
 ``sum_mismatch``; nothing read at all: ``review``.
 
+review_agy (2026-11-27): when a gross reading (with elimination rows) and a
+net one of the same segments both reconcile, the net one is taken (`choose`),
+so a company does not change basis with the order of its tables; a chosen
+reading without operating income gets it from another reading of the period
+(`enrich_ops`); and the part of a document the readers look at is saved
+(`slice_document`, cache/dart/seg_doc/), so a later parser version reads the
+documents again without asking DART for them.
+
+review_agy 2 (2026-11-27): what a breakdown lists is kept apart from where it
+was read -- `Candidate.axis` (segment / product / region / sales_type /
+unknown, stored as segment_rev.axis). Kinds of sale and, beside a
+single-segment statement or under a product caption, regions are not stored as
+the company's operating segments (`is_segment_reading`); a table that fits
+both the quarter's and the cumulative revenue and names no period is stored
+with basis NULL (`Candidate.check`), so nothing is differenced from it; and
+operating income is filled in segment by segment (`fill_ops`).
+
 Adjustment rows are stored with ``segment_code`` "_adj" (and "_residual" for a
 computed difference), so the segments alone are ``segment_code NOT LIKE '_%'``.
 ``segment_map`` gets a draft row per new segment name (``note = 'auto'``,
@@ -39,6 +63,7 @@ normalised name as the code, the fiscal years it was seen); rows a user edits
 """
 from __future__ import annotations
 
+import gzip
 import html
 import io
 import json
@@ -64,14 +89,37 @@ MAX_RESIDUAL_SHARE = 0.15
 # order / cost / customer tables left out, the period of a column kept, a product
 # sold by several segments added up). The XBRL result gained the period's length,
 # which an older cached result gives through its label (_from_json): no bump.
-PARSER_VERSION = 12
-DOC_PARSER_VERSION = 15
+# XBRL 13 / documents 17 (2026-11-27, review_agy): "all other segments" is a
+# segment, account names and instant columns are no revenue, "&cr;" is a line
+# break, tagged operating income. An XBRL result of the version before that
+# already reconciles is kept (fetch_xbrl `accept`), and a document is read again
+# from its saved slice (SLICE_VERSION), so neither bump asks DART for much.
+# Documents 18 (2026-11-27, review_agy 2): "재화의 판매 / 용역의 제공" and the timing
+# of recognition are kinds of sale (the business section's candidates are
+# filtered by it); read again from the saved slices.
+PARSER_VERSION = 13
+PREVIOUS_PARSER_VERSION = 12
+DOC_PARSER_VERSION = 18
+# The saved slice of a document (slice_document): bumped only when the *places*
+# read change (segment_spans, biz_spans, the tagged tables), not the reading.
+SLICE_VERSION = 1
 _GEO = ("국내", "한국", "대한민국", "내수", "수출", "해외", "북미", "미국", "미주", "유럽", "구주", "아시아", "중국",
         "일본", "베트남", "인도", "중남미", "남미", "중동", "아프리카", "오세아니아", "호주", "캐나다", "멕시코",
-        "브라질", "독일", "러시아", "기타지역", "기타국가", "아태", "동남아")
+        "브라질", "독일", "러시아", "기타지역", "기타국가", "아태", "동남아", "아메리카", "북중미", "대양주", "국외",
+        "외국", "본사소재지", "대만", "홍콩", "싱가포르", "말레이시아", "태국", "영국", "프랑스", "튀르키예", "터키",
+        "폴란드", "헝가리", "EMEA", "APAC")
+# "기타" among regions is the rest of the world: it says nothing either way.
+_REST_NAME = re.compile(r"^(기타|그외|기타\(\*?\d*\))$")
+# A table's own word for what it lists: a "지역" / "국가" axis label over the rows
+# or columns, or the caption before it ("지역별 매출액 정보는 다음과 같습니다").
+_REGION_LABEL = re.compile(r"^(지역|국가|소재지)(별|부문)?(구분|정보|매출액?)?$")
+_CTX_REGION = re.compile(r"(지역|국가|소재지)(별|부문별?)[^.]{0,20}(매출|수익|정보|내역|현황)")
 _ADJ_MEMBERS = ("EliminationOfIntersegmentAmountsMember", "MaterialReconcilingItemsMember",
                 "UnallocatedAmountsMember", "CorporateMember", "ReconcilingItemsMember")
-_SUBTOTAL_MEMBERS = ("OperatingSegmentsMember", "ReportableSegmentsMember", "AllOtherSegmentsMember")
+# IFRS's "all other segments": the businesses below the reporting thresholds,
+# a segment of its own ("기타"), not a subtotal (review_agy P0-1: KT, CJ).
+_OTHER_MEMBER = "AllOtherSegmentsMember"
+_OTHER_NAME = "기타"
 
 _TOTAL = re.compile(r"^((합계|총계|소계|계|연결|연결계|총합계|연결합계|매출합계|부문합계|조정후금액|연결재무제표금액|"
                     r"(기업)?전체총계)(\(\*?\d*\))?)+$")
@@ -96,7 +144,15 @@ _ADJ = re.compile(r"(연결조정|조정|내부거래|제거|상계|부문간|�
 _EXTERNAL = re.compile(r"(외부|순매출)")         # the external-sales row or column first ("외부매출", 기아 "순매출액")
 _INTERNAL = re.compile(r"(내부|부문간|부문사이)")
 _REVENUE_LABEL = re.compile(r"(매출|수익|영업수익)")
-_NOT_REVENUE = re.compile(r"(원가|비율|구성비|%|이익|손익|손실|비용|자산|부채|상각|법인세|이자|취득|투자|감가|채권|증감)")
+# A label with "수익" that is no revenue line: costs, ratios, profit, balance-sheet
+# accounts (미수수익, 선수수익, 이연수익), finance and other income (review_agy P0-3;
+# "매출액 및 기타수익" is LG에너지솔루션's revenue line, so not after "및").
+_NOT_REVENUE = re.compile(r"(원가|비율|구성비|%|이익|손익|손실|비용|자산|부채|상각|법인세|이자|취득|투자|감가|채권|증감|"
+                          r"미수|선수|이연|충당|금융수익|(?<!및)기타수익|배당금수익|외환|평가)")
+# A point in time ("당분기말", "기말"): a balance, never a period's revenue. Only a
+# header label that is nothing but the instant -- the business section heads its
+# revenue columns "제16기 3분기말(2026년 9월말) 매출액", which is the period.
+_INSTANT = re.compile(r"^(([당전](기|분기|반기)|기|분기|반기|연|년)말(현재)?|기초|[당전]기초)$")
 _OP_LABEL = re.compile(r"^(영업이익|영업손익|영업이익\(손실\)|영업손실|부문(영업)?(이익|손익))")
 _SINGLE = re.compile(r"(단일\s*(의\s*)?(영업|보고|사업)?\s*부문|하나의\s*(영업|보고|사업)?\s*부문|보고\s*부문은\s*단일|"
                      r"단일\s*사업\s*부문|단일\s*영업\s*단위)")
@@ -149,7 +205,7 @@ def normalise(name: str) -> str:
     """The draft segment_code of a reported name: no spaces, item numbers,
     note marks, a trailing "부문" / "사업부문" / "사업부" / "사업" (so "CE부문",
     "CE 부문" and "CE사업부" agree) or parenthesised remarks."""
-    n = _SPLIT.sub("", html.unescape(name or ""))
+    n = _SPLIT.sub("", html.unescape(docs.LINE_BREAK.sub(" ", name or "")))
     n = re.sub(r"^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩIVX\d]+[.)]", "", n)
     n = re.sub(r"\((주|주석|\*|Note)[^)]*\)|\(\*\d*\)|\*\d*$", "", n)
     n = re.sub(r"\([^)]*\)$", "", n)
@@ -158,7 +214,7 @@ def normalise(name: str) -> str:
         if len(n) > len(suffix) and n.endswith(suffix):
             n = n[: -len(suffix)]
             break
-    return n or (name or "").strip()
+    return n or docs.LINE_BREAK.sub(" ", name or "").strip()
 
 
 def _clean(name: str) -> str:
@@ -172,7 +228,8 @@ class Candidate:
     the table's total, and where it came from."""
 
     def __init__(self, source: str, items, adjust=(), total=None, label: str = "", ops=None,
-                 when: str | None = None, span: str | None = None, months: int | None = None):
+                 when: str | None = None, span: str | None = None, months: int | None = None,
+                 hint: str | None = None):
         self.source = source
         self.items = [(n, v) for n, v in items if v is not None]
         self.adjust = [(n, v) for n, v in adjust if v is not None]
@@ -185,6 +242,43 @@ class Candidate:
         self.when = when
         self.span = span
         self.months = months
+        # What the table itself says it lists, where it does: "region" (a 지역
+        # axis label or a "지역별 매출" caption -- 기아's regions are named KUS,
+        # "KUS 이외"...). None: the names and the source decide (axis).
+        self.hint = hint
+        # {item: source} of an operating income taken from another reading (fill_ops).
+        self.op_sources: dict = {}
+
+    def open_basis(self, fiscal_q: int | None = None) -> bool:
+        """Whether nothing says if the amounts are the quarter's or the
+        cumulative ones (no "3개월" / "누적" header, no XBRL dates) in a report
+        where the two differ -- a half-year, third-quarter or annual one."""
+        return fiscal_q in (2, 3, 4) and self.bases(fiscal_q) == ("q", "ytd")
+
+    def axis(self) -> str:
+        """What the items are (review_agy 2 P1), apart from where they were read
+        (`source`): "segment" (operating segments), "product", "region",
+        "sales_type" (제품 / 상품 / 용역, 재화의 판매 / 용역의 제공) or "unknown".
+
+        The names decide first -- regions and kinds of sale are what they are
+        whatever table or XBRL axis lists them (기아's operating segments on
+        SegmentsAxis are regions) -- then the evidence of the source: SegmentsAxis
+        (xbrl, tag_segment), a 부문 / 사업 column of the business section and a
+        table of the segment note are segments; ProductsAndServicesAxis, a
+        product column and a note table captioned as product revenue are
+        products. Whether a region breakdown may stand as the company's
+        operating segments is another question: `is_segment_reading`."""
+        if self.source == "single":
+            return "segment"
+        if self.source == "tag_region" or self.hint == "region" or self.geographic():
+            return "region"
+        if self.sales_types():
+            return "sales_type"
+        if self.source in ("xbrl", "tag_segment", "biz_segment", "html_segment"):
+            return "segment"
+        if self.source in ("biz_product", "tag_product", "html_product"):
+            return "unknown" if self.entities() or self.customers() else "product"
+        return "unknown"
 
     def bases(self, fiscal_q: int | None = None) -> tuple:
         """The revenue bases ("q", "ytd") the candidate may be checked against:
@@ -210,14 +304,29 @@ class Candidate:
         """Whether most items are regions (a geographic breakdown, which the
         segment note often shows next to the operating segments)."""
         names = [n.replace(" ", "") for n, _ in self.items]
-        geo = sum(1 for n in names if any(w in n for w in _GEO))
-        return bool(names) and geo * 2 > len(names)
+        named = [n for n in names if not _REST_NAME.match(n)]
+        geo = sum(1 for n in named if any(w in n for w in _GEO))
+        return bool(named) and geo * 2 > len(named)
 
     def balance_items(self) -> bool:
         """Whether an item is a balance-sheet figure ("예금잔액", "차입금",
         "부채비율": a capital-management table that happened to add up to the
         quarter's revenue, HD현대일렉트릭 2025)."""
         return any(_BALANCE.search(n.replace(" ", "")) for n, _ in self.items)
+
+    def account_items(self) -> bool:
+        """Whether an item is an account of a results summary ("영업이익",
+        "총자산", "당기순이익", "EBITDA"), not something sold."""
+        return any(_ACCOUNT_NAME.search(n.replace(" ", "")) for n, _ in self.items)
+
+    def net(self) -> bool:
+        """Whether the items are external revenue as they stand: no adjustment
+        rows to speak of (the same 1 % the screen calls gross)."""
+        seg, with_adj = self.sums()
+        return abs(with_adj - seg) <= abs(seg) * TOLERANCE
+
+    def names(self) -> frozenset:
+        return frozenset(normalise(n) for n, _ in self.items)
 
     def cost_items(self) -> bool:
         """Whether half the items or more are costs ("인건비", "상품매출원가",
@@ -243,7 +352,7 @@ class Candidate:
 
     def not_revenue(self) -> bool:
         """Read from a table that is no revenue breakdown at all, whatever it adds up to."""
-        return self.balance_items() or self.cost_items() or self.order_items()
+        return self.balance_items() or self.account_items() or self.cost_items() or self.order_items()
 
     def entities(self) -> bool:
         """Whether most items are companies (a breakdown by subsidiary)."""
@@ -255,7 +364,7 @@ class Candidate:
         business lines -- a breakdown the business section shows next to them."""
         def is_kind(name: str) -> bool:
             n = re.sub(r"\([^)]*\)", "", re.sub(r"\s", "", name))
-            return bool(n) and (n in _SALES_KINDS or not _KIND_WORDS.sub("", n))
+            return bool(n) and (n in _SALES_KINDS or not _KIND_WORDS.sub("", n) or bool(_TIMING.search(n)))
         kinds = sum(1 for n, _ in self.items if is_kind(n))
         return bool(self.items) and kinds * 2 > len(self.items)
 
@@ -263,10 +372,17 @@ class Candidate:
         """(basis, residual) when the candidate reconciles with revenue, else None.
         A breakdown needs two items at least: a one-row table equal to the
         revenue tells nothing (the single-segment case is decided apart).
-        Only the bases of the candidate's own period are tried (`bases`); where
-        both are open, the closer one wins -- a half-year table of 100 against
-        a quarter of 99.5 and a half year of 100 is cumulative (review_codex 5
-        P1) -- and a plain sum before one that needs a residual."""
+        Only the bases of the candidate's own period are tried (`bases`), a
+        plain sum before one that needs a residual.
+
+        The basis is None -- reconciled, period not settled -- when nothing
+        says which period the table is for (`open_basis`) and it fits both the
+        quarter's and the cumulative revenue (review_agy 2 P1): the company's
+        first quarter being about nothing does not make each segment's so, and
+        a guess would be differenced as if it were known. The amounts are kept
+        as disclosed and nothing is derived from them. With the quarter not
+        given, or in a first quarter (the two are one), the closer basis is
+        taken as before."""
         if self.source != "single" and len(self.items) < 2:
             return None
         if self.not_revenue():
@@ -285,6 +401,8 @@ class Candidate:
         if not hits:
             return None
         best = min(hits)
+        if self.open_basis(fiscal_q) and len({h[3] for h in hits}) > 1:
+            return None, best[4]
         return best[3], best[4]
 
 
@@ -296,10 +414,18 @@ def choose(candidates: list[Candidate], revenue_q, revenue_ytd, fiscal_q: int | 
     # the order read (segment tables before product tables, the current period
     # first). A filer whose segments are regions still gets them when nothing
     # else reconciles.
-    candidates = sorted(candidates, key=lambda c: (c.geographic(), c.source == "html_product"))
-    for c in candidates:
+    # Kinds of sale and lists of companies or customers last of all (review_agy
+    # 2 P1): they are no operating segments, so any other breakdown that
+    # reconciles is taken before them.
+    rank = {"region": 1, "sales_type": 2, "unknown": 3}
+    candidates = sorted(candidates, key=lambda c: (rank.get(c.axis(), 0), c.source == "html_product"))
+    for i, c in enumerate(candidates):
         hit = c.check(revenue_q, revenue_ytd, fiscal_q)
         if hit:
+            if hit[0] is None:
+                c, hit = _settled_reading(c, hit, candidates[i + 1:], revenue_q, revenue_ytd, fiscal_q)
+            if hit[0] is not None and not (c.net() and hit[1] == 0):
+                c, hit = _net_reading(c, hit, candidates[i + 1:], revenue_q, revenue_ytd, fiscal_q)
             return c, hit[0], hit[1], "ok"
     # Nothing reconciles: the first reading of the current period is kept as a
     # mismatch. A prior-period column, a customer list or a cost table is not
@@ -309,6 +435,145 @@ def choose(candidates: list[Candidate], revenue_q, revenue_ytd, fiscal_q: int | 
     if usable:
         return usable[0], None, 0.0, "sum_mismatch"
     return None, None, 0.0, "review"
+
+
+def _settled_reading(first: Candidate, hit, others, revenue_q, revenue_ytd, fiscal_q):
+    """(candidate, hit) of a reading of the same breakdown (source, axis and
+    segment names) whose period is stated, else `first` with its basis open:
+    the same table shown once without a period mark and once under "3개월" /
+    "누적" headers is settled by the marked one."""
+    for c in others:
+        if c.source != first.source or c.axis() != first.axis() or c.names() != first.names():
+            continue
+        h = c.check(revenue_q, revenue_ytd, fiscal_q)
+        if h and h[0] is not None:
+            return c, h
+    return first, hit
+
+
+def is_segment_reading(c: Candidate, single: bool = False) -> bool:
+    """Whether a reconciling table of the notes may be stored as the company's
+    operating segments (review_agy 2 P1: adding up to the revenue says nothing
+    about what a table lists).
+
+    - Kinds of sale ("제품매출 / 기타매출", "재화의 판매 / 용역의 제공") never: the
+      revenue note's split, which every company has.
+    - Regions only from a table of the segment note itself (``html_segment``,
+      or its tagged cells): where the note gives nothing but regions, they are
+      the company's segment disclosure -- 기아 ("지역에 대한 공시" with
+      intersegment eliminations per region, the only table of its note, also in
+      the year it adds that it is one reportable segment), 금호타이어. They are
+      stored with axis "region", so the screen never joins them to a year of
+      business segments. Regions under a product caption (``html_product``:
+      "국내 / 수출" of a product table) are a split of the sales, not segments.
+    - A table captioned as product revenue (``html_product``) with product
+      names stands in for the segments only without a single-segment statement
+      (the only breakdown the notes give; with the statement the segment level
+      is the one segment and the table goes to the product level).
+    - Companies or customers under a product caption (axis "unknown"): never.
+    """
+    if c.source in ("xbrl", "tag_segment", "biz_segment", "single"):
+        return True                                # SegmentsAxis / a 부문 column: segments whatever their names
+    axis = c.axis()
+    if axis == "segment":
+        return True
+    if axis == "region":
+        return c.source in ("html_segment", "tag_region")
+    if axis == "product":
+        return not single
+    return False
+
+
+def _net_reading(first: Candidate, hit, others, revenue_q, revenue_ytd, fiscal_q):
+    """(candidate, hit) of the external-revenue reading of the same breakdown,
+    else `first` as it is. A filer shows its segments gross with an elimination
+    row and net in another table (or row); both reconcile, and which came first
+    changed from report to report (review_agy 2-1: 현대차 gross, net, gross
+    again, so nothing could be compared across the periods). The net one --
+    items that add up to the revenue on their own -- is taken whenever it is
+    there: same source, same kind of breakdown, same segment names, same basis.
+    Other amounts, that is: the same table without its adjustment rows is not
+    a net table (롯데쇼핑 2023: a 1.3 % reconciling item, both within the 1 %)."""
+    amounts = sorted(v for _n, v in first.items)
+    for c in others:
+        if c.source != first.source or c.geographic() != first.geographic() or c.names() != first.names() \
+                or not c.net() or sorted(v for _n, v in c.items) == amounts:
+            continue
+        h = c.check(revenue_q, revenue_ytd, fiscal_q)
+        if h and h[0] == hit[0] and h[1] == 0:
+            return c, h
+    return first, hit
+
+
+def _op_fills(chosen: Candidate, basis: str | None, candidates, revenue_q, revenue_ytd,
+              fiscal_q: int | None = None) -> dict:
+    """{chosen item: (operating income, source)} for the chosen items that have
+    none, from other readings of the same period, breakdown axis and names."""
+    if chosen is None or chosen.source == "single" or basis is None:
+        return {}
+    keys = [normalise(n) for n, _ in chosen.items]
+    if len(set(keys)) != len(keys):
+        return {}                                  # two items of one name: no one-to-one mapping
+    mine = dict(zip(keys, (n for n, _ in chosen.items)))
+    amounts = dict(zip(keys, (v for _, v in chosen.items)))
+    have = {normalise(n): v for n, v in chosen.ops.items() if v is not None}
+    axis = chosen.axis()
+    fills: dict = {}
+    for c in candidates:
+        if len(have) >= len(mine):
+            break
+        if c is chosen or not c.ops or basis not in c.bases(fiscal_q) or c.not_revenue() or c.axis() != axis:
+            continue
+        theirs = [normalise(n) for n, _ in c.items]
+        if len(set(theirs)) != len(theirs) or not set(mine) <= set(theirs):
+            continue                               # the names must map one to one
+        if c.bases(fiscal_q) != (basis,):
+            hit = c.check(revenue_q, revenue_ytd, fiscal_q)
+            same_amounts = all(abs(v - amounts[normalise(n)]) <= abs(amounts[normalise(n)]) * TOLERANCE
+                               for n, v in c.items if normalise(n) in amounts)
+            if not ((hit and hit[0] == basis) or same_amounts):
+                continue
+        ops = {normalise(n): v for n, v in c.ops.items() if v is not None and normalise(n) in mine}
+        # A reading that disagrees with a value already there shows another
+        # measure (segment profit before allocations...): nothing is taken from it.
+        if any(abs(ops[k] - v) > max(abs(v) * TOLERANCE, 1.0) for k, v in have.items() if k in ops):
+            continue
+        for k, v in ops.items():
+            if k not in have:
+                have[k] = v
+                fills[mine[k]] = (v, c.source)
+    return fills
+
+
+def enrich_ops(chosen: Candidate, basis: str | None, candidates, revenue_q, revenue_ytd,
+               fiscal_q: int | None = None) -> dict:
+    """{item: operating income} for the chosen reading's items that have none
+    (review_agy P1-6: the business section's segment table lists revenue only,
+    and it comes before the note), taken from other readings of the same
+    period -- XBRL, tagged cells, the segment note. The revenue choice is not
+    touched.
+
+    Item by item (review_agy 2 P2): a reading that has the operating income of
+    some segments only is completed, a value it has -- a real zero too -- is
+    never replaced. The other reading must be of the same breakdown axis, its
+    segment names the chosen ones one to one (normalised; it may list more),
+    and of the same period for certain: its own period says so, it reconciles
+    on the same basis, or its revenue per segment is the chosen one. A reading
+    whose operating income disagrees with a value already there is left out
+    whole; a name no reading has stays without operating income."""
+    return {n: v for n, (v, _src) in _op_fills(chosen, basis, candidates, revenue_q, revenue_ytd, fiscal_q).items()}
+
+
+def fill_ops(chosen: Candidate, basis: str | None, candidates, revenue_q, revenue_ytd,
+             fiscal_q: int | None = None) -> dict:
+    """enrich_ops applied to `chosen`: the missing operating incomes are set
+    and where each came from is kept in ``chosen.op_sources`` (stored as
+    segment_rev.op_source). Returns {item: source} of what was filled."""
+    fills = _op_fills(chosen, basis, candidates, revenue_q, revenue_ytd, fiscal_q)
+    for name, (v, src) in fills.items():
+        chosen.ops[name] = v
+        chosen.op_sources[name] = src
+    return {n: src for n, (_v, src) in fills.items()}
 
 
 # ---- XBRL -------------------------------------------------------------------------
@@ -395,11 +660,15 @@ def xbrl_candidates(zip_bytes: bytes, fs_div: str) -> list[Candidate]:
         elif any(i in _ADJ_MEMBERS for i in ifrs):
             kind, member = "adjust", next(i for i in ifrs if i in _ADJ_MEMBERS)
             family = None                          # an adjustment belongs to whichever table it reconciles
+        elif _OTHER_MEMBER in ifrs:
+            kind, member = "other", f"ifrs-full:{_OTHER_MEMBER}"
+            family = None                          # the standard member: of whichever table lists the segments
         else:
             continue                               # the segments' own subtotal
         contexts[m.group(1)] = (kind, member, per["startDate"], per["endDate"], family)
     by_period: dict = {}
     adjust: dict = {}
+    other: dict = {}
     for m in _FACT.finditer(x):
         ref = re.search(r"contextRef=\"([^\"]+)\"", m.group(2))
         if not ref or ref.group(1) not in contexts:
@@ -415,6 +684,12 @@ def xbrl_candidates(zip_bytes: bytes, fs_div: str) -> list[Candidate]:
             if m.group(1) != "dart:OperatingIncomeLoss":
                 adjust.setdefault((start, end), {})[name] = val
             continue
+        if kind == "other":
+            what = "op" if m.group(1) == "dart:OperatingIncomeLoss" else "rev"
+            mine = other.setdefault((start, end), {})
+            if what not in mine or m.group(1) == "ifrs-full:Revenue":
+                mine[what] = val
+            continue
         slot = by_period.setdefault((start, end, family), {"rev": {}, "op": {}})
         name = labels.get(member.replace(":", "_"), member.split(":")[-1])
         if m.group(1) == "dart:OperatingIncomeLoss":
@@ -424,18 +699,28 @@ def xbrl_candidates(zip_bytes: bytes, fs_div: str) -> list[Candidate]:
     if not by_period:
         return []
     last_end = max(end for _s, end, _f in by_period)
+    other_name = labels.get(f"ifrs-full_{_OTHER_MEMBER}") or _OTHER_NAME
     out = []
     for (start, end, family), slot in sorted(by_period.items(), key=lambda kv: kv[0][0], reverse=True):
         if end != last_end or not slot["rev"]:
             continue
         adj = list(adjust.get((start, end), {}).items())
+        # "All other segments" has the standard member whatever the table: each
+        # table is read with it and, as it may belong to another table, without.
+        readings = [(slot["rev"], slot["op"])]
+        rest = other.get((start, end), {})
+        if rest.get("rev") is not None and other_name not in slot["rev"]:
+            ops = {**slot["op"], other_name: rest["op"]} if rest.get("op") is not None else slot["op"]
+            readings.insert(0, ({**slot["rev"], other_name: rest["rev"]}, ops))
         # One table of segments (Hyundai shows gross and net revenue tables with
         # the same member names): each table on its own, with and without the
-        # reconciling items; the check keeps the one that adds up.
-        for with_adj in ((True, False) if adj else (False,)):
-            out.append(Candidate("xbrl", list(slot["rev"].items()), adj if with_adj else [],
-                                 label=f"{start}..{end} {family or ''}".strip(), ops=slot["op"],
-                                 months=_months(start, end)))
+        # reconciling items; the check keeps the one that adds up -- the net
+        # one when both do (choose).
+        for rev, ops in readings:
+            for with_adj in ((True, False) if adj else (False,)):
+                out.append(Candidate("xbrl", list(rev.items()), adj if with_adj else [],
+                                     label=f"{start}..{end} {family or ''}".strip(), ops=ops,
+                                     months=_months(start, end)))
     return out
 
 
@@ -465,10 +750,16 @@ def _notes_range_of(doc: str, consolidated: bool) -> tuple[int, int]:
 
 
 MAX_REGIONS = 4
+_SINGLE_WORD = re.compile(r"단일|하나의")
 
 
 def segment_regions(doc: str, consolidated: bool) -> list[str]:
-    """Places that may hold the segment note, most likely first: note titles
+    """The text of segment_spans' places."""
+    return [doc[a:b] for a, b in segment_spans(doc, consolidated)]
+
+
+def segment_spans(doc: str, consolidated: bool) -> list[tuple[int, int]]:
+    """(start, end) of the places that may hold the segment note, most likely first: note titles
     ("4.영업부문(연결)"), headings inside the notes text ("29.부문별보고",
     also split over spans), and as a last resort the text around a statement
     that there is a single segment. Each is the heading plus the tables that
@@ -483,7 +774,7 @@ def segment_regions(doc: str, consolidated: bool) -> list[str]:
         t = _SPLIT.sub("", docs._text(m.group(1)))
         if _HEADING.search(t) and len(t) < 40:
             nxt = docs._TITLE.search(doc, m.end(), end)
-            return [doc[m.start():nxt.start() if nxt else min(end, m.end() + 80_000)]]
+            return [(m.start(), nxt.start() if nxt else min(end, m.end() + 80_000))]
     for m in _BLOCK.finditer(doc, start, end):
         if _NOTE_HEADING.match(_SPLIT.sub("", docs._text(m.group(2)))):   # "29.부문별보고:..." may run on
             starts.append(m.start())
@@ -492,15 +783,14 @@ def segment_regions(doc: str, consolidated: bool) -> list[str]:
     for pos in sorted(set(starts)):
         if pos < last:
             continue                          # inside a region already taken
-        out.append(doc[pos:min(end, pos + 80_000)])
+        out.append((pos, min(end, pos + 80_000)))
         last = pos + 80_000
         if len(out) >= MAX_REGIONS:
             break
-    notes = doc[start:end]
-    for m in re.finditer(r"단일|하나의", notes):
-        around = _SPLIT.sub("", docs._text(notes[m.start():m.start() + 400]))
+    for m in _SINGLE_WORD.finditer(doc, start, end):
+        around = _SPLIT.sub("", docs._text(doc[m.start():min(end, m.start() + 400)]))
         if _SINGLE.search(around):
-            out.append(notes[max(0, m.start() - 200):m.start() + 2000])
+            out.append((max(start, m.start() - 200), min(end, m.start() + 2000)))
             break
     return out
 
@@ -621,11 +911,14 @@ def _context_period(context: list[str]) -> tuple:
     return when, span
 
 
-def table_candidates(table: str, unit: float, product: bool, caption=(None, None)) -> list[Candidate]:
+def table_candidates(table: str, unit: float, product: bool, caption=(None, None),
+                     region: bool = False) -> list[Candidate]:
     """Candidates of one table in both orientations (see the module docstring).
     A unit caption inside the table's own header wins over `unit` (the last
     one before the table). `caption`: the (when, span) the table's caption
-    gives; a column's own header marks win over it."""
+    gives; a column's own header marks win over it. `region`: the caption
+    says the table is by region (the candidates' hint; a 지역 / 국가 axis
+    label in the table says so too)."""
     grid = docs._grid(table)
     if len(grid) < 2:
         return []
@@ -640,6 +933,27 @@ def table_candidates(table: str, unit: float, product: bool, caption=(None, None
     ncols = max((b for row in grid for _a, b, _x in row), default=0) + 1
     paths = _column_labels(header, ncols)
     source = "html_product" if product else "html_segment"
+    # Under a product or region caption every amount column is a candidate
+    # ("구분 | 당기 | 전기": the caption says what the amounts are).
+    out = _table_readings(grid, header, body, ncols, paths, source, unit, caption, product or region)
+    # What the table itself calls its items (the candidates' hint): the caption
+    # ("지역별 매출"), else a 지역 / 국가 axis label on the items' side -- over
+    # the columns when the items are columns (기아's annual note: "영업부문 >
+    # 지역 > 외국 > KUS"), in the first column when they are rows (its
+    # quarterly one: "지역 | 외국 | 북중미 | KUS"). The label on the other side
+    # heads a segments-by-region matrix and says nothing about the items.
+    def is_region(text) -> bool:
+        return bool(_REGION_LABEL.match(_clean(text).replace(" ", "")))
+    rows_region = region or any(is_region(row[0][2]) for row in grid if row and row[0][0] == 0)
+    cols_region = region or any(is_region(t) for c in range(1, ncols) for t in paths[c])
+    for c in out:
+        if cols_region if c.label.startswith("row ") else rows_region:
+            c.hint = "region"
+    return out
+
+
+def _table_readings(grid, header, body, ncols, paths, source, unit, caption, any_amount: bool) -> list:
+    """table_candidates' readings of a table split into header and body."""
     out: list[Candidate] = []
 
     def cell(row, col):
@@ -664,10 +978,12 @@ def table_candidates(table: str, unit: float, product: bool, caption=(None, None
         label = " ".join(paths[c])
         if any(val(r, c) is not None for _, r in rows):
             cols.append((c, label))
+    # A column of balances at a date ("당분기말") is no revenue of the period.
+    cols = [(c, lab) for c, lab in cols if not any(_INSTANT.match(p.replace(" ", "")) for p in paths[c])]
     rev_cols = [(c, lab) for c, lab in cols if _REVENUE_LABEL.search(lab) and not _NOT_REVENUE.search(lab)
                 and not _INTERNAL.search(lab)]
     rev_cols.sort(key=lambda cl: 0 if _EXTERNAL.search(cl[1]) else 1)
-    if not rev_cols and (product or any(t in " ".join(" ".join(p) for p in paths) for t in _PRODUCT_WORDS)):
+    if not rev_cols and (any_amount or any(t in " ".join(" ".join(p) for p in paths) for t in _PRODUCT_WORDS)):
         rev_cols = [(c, lab) for c, lab in cols if not _NOT_REVENUE.search(lab)]
     op_col = next((c for c, lab in cols if _OP_LABEL.search(lab.replace(" ", ""))), None)
     col_period = _periods({c: _marks(paths[c]) for c, _lab in cols}, caption)
@@ -719,7 +1035,8 @@ def table_candidates(table: str, unit: float, product: bool, caption=(None, None
                 and not _INTERNAL.search(n)]
     rev_rows.sort(key=lambda nr: 0 if _EXTERNAL.search(nr[0]) else 1)
     op_row = next((r for n, r in rows if _OP_LABEL.search(n.replace(" ", ""))), None)
-    periods = sorted({p for _c, _n, p in columns}, key=lambda p: [x for x in p])
+    periods = sorted({p for _c, _n, p in columns if not any(_INSTANT.match(x.replace(" ", "")) for x in p)},
+                     key=lambda p: [x for x in p])
     if any(_CUSTOMER_AXIS.search(n.replace(" ", "")) for _c, names, _p in columns for n in names):
         periods = []                               # columns are customers ("... | 고객합계"), not segments
     row_period = _periods({p: _marks(p) for p in periods}, caption)
@@ -827,14 +1144,21 @@ def document_candidates(region: str) -> tuple[list[Candidate], bool]:  # one reg
         if kind in ("customer", "order", "cost"):
             continue
         before = _SPLIT.sub("", docs._text(region[max(0, tm.start() - 600):tm.start()]))
-        product = bool(_PRODUCT_CONTEXT.search(before[-150:])) or (single and kind in ("product", "revenue"))
+        # A table captioned by region ("지역별 매출액 정보는 다음과 같습니다") is the
+        # note's geographic table, whatever product words stand near it -- for
+        # a company that states no single segment: the regions may then be its
+        # only segment disclosure. Beside the statement it stays what it was
+        # read as before (a table of the single segment's revenue).
+        by_region = not single and any(_CTX_REGION.search(t.replace(" ", "")) for t in context[-1:])
+        product = not by_region and (bool(_PRODUCT_CONTEXT.search(before[-150:]))
+                                     or (single and kind in ("product", "revenue")))
         unit, caption = _unit_before(region, tm.start()), _context_period(context)
-        found = table_candidates(tm.group(0), unit, product, caption)
+        found = table_candidates(tm.group(0), unit, product, caption, by_region)
         if single and not product:
             # No caption to go by: a table whose rows are named as revenue
             # ("제품매출 | 상품매출 | 용역매출") is still the single segment's breakdown.
             have = {c.label for c in found}
-            found += [c for c in table_candidates(tm.group(0), unit, True, caption)
+            found += [c for c in table_candidates(tm.group(0), unit, True, caption, by_region)
                       if c.label not in have and c.revenue_named()]
         out.extend(c for c in found if not c.customers())
     # Segment tables before product tables: plan 5-1 order.
@@ -860,12 +1184,21 @@ _SEGMENT_HEAD = re.compile(r"(부문|사업)")
 # ("직접판매 / 간접판매"): a breakdown by kind, not by business line. Names are
 # split on , ㆍ · / 및 first, a parenthesised remark dropped.
 # A name made of these words only ("상품제품기타", "용역및기타수수료", "배당금수익") is a kind.
-_KIND_WORDS = re.compile(r"(제품|상품|용역|기타|서비스|매출액|매출|수익|공사|임대료|임대|로열티|수수료|배당금|배당|"
-                         r"브랜드사용료|사용료|이자|제|상|등|외|및|[,ㆍ·/&])")
+# "재화의 판매 / 용역의 제공" (IFRS 15's wording of the same split) and the timing
+# of recognition ("한 시점에 이전", "기간에 걸쳐 인식") are kinds too (review_agy 2 P1).
+_KIND_WORDS = re.compile(r"(제품|상품|재화|용역|기타|서비스|매출액|매출|수익|공사|임대료|임대|로열티|수수료|배당금|배당|"
+                         r"브랜드사용료|사용료|이자|판매|제공|제|상|등|외|및|의|[,ㆍ·/&])")
+_TIMING = re.compile(r"(한시점|일시점|시점에|기간에걸쳐|기간에걸친)")
 _SALES_KINDS = {"제", "상", "제품", "상품", "용역", "기타", "서비스", "공사", "임대", "로열티", "수수료", "제품상품",
                 "제품상품기타", "제품기타", "상품기타", "제상품", "제품외", "상품외", "직접판매", "간접판매", "직판",
                 "대리점", "위탁판매", "온라인", "오프라인", "도매", "소매", "직수출", "로컬", "로컬수출"}
 _BALANCE = re.compile(r"(잔액|차입금|부채비율|예금|현금성자산|사채|순부채|자본총계|부채총계|자산총계)")
+# Accounts of a summary of results ("영업이익", "총자산", "당기순이익"): a table that
+# lists them is no revenue breakdown even when two of them add up to the revenue
+# (review_agy P0-2: 현대차 2023, 영업이익 + 총자산). Names of accounts only -- a
+# business called "자산관리" or "투자" is left alone.
+_ACCOUNT_NAME = re.compile(r"(총자산|총부채|총자본|자산합계|부채합계|자본합계|부채와자본|부채및자본|영업이익|영업손익|영업손실|"
+                           r"순이익|순손익|순손실|법인세|감가상각|EBITDA|CAPEX|자본적지출)", re.I)
 _ENTITY = re.compile(r"(㈜|\(주\)|주식회사|Co\.|Ltd|Inc\.?$|LLC|Corp|GmbH|B\.V\.|S\.A\.)", re.I)
 _LEADING_MARKS = re.compile(r"^[-–·•ㆍ\s]+")
 _PCT_TAIL = re.compile(r"\(\s*-?[\d.,]+\s*%\s*\)$")        # "(64.7%)" after an amount; "(50)" is a negative
@@ -874,6 +1207,11 @@ _PCT_TAIL = re.compile(r"\(\s*-?[\d.,]+\s*%\s*\)$")        # "(64.7%)" after an 
 def biz_regions(doc: str) -> list[str]:
     """The business section's "주요 제품 및 서비스" and "매출 및 수주상황"
     sections (title to the next title), before the financial notes."""
+    return [doc[a:b] for a, b in biz_spans(doc)]
+
+
+def biz_spans(doc: str) -> list[tuple[int, int]]:
+    """(start, end) of biz_regions' sections."""
     titles = list(docs._TITLE.finditer(doc))
     notes_at = min((s for s in (_notes_range_of(doc, True)[0], _notes_range_of(doc, False)[0]) if s > 0),
                    default=len(doc))
@@ -884,7 +1222,7 @@ def biz_regions(doc: str) -> list[str]:
         t = _SPLIT.sub("", docs._text(m.group(1)))
         if _BIZ_TITLE.search(t) and len(t) < 40:
             end = titles[i + 1].start() if i + 1 < len(titles) else min(len(doc), m.end() + 80_000)
-            out.append(doc[m.start():min(end, m.start() + 120_000)])
+            out.append((m.start(), min(end, m.start() + 120_000)))
     return out
 
 
@@ -1118,10 +1456,321 @@ def choose_biz(candidates: list[Candidate], revenue_q, revenue_ytd, source: str 
                     break
         if hit is None:
             continue
-        rank = (c.source == "biz_product", hit[1] == 0, len(c.items))
+        # A reading whose period is settled before one that fits both bases (check).
+        rank = (c.source == "biz_product", hit[0] is not None, hit[1] == 0, len(c.items))
         if best is None or rank > best[0]:
             best = (rank, c, hit)
     return (best[1], best[2][0], best[2][1]) if best else None
+
+
+# ---- XBRL tags inside the document ------------------------------------------------
+#
+# A filer that tags its notes in XBRL (large companies from the 2023 annual
+# report, smaller ones later; 기아 from the 2025 half year) has its document.xml
+# value cells carry the fact: ACODE the account, ACONTEXT the period and the
+# dimension members ("CFY2025dHYA_ifrs-full_GeographicalAreasAxis_
+# ifrs-full_CountryOfDomicileMember_ifrs-full_SegmentConsolidationItemsAxis_
+# ifrs-full_OperatingSegmentsMember"). Each cell says what it is, so the table's
+# layout -- regions as columns, a tree of row labels, gross | eliminations | net
+# under each region -- no longer has to be worked out (2026-11-27; idea from
+# eddmpython/dartlab's decodeAcontext). The member names are the filer's own
+# English tokens, so a member's name is taken from the table's labels around its
+# cells: the series then runs on from years read from untagged tables.
+
+_TAG_REVENUE = ("ifrs-full_Revenue", "ifrs-full_RevenueFromContractsWithCustomers")
+_TAG_OP = "dart_OperatingIncomeLoss"
+_TAG_CONTEXT = 3000              # characters before a tagged table read for its unit caption
+# A unit caption of amounts: "원", "천원", "백만원", "억원", "천USD"; "%" and "천주" are not.
+_MONEY_UNIT = re.compile(r"^(?:KRW)?(십억|억|백만|천)?(?:원|USD|US\$|달러|엔|JPY|위안|CNY|RMB|EUR|유로)", re.I)
+_TAG_PERIOD = re.compile(r"^(C|P|BP)FY(\d{4})d(FY|HY|TQ|FQ)(A|Q)?$")
+_TAG_PART = re.compile(r"_(?=(?:ifrs-full|dart|entity\d+)_)")     # a member token may hold "_" (udf_NOTE_...)
+_TAG_BREAKDOWN = {"SegmentsAxis": "tag_segment", "GeographicalAreasAxis": "tag_region",
+                  "ProductsAndServicesAxis": "tag_product"}
+# IFRS's kinds of sale on the products axis: a breakdown by kind, not by product line.
+_TAG_KIND = re.compile(r"^(SalesOfGoods|RenderingOfServices|Royalties|Rental|Interest|Dividend|Construction|"
+                       r"Commission|FeeAndCommission|OtherRevenue|Other(Goods|Services)?Member)")
+_TAG_ALLOWED = {"ConsolidatedAndSeparateFinancialStatementsAxis", "SegmentConsolidationItemsAxis"}
+_TAG_GROSS = {"OperatingSegmentsMember", "ReportableSegmentsMember"}
+_TAG_ADJUST = {"EliminationOfIntersegmentAmountsMember", "MaterialReconcilingItemsMember", "ReconcilingItemsMember",
+               "UnallocatedAmountsMember", "CorporateMember"}
+
+
+def parse_tag_context(ctx: str):
+    """(when, span, {axis: member}) of an ACONTEXT, or None for an instant or an
+    unknown period. "C" is the report's period, "P"/"BP" earlier ones; "A" a
+    cumulative span, "Q" three months, an annual "FY" cumulative."""
+    head, _sep, rest = ctx.partition("_")
+    m = _TAG_PERIOD.match(head)
+    if not m:
+        return None
+    when = "cur" if m.group(1) == "C" else "prev"
+    span = "q" if m.group(4) == "Q" else "ytd" if (m.group(4) == "A" or m.group(3) == "FY") else None
+    dims, axis = {}, None
+    for part in _TAG_PART.split("_" + rest):
+        ns, _sep, name = part.lstrip("_").partition("_")
+        if not name:
+            continue
+        if name.endswith("Axis"):
+            axis = name
+        elif axis is not None:
+            dims[axis] = f"{ns}_{name}" if ns.startswith("entity") else name
+            axis = None
+    return when, span, dims
+
+
+def _tag_cells(table: str):
+    """(first row, last row, first column, last column, attrs, body) of every
+    cell of a table, laid out as docs._grid does (row / column spans resolved)."""
+    out, carry = [], {}
+    for r, tr in enumerate(docs._TR.findall(table)):
+        col = 0
+        for attrs, body in docs._CELL_TAG.findall(tr):
+            while carry.get(col, 0) > 0:
+                col += 1
+            spans = {k.upper(): int(v) for k, v in docs._SPAN.findall(attrs)}
+            width, height = max(1, spans.get("COLSPAN", 1)), max(1, spans.get("ROWSPAN", 1))
+            out.append((r, r + height - 1, col, col + width - 1, attrs, body))
+            if height > 1:
+                for c in range(col, col + width):
+                    carry[c] = height
+            col += width
+        for c in list(carry):
+            carry[c] -= 1
+            if carry[c] <= 0:
+                del carry[c]
+    return out
+
+
+def _member_stem(member: str) -> str:
+    """"entity00106641_KusMmeberOfAmericaMemberOf..." -> "Kus";
+    "ifrs-full CountryOfDomicileMember" -> "CountryOfDomicile"."""
+    name = member.split("_", 1)[-1]
+    first = re.split(r"M(?:em|me)ber", name)[0]
+    return first if first else name
+
+
+def _money_unit(text: str) -> float | None:
+    """The multiplier of the last unit caption of amounts in `text` (spaces
+    removed): "(단위: 백만원)" 1e6. None without one -- "단위: %", "단위: 천주"
+    and a sentence with "영업단위" say nothing about the amounts."""
+    for u in reversed(re.findall(r"단위[:：]?([^)\]]{1,15})", text)):
+        m = _MONEY_UNIT.match(u)
+        if m:
+            return {"십억": 1e9, "억": 1e8, "백만": 1e6, "천": 1e3}.get(m.group(1) or "", 1.0)
+    return None
+
+
+def tag_table_candidates(table: str, unit: float | None, fs_div: str = "CFS") -> list[Candidate]:
+    """Candidates of one tagged table: per breakdown axis (segments, regions,
+    products) and period, an item per member -- its own amount, else its gross
+    amount plus its own eliminations (기아: each region's 영업부문 and
+    부문간제거한금액) -- with the table-level eliminations and reconciling items
+    as adjustments and the revenue without a member as the total. A member's
+    tagged operating income (dart_OperatingIncomeLoss) goes with it. `unit`:
+    the table's caption when it is one of amounts ("단위: 백만원" -- what the
+    cells are shown in), None without one: each cell's ADECIMAL then.
+
+    The member names are the table's (_tag_names)."""
+    cells = _tag_cells(table)
+    labels = [(r0, r1, c0, c1, _clean(body)) for r0, r1, c0, c1, attrs, body in cells
+              if "ACONTEXT" not in attrs and docs._amount(body) is None and _clean(body)]
+
+    def path(r, c):
+        above = [(r0, t) for r0, r1, c0, c1, t in labels if c0 <= c <= c1 and r1 < r]
+        left = [(c0, t) for r0, r1, c0, c1, t in labels if r0 <= r <= r1 and c1 < c]
+        return [t for _k, t in sorted(above)] + [t for _k, t in sorted(left)]
+
+    want = "SeparateMember" if fs_div == "OFS" else "ConsolidatedMember"
+    facts = []                       # (when, span, dims, value, label path)
+    op_facts = []
+    for r0, _r1, c0, _c1, attrs, body in cells:
+        code = re.search(r'ACODE="([^"]*)"', attrs)
+        ctx = re.search(r'ACONTEXT="([^"]*)"', attrs)
+        if not code or not ctx or (code.group(1) not in _TAG_REVENUE and code.group(1) != _TAG_OP):
+            continue
+        parsed = parse_tag_context(ctx.group(1))
+        v = docs._amount(body)
+        if parsed is None or v is None:
+            continue
+        when, span, dims = parsed
+        if dims.get("ConsolidatedAndSeparateFinancialStatementsAxis", want) != want:
+            continue
+        dec = re.search(r'ADECIMAL="(-?\d+)"', attrs)
+        scale = unit if unit is not None else 10.0 ** -int(dec.group(1)) if dec else 1.0
+        if code.group(1) == _TAG_OP:
+            op_facts.append((when, span, dims, v * scale))
+        else:
+            facts.append((when, span, dims, v * scale, path(r0, c0)))
+    out = []
+    for axis, source in _TAG_BREAKDOWN.items():
+        mine = [f for f in facts if axis in f[2] and set(f[2]) - {axis} <= _TAG_ALLOWED]
+        if not mine:
+            continue
+        rest = [f for f in facts if axis not in f[2] and set(f[2]) <= _TAG_ALLOWED]
+        members = list(dict.fromkeys(f[2][axis] for f in mine))
+        # A member whose name says it is part of another present member
+        # ("MemoryMemberOfDsSegmentsMember"): the parent's amount holds it.
+        stems = {m: _member_stem(m) for m in members}
+        parts = {m for m in members for n in members
+                 if n != m and f"Of{stems[n]}M" in m.split("_", 1)[-1]}
+        if axis == "ProductsAndServicesAxis" and sum(1 for m in members if _TAG_KIND.match(m.split("_", 1)[-1])) * 2                 > len(members):
+            continue                 # kinds of sale, standard or wrapped in the filer's own member (기아)
+        names = _tag_names(mine, axis, members)
+        for when, span in dict.fromkeys((f[0], f[1]) for f in mine):
+            items, adjust, total, ops = [], [], None, {}
+            for m in members:
+                if m in parts:
+                    continue
+                if m in _TAG_ADJUST or m == "EliminationOfIntersegmentAmountsMember":
+                    adjust += [(_ADJ_NAMES.get(m, "조정 항목"), f[3]) for f in mine
+                               if f[0] == when and f[1] == span and f[2][axis] == m
+                               and f[2].get("SegmentConsolidationItemsAxis") is None]
+                    continue
+                vals = [f for f in mine if f[0] == when and f[1] == span and f[2][axis] == m]
+                plain = [f[3] for f in vals if "SegmentConsolidationItemsAxis" not in f[2]]
+                gross = [f[3] for f in vals if f[2].get("SegmentConsolidationItemsAxis") in _TAG_GROSS]
+                own_adj = [f[3] for f in vals if f[2].get("SegmentConsolidationItemsAxis") in _TAG_ADJUST]
+                if plain:
+                    items.append((names[m], plain[0]))
+                elif gross:
+                    items.append((names[m], gross[0] + sum(own_adj)))
+                else:
+                    continue
+                # The member's operating income: its own, else the segments' (gross) one.
+                op = [f for f in op_facts if f[0] == when and f[1] == span and f[2].get(axis) == m
+                      and set(f[2]) - {axis} <= _TAG_ALLOWED]
+                own = [f[3] for f in op if "SegmentConsolidationItemsAxis" not in f[2]] or \
+                    [f[3] for f in op if f[2].get("SegmentConsolidationItemsAxis") in _TAG_GROSS]
+                if own:
+                    ops[names[m]] = own[0]
+            for f in rest:
+                if f[0] != when or f[1] != span:
+                    continue
+                ci = f[2].get("SegmentConsolidationItemsAxis")
+                if ci in _TAG_ADJUST:
+                    adjust.append((_ADJ_NAMES.get(ci, "조정 항목"), f[3]))
+                elif ci is None and total is None:
+                    total = f[3]
+            if len(items) >= 2:
+                out.append(Candidate(source, items, adjust, total, label=f"tag {axis}", ops=ops, when=when,
+                                     span=span))
+    return out
+
+
+def _tag_names(facts, axis: str, members: list[str]) -> dict:
+    """Per member, its name from the table: the labels over or beside all its
+    cells that not every member's cells share (기아: "KUS" under
+    "지역 > 외국 > 북중미"), the deepest one; the member's own token when the
+    table names none."""
+    shared: dict = {}
+    for m in members:
+        paths = [f[4] for f in facts if f[2][axis] == m]
+        common = set(paths[0])
+        for p in paths[1:]:
+            common &= set(p)
+        shared[m] = (paths[0], common)
+    everywhere = set.intersection(*(c for _p, c in shared.values())) if len(shared) > 1 else set()
+    out = {}
+    for m, (first, common) in shared.items():
+        own = [t for t in first if t in common and t not in everywhere and not _is_axis(t) and not _ADJ.search(t)
+               and not _PERIOD.match(t.replace(" ", ""))]
+        # IFRS's "all other segments" has no name of the filer's: "기타".
+        out[m] = own[-1] if own else _OTHER_NAME if m == _OTHER_MEMBER else _member_stem(m)
+    return out
+
+
+def tag_candidates(doc: str, fs_div: str = "CFS") -> list[Candidate]:
+    """Candidates of every tagged table of a document with revenue by segment,
+    region or product (the note tables mostly, the business section's too)."""
+    out = []
+    for tm in _tagged_tables(doc):
+        t = tm.group(0)
+        # The unit: a caption of amounts in the table, else the last one before
+        # it; any other "단위" ("단위: %", "천주", "영업단위") does not override
+        # the cells' own ADECIMAL (review_agy P1-6).
+        unit = _money_unit(_SPLIT.sub("", docs._text(t)))
+        if unit is None:
+            unit = _money_unit(_SPLIT.sub("", docs._text(doc[max(0, tm.start() - _TAG_CONTEXT):tm.start()])))
+        out.extend(tag_table_candidates(t, unit, fs_div))
+    return out
+
+
+def _tagged_tables(doc: str):
+    """The tables with tagged revenue cells on a breakdown axis."""
+    for tm in docs._TABLE.finditer(doc):
+        t = tm.group(0)
+        if "ACONTEXT" in t and any(a in t for a in _TAG_BREAKDOWN) and any(c in t for c in _TAG_REVENUE):
+            yield tm
+
+
+# ---- the saved slice of a document ------------------------------------------------
+#
+# A document.xml is 3-15 MB and only the parsed candidates used to be kept, so
+# every change of the readers asked DART for every document again (review_agy
+# P1-5). What the readers look at is a small part: the business section's two
+# sections, the places of the segment note (consolidated and separate), and the
+# tagged tables with the text before them. That part is saved gzipped under
+# cache/dart/seg_doc/ and a later parser version reads it instead of the API.
+# The slice keeps every <TITLE> (the region finders go by them) and the kept
+# parts in their order, each part whole, so the finders give the same regions
+# on the slice as on the document.
+
+_SLICE_MARK = re.compile(r"^<!--seg_slice v(\d+)-->")
+_SLICE_CUT = "\n<!--cut-->\n"
+
+
+def slice_document(doc: str) -> str:
+    """The parts of a document the segment readers use (see above), in order."""
+    spans = [(m.start(), m.end()) for m in docs._TITLE.finditer(doc)]
+    spans += biz_spans(doc)
+    for consolidated in (True, False):
+        spans += segment_spans(doc, consolidated)
+    spans += [(max(0, tm.start() - _TAG_CONTEXT), tm.end()) for tm in _tagged_tables(doc)]
+    merged: list[list[int]] = []
+    for a, b in sorted(spans):
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    parts = []
+    for a, b in merged:
+        part = doc[a:b]
+        # A part cut inside a table: closed, so it does not run on into the
+        # next part's tables when the whole slice is scanned for tagged ones.
+        if part.upper().rfind("<TABLE") > part.upper().rfind("</TABLE>"):
+            part += "</TABLE>"
+        parts.append(part)
+    return _SLICE_CUT.join(parts)
+
+
+def _slice_path(cache_dir: str, rcept_no: str) -> str:
+    return os.path.join(cache_dir, "seg_doc", rcept_no[:4], f"{rcept_no}.xml.gz")
+
+
+def load_slice(cache_dir: str, rcept_no: str) -> str | None:
+    """The saved slice ("" when DART has no document for the receipt); None
+    when there is none of this SLICE_VERSION or it cannot be read."""
+    try:
+        with gzip.open(_slice_path(cache_dir, rcept_no), "rt", encoding="utf-8") as f:
+            text = f.read()
+    except (OSError, EOFError, UnicodeDecodeError):       # gzip.BadGzipFile is an OSError
+        return None
+    m = _SLICE_MARK.match(text)
+    if not m or int(m.group(1)) != SLICE_VERSION:
+        return None
+    return text[m.end():]
+
+
+def save_slice(cache_dir: str, rcept_no: str, text: str) -> None:
+    path = _slice_path(cache_dir, rcept_no)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with gzip.open(tmp, "wt", encoding="utf-8") as f:
+            f.write(f"<!--seg_slice v{SLICE_VERSION}-->{text}")
+        os.replace(tmp, path)
+    except OSError:
+        logger.warning("Could not cache DART document slice %s", path, exc_info=True)
 
 
 # ---- fetching ---------------------------------------------------------------------
@@ -1151,7 +1800,7 @@ def _save(path, data) -> None:
 
 def _to_json(cands):
     return [{"source": c.source, "items": c.items, "adjust": c.adjust, "total": c.total, "label": c.label,
-             "ops": c.ops, "when": c.when, "span": c.span, "months": c.months} for c in cands]
+             "ops": c.ops, "when": c.when, "span": c.span, "months": c.months, "hint": c.hint} for c in cands]
 
 
 def _from_json(data):
@@ -1164,15 +1813,27 @@ def _from_json(data):
             m = _LABEL_DATES.match(d.get("label", ""))
             months = _months(m.group(1), m.group(2)) if m else None
         out.append(Candidate(d["source"], [tuple(x) for x in d["items"]], [tuple(x) for x in d["adjust"]], d["total"],
-                             d.get("label", ""), d.get("ops") or {}, d.get("when"), d.get("span"), months))
+                             d.get("label", ""), d.get("ops") or {}, d.get("when"), d.get("span"), months,
+                             d.get("hint")))
     return out
 
 
-def fetch_xbrl(client, rcept_no: str, reprt_code: str, fs_div: str, cache_dir: str) -> list[Candidate]:
+def fetch_xbrl(client, rcept_no: str, reprt_code: str, fs_div: str, cache_dir: str, accept=None) -> list[Candidate]:
     """XBRL candidates of a filing; only the parsed result is cached (the
-    package itself is up to ~1 MB). DART's "no file" answer counts as none."""
+    package itself is up to ~1 MB). DART's "no file" answer counts as none.
+
+    `accept(candidates) -> bool`: whether a result cached by the parser version
+    before this one will do (it has no segments at all, or they reconcile). It
+    is then kept as this version's, so a version that only adds a reading
+    (13: "all other segments") asks DART again only for the packages whose
+    result did not add up."""
     path = _cache_path(cache_dir, f"xbrl_{fs_div}", rcept_no)
     data = _cached(path)
+    if data is None and accept is not None:
+        old = _cached(_cache_path(cache_dir, f"xbrl_{fs_div}", rcept_no, PREVIOUS_PARSER_VERSION))
+        if isinstance(old, list) and accept(_from_json(old)):
+            data = old
+            _save(path, data)
     if data is None:
         try:
             body = client.get_bytes("fnlttXbrl.xml", {"rcept_no": rcept_no, "reprt_code": reprt_code})
@@ -1187,33 +1848,43 @@ def fetch_xbrl(client, rcept_no: str, reprt_code: str, fs_div: str, cache_dir: s
     return _from_json(data)
 
 
-def fetch_document(client, rcept_no: str, fs_div: str, cache_dir: str) -> tuple[list[Candidate], bool, list[Candidate]]:
+def fetch_document(client, rcept_no: str, fs_div: str, cache_dir: str) \
+        -> tuple[list[Candidate], bool, list[Candidate], list[Candidate]]:
     """Document candidates of a filing: the segment note's, the single-segment
-    flag and the business section's (biz_candidates); the parsed result is
-    cached, not the document."""
+    flag, the business section's (biz_candidates) and the XBRL-tagged cells'
+    (tag_candidates). The parsed result is cached per parser version, and the
+    slice of the document the readers use (slice_document) once: a result of
+    another version is read again from the slice, DART is asked only for a
+    document that has none."""
     path = _cache_path(cache_dir, f"doc_{fs_div}", rcept_no, DOC_PARSER_VERSION)
     data = _cached(path)
     if data is None:
-        try:
-            body = client.get_bytes("document.xml", {"rcept_no": rcept_no})
-            with zipfile.ZipFile(io.BytesIO(body)) as zf:
-                names = zf.namelist()
-                main = next((n for n in names if n == f"{rcept_no}.xml"), names[0])
-                doc = docs.decode_document(zf.read(main))
-            cands, single = [], False
-            for region in segment_regions(doc, fs_div == "CFS"):
-                rc, rs = document_candidates(region)
-                cands += rc
-                single = single or rs
-            data = {"cands": _to_json(cands), "single": single, "biz": _to_json(biz_candidates(doc))}
-        except DartApiError as e:
-            if not is_no_file(e):
-                raise
-            data = {"cands": [], "single": False, "biz": []}
-        except (zipfile.BadZipFile, IndexError, KeyError) as e:
-            raise DartApiError("bad_reply", f"document.xml of {rcept_no} is not a readable zip") from e
+        doc = load_slice(cache_dir, rcept_no)
+        if doc is None:
+            try:
+                body = client.get_bytes("document.xml", {"rcept_no": rcept_no})
+                with zipfile.ZipFile(io.BytesIO(body)) as zf:
+                    names = zf.namelist()
+                    main = next((n for n in names if n == f"{rcept_no}.xml"), names[0])
+                    doc = slice_document(docs.decode_document(zf.read(main)))
+            except DartApiError as e:
+                if not is_no_file(e):
+                    raise
+                doc = ""                   # DART has no document: an empty slice, not asked again
+            except (zipfile.BadZipFile, IndexError, KeyError) as e:
+                raise DartApiError("bad_reply", f"document.xml of {rcept_no} is not a readable zip") from e
+            save_slice(cache_dir, rcept_no, doc)
+        # Always read from the slice, so the first reading and a later one agree.
+        cands, single = [], False
+        for region in segment_regions(doc, fs_div == "CFS"):
+            rc, rs = document_candidates(region)
+            cands += rc
+            single = single or rs
+        data = {"cands": _to_json(cands), "single": single, "biz": _to_json(biz_candidates(doc)),
+                "tags": _to_json(tag_candidates(doc, fs_div))}
         _save(path, data)
-    return _from_json(data["cands"]), bool(data["single"]), _from_json(data.get("biz") or [])
+    return (_from_json(data["cands"]), bool(data["single"]), _from_json(data.get("biz") or []),
+            _from_json(data.get("tags") or []))
 
 
 # ---- storing ----------------------------------------------------------------------
@@ -1223,20 +1894,29 @@ def store_segments(conn, corp_code: str, fiscal_year: int, fiscal_q: int, rcept_
                    level: str = "segment") -> int:
     """Replace the period's rows of this receipt at `level` ("segment", or
     "product" for the business section's product breakdown); returns the
-    items stored. Not committed."""
+    items stored. Not committed.
+
+    ``axis`` is the chosen reading's (Candidate.axis): what the items are,
+    whatever the level and the source. ``basis`` None with status "ok": the
+    amounts reconcile but the table does not say for which period (check).
+    ``op_source``: where an operating income came from -- the reading's own
+    source, or the one it was filled in from (fill_ops)."""
     conn.execute("DELETE FROM segment_rev WHERE corp_code = ? AND fiscal_year = ? AND fiscal_q = ? AND rcept_no = ? "
                  "AND level = ?", (corp_code, fiscal_year, fiscal_q, rcept_no, level))
     if chosen is None:
         return 0
     rows = []
+    axis = chosen.axis()
     for name, v in chosen.items:
-        rows.append((name, _segment_code(conn, corp_code, name, fiscal_year), v, chosen.ops.get(name)))
+        op = chosen.ops.get(name)
+        rows.append((name, _segment_code(conn, corp_code, name, fiscal_year), v, op,
+                     None if op is None else chosen.op_sources.get(name, source)))
     for name, v in chosen.adjust:
-        rows.append((name, "_adj", v, None))
+        rows.append((name, "_adj", v, None, None))
     if residual and abs(residual) > 0:
-        rows.append(("기타·조정(차액)", "_residual", residual, None))
+        rows.append(("기타·조정(차액)", "_residual", residual, None, None))
     seen = set()
-    for raw, code, rev, op in rows:
+    for raw, code, rev, op, op_source in rows:
         key = raw
         n = 2
         while key in seen:                  # the same name twice in one table (sub-rows)
@@ -1244,9 +1924,10 @@ def store_segments(conn, corp_code: str, fiscal_year: int, fiscal_q: int, rcept_
         seen.add(key)
         conn.execute(
             "INSERT OR REPLACE INTO segment_rev(corp_code, fiscal_year, fiscal_q, level, segment_raw, segment_code, "
-            "revenue, op_income, basis, source, check_status, rcept_no, rcept_dt) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (corp_code, fiscal_year, fiscal_q, level, key, code, rev, op, basis, source, status, rcept_no, rcept_dt))
+            "revenue, op_income, basis, source, check_status, rcept_no, rcept_dt, axis, op_source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (corp_code, fiscal_year, fiscal_q, level, key, code, rev, op, basis, source, status, rcept_no, rcept_dt,
+             axis, op_source))
     return len(chosen.items)
 
 

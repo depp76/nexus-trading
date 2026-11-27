@@ -10,7 +10,7 @@ Only parses arguments and calls ``data.dart.sync.run_sync`` (collection) or
     python tools/dart_sync.py --show 005930 [--as-of 2025-11-10]   # quarterly growth table
     python tools/dart_sync.py --issues               # unmapped accounts, fs_div changes, ...
     python tools/dart_sync.py --segments [--tickers 005930 ...]   # revenue by segment (stage 4)
-    python tools/dart_sync.py --segment-report [--tickers ...]    # check results + names to map
+    python tools/dart_sync.py --segment-report [--tickers ...]    # check results, passed-then-failed, names to map
 """
 import argparse
 import logging

@@ -49,3 +49,6 @@ cache/
 
 # Saved Trend Following backtest reports (runtime output).
 reports/
+
+# AI code-review notes (review_*.md), kept locally only.
+reviews/
