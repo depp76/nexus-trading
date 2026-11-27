@@ -41,7 +41,7 @@ import sqlite3
 # 12 (2026-11-27, review_codex 5): segments read again once -- order-book, cost and
 #   customer tables are no longer taken for revenue breakdowns, a candidate is checked
 #   against its own period only, a product sold by several segments is added up.
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS company (
@@ -308,6 +308,13 @@ def _migrate(conn: sqlite3.Connection, old: int | None) -> None:
         # skips a receipt already read, so a new parser version alone would leave
         # the misread rows (order books, cost tables, customers) in place.
         conn.execute("DELETE FROM seg_fetch")
+    elif old is not None and old < 13:
+        # 13: segment note tables whose labels run over several row columns, and a
+        # region's own eliminations inside its total (기아 2025-2026): the periods
+        # the note reader decided -- or failed to -- are read again. Periods from
+        # the XBRL package or the business section never reached the note tables.
+        conn.execute("DELETE FROM seg_fetch WHERE status IN ('review', 'sum_mismatch') "
+                     "OR source IN ('html_segment', 'html_product', 'single')")
     if old is not None and old < 8:
         # A correction marked done although the numbers stored for it came from an
         # older receipt (closed after the 7-day wait before schema 8) is asked
