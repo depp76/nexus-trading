@@ -5,8 +5,8 @@ KOSDAQ stock, laid out as the approved mockup
 
     [기준 2026 3분기보고서 · 접수 … · 연결] [기간 …] [단위 억원]   [분기|연간]   DART 11-26 19:42
     [매출] [영업이익 (이익률)] [지배주주순이익] [최근 4분기 합계 매출]
-    [실적: 분기 | 연간 -- revenue · margin chart | results table]
-    [사업부별 매출 비중 chart]              [사업부별 매출 · 증감 table + notes]
+    [실적: 분기 | 연간 -- revenue · margin chart | results table
+           ── 사업부별: 제품별 | 부문별 -- revenue by line chart | segment table, notes ]   (same periods)
     footnotes
 
 The data is read once, off the UI thread (threads.dart_threads), the first
@@ -34,13 +34,17 @@ from threads.dart_threads import FinancialsLoadThread
 from ui import dart_financials_model as fm
 from ui.colors import LOSS, OK, PROFIT, SERIES_PALETTE, WARN
 from ui.common import FONT_BODY, FONT_CAPTION, FONT_HEADING, KpiCard, create_font, setup_table
-from ui.theme import ACCENT, INK_ON_LIGHT, LINE, SURFACE, TEXT, TEXT_EMPTY, TEXT_MUTED
+from ui.theme import ACCENT, LINE, SURFACE, TEXT, TEXT_EMPTY, TEXT_MUTED
 
 logger = logging.getLogger(__name__)
 
 BAR_COLOR = SERIES_PALETTE[6]          # revenue bars: a calm blue, not the PROFIT "gain" color
 SEGMENT_COLORS = SERIES_PALETTE
 _CHECK_KIND = {"ok": OK, "sum_mismatch": WARN, "review": TEXT_EMPTY, "na": TEXT_EMPTY}
+_SOURCE_LABELS = {"biz_product": ("사업의 내용 제품표", "business section, products"),
+                  "biz_segment": ("사업의 내용 부문표", "business section, segments"),
+                  "xbrl": ("XBRL", "XBRL"), "html_segment": ("주석 부문표", "segment note"),
+                  "html_product": ("주석 제품표", "note's product table"), "single": ("단일부문", "single segment")}
 
 
 def _pct(v, digits: int = 1) -> str:
@@ -53,6 +57,81 @@ def _color(v) -> str:
     return PROFIT if v > 0 else LOSS if v < 0 else TEXT_MUTED
 
 
+class _PinnedScroll:
+    """A table's sideways scroll bar under its period columns only: Qt's own
+    bar runs under the frozen item names (the vertical header) too, so it is
+    switched off and this one mirrors it. Kept at the right end (the newest
+    period) until the user scrolls; ``pin()`` after a refill."""
+
+    def __init__(self, table: QTableWidget):
+        self.table = table
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        inner = table.horizontalScrollBar()      # still tracks range / value with the policy off
+        self.bar = QScrollBar(Qt.Orientation.Horizontal)
+        self.lead, self.tail = QWidget(), QWidget()
+        self.layout = QHBoxLayout()
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(0)
+        self.layout.addWidget(self.lead)
+        self.layout.addWidget(self.bar, 1)
+        self.layout.addWidget(self.tail)
+        self.at_end = True
+        inner.rangeChanged.connect(self.sync)
+        inner.actionTriggered.connect(self.release)       # wheel on the table
+        self.bar.actionTriggered.connect(self.release)    # the bar itself
+        inner.valueChanged.connect(self.bar.setValue)
+        self.bar.valueChanged.connect(inner.setValue)
+        table.verticalHeader().geometriesChanged.connect(self.sync)
+        table.verticalScrollBar().rangeChanged.connect(self.sync)
+        self.sync()
+
+    def release(self, *_args) -> None:
+        self.at_end = False
+
+    def pin(self) -> None:
+        self.at_end = True
+        self.sync()
+
+    def sync(self, *_args) -> None:
+        """Mirror Qt's bar; until the user scrolls, keep it at the right end:
+        the column widths (and so the range) settle only once the table is
+        laid out, which can be after the fill."""
+        t, bar = self.table, self.bar
+        inner = t.horizontalScrollBar()
+        if self.at_end:
+            inner.setValue(inner.maximum())
+        bar.setRange(inner.minimum(), inner.maximum())
+        bar.setPageStep(inner.pageStep())
+        bar.setSingleStep(inner.singleStep())
+        bar.setValue(inner.value())
+        frame = t.frameWidth()
+        vh = t.verticalHeader()
+        self.lead.setFixedWidth(frame + (vh.width() if vh.isVisibleTo(t) else 0))
+        vbar = t.verticalScrollBar()
+        self.tail.setFixedWidth(frame + (vbar.sizeHint().width() if vbar.maximum() > 0 else 0))
+        bar.setVisible(inner.maximum() > 0)
+
+
+def _select_column(table: QTableWidget, col) -> None:
+    """Select one period column (selection only: no scroll, no current cell), or none."""
+    table.clearSelection()
+    model = table.selectionModel()
+    if col is not None and model is not None and 0 <= col < table.columnCount():
+        model.select(table.model().index(0, col),
+                     QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Columns)
+
+
+def _quarter_ticks(ax, keys) -> None:
+    """The quarterly x axis of both charts: the year under its first quarter
+    (or the first column), a faint line between years."""
+    xs = list(range(len(keys)))
+    ax.set_xticks(xs)
+    ax.set_xticklabels([str(fy) if fq == 1 or x == 0 else "" for x, (fy, fq) in zip(xs, keys)])
+    for x, (_fy, fq) in zip(xs, keys):
+        if fq == 1 and x:
+            ax.axvline(x - 0.5, color=TEXT_EMPTY, linewidth=0.6, alpha=0.5)
+
+
 class StockFinancialsTab(QWidget):
     """The tab; ``ensure_loaded()`` starts the read the first time it is shown."""
 
@@ -62,6 +141,7 @@ class StockFinancialsTab(QWidget):
         self._thread: FinancialsLoadThread | None = None
         self._data: dict | None = None
         self._mode = "q"                      # "q" quarterly | "y" annual
+        self._seg_level: str | None = None     # "product" | "segment"; None until the data is in
         self._quarters: list = []
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -128,7 +208,6 @@ class StockFinancialsTab(QWidget):
         col.addLayout(self._build_kpis())
 
         col.addWidget(self._build_results_card())
-        col.addLayout(self._build_segments())
         foot = QLabel(tr("† 4분기 = 사업보고서 연간값 − 3분기 누적(계산값). ⓡ 정정보고서 반영. "
                          "‡ 사업보고서 이후 정정된 3분기로 계산한 값. YoY = 전년 동기 대비, QoQ = 직전 분기 대비. "
                          "출처 OpenDART 정기공시, 접수일 기준 저장.",
@@ -147,7 +226,9 @@ class StockFinancialsTab(QWidget):
     def _build_results_card(self) -> QFrame:
         """One '실적' card: the revenue / margin chart and the results table
         show the same periods, so they share one head -- the title, a note
-        on what the chart marks, and the 분기 | 연간 switch that drives both."""
+        on what the chart marks, and the 분기 | 연간 switch that drives both
+        -- and under them the segment section on the same periods (user
+        direction 2026-11-27)."""
         card, self._table_title, box = self._card(tr("실적", "Results"))
         box.removeWidget(self._table_title)
         head = QHBoxLayout()
@@ -169,7 +250,7 @@ class StockFinancialsTab(QWidget):
         self._canvas.setStyleSheet("border: none;")
         self._canvas.setMinimumHeight(260)
         self._canvas.mpl_connect("motion_notify_event", self._on_chart_motion)
-        self._canvas.mpl_connect("figure_leave_event", lambda _e: self._set_chart_marker(None))
+        self._canvas.mpl_connect("figure_leave_event", lambda _e: self._hover(None))
         body.addWidget(self._canvas, 5)
         self._table = QTableWidget()
         setup_table(self._table)
@@ -178,9 +259,12 @@ class StockFinancialsTab(QWidget):
         grid_box = QVBoxLayout()                 # the table with its scroll bar right under it
         grid_box.setSpacing(0)
         grid_box.addWidget(self._table, 1)
-        grid_box.addLayout(self._build_results_hbar())
+        self._results_scroll = _PinnedScroll(self._table)
+        self.results_hbar = self._results_scroll.bar
+        grid_box.addLayout(self._results_scroll.layout)
         body.addLayout(grid_box, 4)
         box.addLayout(body, 1)
+        self._build_segments_section(box)
         return card
 
     def _card(self, title: str):
@@ -296,11 +380,14 @@ class StockFinancialsTab(QWidget):
         if self._mode == "q":
             last_fy = self._quarters[-1]["fiscal_year"]
             rows = [q for q in self._quarters if q["fiscal_year"] >= last_fy - 4]
+            self._period_keys = [(r["fiscal_year"], r["fiscal_q"]) for r in rows]
         else:
             rows = fm.annual_rows(self._quarters)
+            self._period_keys = [(r["fiscal_year"], r["partial_q"] or 4) for r in rows]
         self._chart_title.setText("")
         self._draw_results_chart(rows)
         self._fill_results_table(rows)
+        self._refresh_segments()
 
     def _period_label(self, r) -> str:
         if self._mode == "q":
@@ -332,10 +419,7 @@ class StockFinancialsTab(QWidget):
         ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _p: f"{v:,.0f}"))
         ax.set_xticks(xs)
         if self._mode == "q":
-            ax.set_xticklabels([str(r["fiscal_year"]) if r["fiscal_q"] == 1 else "" for r in rows])
-            for x, r in zip(xs, rows):
-                if r["fiscal_q"] == 1 and x:
-                    ax.axvline(x - 0.5, color=TEXT_EMPTY, linewidth=0.6, alpha=0.5)
+            _quarter_ticks(ax, [(r["fiscal_year"], r["fiscal_q"]) for r in rows])
         else:
             ax.set_xticklabels([self._period_label(r) for r in rows])
         margins = [(x, r["op_margin"] * 100) for x, r in zip(xs, rows) if r["op_margin"] is not None]
@@ -349,8 +433,10 @@ class StockFinancialsTab(QWidget):
         ax.legend(handles=[Patch(color=BAR_COLOR, label=tr("매출", "Revenue")),
                            Patch(color=LOSS, label=tr("영업적자", "Operating loss"))],
                   loc="upper left", fontsize=FONT_CAPTION, frameon=False)
+        ax.set_xlim(-0.6, max(len(rows) - 0.4, 0.6))      # the segment chart uses the same range
         self._build_chart_marker(ax, ax2 if margins else None, rows, div)
         fig.tight_layout()
+        self._results_ax = ax
         self._canvas.draw_idle()
 
     # ---- marker (hover) on the results chart ---------------------------------------
@@ -376,10 +462,16 @@ class StockFinancialsTab(QWidget):
     def _on_chart_motion(self, event) -> None:
         rows = getattr(self, "_marker_rows", None)
         if not rows or event.inaxes is None or event.xdata is None:
-            self._set_chart_marker(None)
+            self._hover(None)
             return
         idx = int(round(event.xdata))
-        self._set_chart_marker(idx if 0 <= idx < len(rows) and abs(event.xdata - idx) <= 0.45 else None)
+        self._hover(idx if 0 <= idx < len(rows) and abs(event.xdata - idx) <= 0.45 else None)
+
+    def _hover(self, idx) -> None:
+        """Mark period ``idx`` (one index for both charts and tables), or none."""
+        self._set_chart_marker(idx)
+        if getattr(self, "_seg_marker_sv", None) is not None:
+            self._set_seg_marker(idx)
 
     def _set_chart_marker(self, idx) -> None:
         """Show the marker on period ``idx`` (an index into the chart's rows,
@@ -415,13 +507,7 @@ class StockFinancialsTab(QWidget):
         box.set_horizontalalignment("right" if right else "left")
         box.set_position((-10 if right else 10, -8))
         box.set_visible(True)
-        # The same period in the table (selection only: no scroll, no current cell).
-        t = self._table
-        model = t.selectionModel()
-        if model is not None and idx < t.columnCount():
-            t.clearSelection()
-            model.select(t.model().index(0, idx),
-                         QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Columns)
+        _select_column(self._table, idx)        # the same period in the table
         self._canvas.draw_idle()
 
     def _fill_results_table(self, rows) -> None:
@@ -475,57 +561,7 @@ class StockFinancialsTab(QWidget):
             t.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectColumns)
         finally:
             t.setUpdatesEnabled(True)
-        self._hbar_at_end = True                 # newest in view until the user scrolls
-        self._sync_results_hbar()
-
-    def _build_results_hbar(self) -> QHBoxLayout:
-        """The results table's sideways scroll bar, under the period columns
-        only: Qt's own bar runs under the frozen item names (the vertical
-        header) too, so it is switched off and this one mirrors it."""
-        t = self._table
-        t.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        inner = t.horizontalScrollBar()          # still tracks range / value with the policy off
-        self.results_hbar = bar = QScrollBar(Qt.Orientation.Horizontal)
-        self._hbar_lead = QWidget()
-        self._hbar_tail = QWidget()
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(0)
-        row.addWidget(self._hbar_lead)
-        row.addWidget(bar, 1)
-        row.addWidget(self._hbar_tail)
-        self._hbar_at_end = True
-        inner.rangeChanged.connect(self._sync_results_hbar)
-        inner.actionTriggered.connect(self._release_results_hbar)     # wheel on the table
-        bar.actionTriggered.connect(self._release_results_hbar)       # the bar itself
-        inner.valueChanged.connect(bar.setValue)
-        bar.valueChanged.connect(inner.setValue)
-        t.verticalHeader().geometriesChanged.connect(self._sync_results_hbar)
-        t.verticalScrollBar().rangeChanged.connect(self._sync_results_hbar)
-        self._sync_results_hbar()
-        return row
-
-    def _release_results_hbar(self, *_args) -> None:
-        self._hbar_at_end = False
-
-    def _sync_results_hbar(self, *_args) -> None:
-        """Mirror Qt's bar; until the user scrolls, keep it at the right end:
-        the column widths (and so the range) settle only once the table is
-        laid out, which can be after the fill."""
-        t, bar = self._table, self.results_hbar
-        inner = t.horizontalScrollBar()
-        if self._hbar_at_end:
-            inner.setValue(inner.maximum())
-        bar.setRange(inner.minimum(), inner.maximum())
-        bar.setPageStep(inner.pageStep())
-        bar.setSingleStep(inner.singleStep())
-        bar.setValue(inner.value())
-        frame = t.frameWidth()
-        vh = t.verticalHeader()
-        self._hbar_lead.setFixedWidth(frame + (vh.width() if vh.isVisibleTo(t) else 0))
-        vbar = t.verticalScrollBar()
-        self._hbar_tail.setFixedWidth(frame + (vbar.sizeHint().width() if vbar.maximum() > 0 else 0))
-        bar.setVisible(inner.maximum() > 0)
+        self._results_scroll.pin()               # newest in view until the user scrolls
 
     @staticmethod
     def _amt(v, div) -> str:
@@ -547,101 +583,248 @@ class StockFinancialsTab(QWidget):
 
     # ---- segments ----------------------------------------------------------------
 
-    def _build_segments(self) -> QHBoxLayout:
-        sv = fm.segment_view(self._data)
-        self.segment_data = sv
-        row = QHBoxLayout()
-        row.setSpacing(10)
-        chart_card, _t1, chart_box = self._card(tr("사업부별 매출 비중 (연간, 진행 중인 해는 최신 분기)",
-                                                   "Revenue share by segment (annual; the year in progress: "
-                                                   "latest quarter)"))
-        table_card, _t2, table_box = self._card(tr("사업부별 매출 · 증감", "Revenue by segment · change"))
-        row.addWidget(chart_card, 4)
-        row.addWidget(table_card, 5)
-        if not sv["columns"]:
-            for box in (chart_box, table_box):
-                lbl = QLabel(tr("사업부별 매출이 아직 없습니다 (tools/dart_sync.py --segments).",
-                                "No segment revenue yet (tools/dart_sync.py --segments)."))
-                lbl.setObjectName("muted")
-                lbl.setWordWrap(True)
-                box.addWidget(lbl)
-            return row
-        self._seg_fig = Figure(figsize=(4.8, 2.6), linewidth=0)
+    def _build_segments_section(self, box: QVBoxLayout) -> None:
+        """The segment section of the 실적 card (user direction 2026-11-27):
+        under a rule, a head (title, a caption on the view, the 제품별 | 부문별
+        switch when both breakdowns exist), the chart and the table with the
+        results' 5 : 4 split and the results' periods slot for slot (the
+        charts' plot areas aligned, one hover marks both), items down the
+        table's frozen side; notes under both."""
+        rule = QFrame()
+        rule.setFrameShape(QFrame.Shape.HLine)
+        rule.setStyleSheet(f"color: {LINE}; background: {LINE}; max-height: 1px; border: none;")
+        box.addWidget(rule)
+        self._seg_title = QLabel(tr("사업부별", "By segment"))
+        self._seg_title.setFont(create_font(FONT_HEADING, style_name="Semilight"))
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        head.addWidget(self._seg_title)
+        self._seg_caption = QLabel()
+        self._seg_caption.setObjectName("muted")
+        self._seg_caption.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
+        head.addWidget(self._seg_caption)
+        head.addStretch(1)
+        box.addLayout(head)
+        self.segment_data = fm.segment_view(self._data)
+        self._seg_empty = not self.segment_data["columns"]
+        self._seg_level = self.segment_data["level"]
+        self.level_buttons = {}
+        if len(self.segment_data["levels"]) > 1:
+            # Products (the business section's table) or segments: one breakdown
+            # for every period, picked here (user direction 2026-11-27).
+            self._seg_level_group = QButtonGroup(self)
+            for key, label in (("product", tr("제품별", "By product")), ("segment", tr("부문별", "By segment"))):
+                btn = QPushButton(label)
+                btn.setCheckable(True)
+                btn.setChecked(key == self._seg_level)
+                btn.setFont(create_font(FONT_BODY, style_name="Semilight"))
+                btn.clicked.connect(lambda _c, k=key: self.set_segment_level(k))
+                self._seg_level_group.addButton(btn)
+                head.addWidget(btn)
+                self.level_buttons[key] = btn
+        if self._seg_empty:
+            lbl = QLabel(tr("사업부별 매출이 아직 없습니다 (tools/dart_sync.py --segments).",
+                            "No segment revenue yet (tools/dart_sync.py --segments)."))
+            lbl.setObjectName("muted")
+            lbl.setWordWrap(True)
+            box.addWidget(lbl)
+            return
+        body = QHBoxLayout()
+        body.setSpacing(12)
+        self._seg_fig = Figure(figsize=(6.4, 2.8), linewidth=0)
         self._seg_canvas = FigureCanvas(self._seg_fig)
         self._seg_canvas.setStyleSheet("border: none;")
-        self._seg_canvas.setMinimumHeight(240)
-        chart_box.addWidget(self._seg_canvas, 1)
-        self._draw_segment_chart(sv)
+        self._seg_canvas.setMinimumHeight(260)
+        self._seg_canvas.mpl_connect("motion_notify_event", self._on_seg_motion)
+        self._seg_canvas.mpl_connect("figure_leave_event", lambda _e: self._hover(None))
+        body.addWidget(self._seg_canvas, 5)
         self.segment_table = QTableWidget()
         setup_table(self.segment_table, row_height=36)
         self.segment_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        table_box.addWidget(self.segment_table, 1)
+        self.segment_table.setMinimumHeight(260)
+        grid_box = QVBoxLayout()
+        grid_box.setSpacing(0)
+        grid_box.addWidget(self.segment_table, 1)
+        self._seg_scroll = _PinnedScroll(self.segment_table)
+        grid_box.addLayout(self._seg_scroll.layout)
+        body.addLayout(grid_box, 4)
+        box.addLayout(body, 1)
+        self._seg_notes = QLabel()
+        self._seg_notes.setObjectName("faint")
+        self._seg_notes.setWordWrap(True)
+        self._seg_notes.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
+        box.addWidget(self._seg_notes)
+
+    def set_segment_level(self, level: str) -> None:
+        """"product" or "segment": the breakdown the segment card shows."""
+        if level not in self.level_buttons or self._data is None:
+            return
+        self._seg_level = level
+        self.level_buttons[level].setChecked(True)
+        self._refresh_segments()
+
+    def _refresh_segments(self) -> None:
+        """Redraw the segment card for the current 분기 | 연간 mode."""
+        if self._mode == "q":
+            caption = tr("분기 매출액 · 누적 차이로 계산", "quarterly revenue, from cumulatives")
+        else:
+            caption = tr("연간 매출액 · 진행 중인 해는 누적(빗금)", "annual revenue; the year in progress cumulative (hatched)")
+        self._seg_caption.setText(caption)
+        if self._seg_empty:
+            return
+        sv = fm.segment_view(self._data, mode=self._mode, level=self._seg_level, keys=self._period_keys)
+        self.segment_data = sv
+        self._draw_segment_chart(sv)
         self._fill_segment_table(sv)
         notes = self._segment_notes(sv)
-        if notes:
-            lbl = QLabel(notes)
-            lbl.setObjectName("faint")
-            lbl.setWordWrap(True)
-            lbl.setFont(create_font(FONT_CAPTION, style_name="Semilight"))
-            table_box.addWidget(lbl)
-        return row
+        if not sv["has_values"]:
+            notes = tr("이 기준의 분기 자료가 없습니다 — 연간 보기나 다른 기준을 고르세요.",
+                       "No quarterly data on this breakdown: pick the annual view or the other breakdown.")
+        self._seg_notes.setText(notes)
 
     def _draw_segment_chart(self, sv) -> None:
+        """Revenue amount per segment, the segments side by side within each
+        period (user direction 2026-11-27: amounts, not shares, so each
+        segment's rise or fall reads across the periods). A period that is not
+        a full year (the year in progress) is hatched and paler: its amount is
+        a quarter / year-to-date figure, not comparable with the annual bars.
+        The x axis is labelled as the results chart's."""
         fig = self._seg_fig
         fig.clear()
         ax = fig.add_subplot(111)
-        cols = sv["columns"]
+        cols, segs = sv["columns"], sv["segments"]
+        div, unit_ko, unit_en = fm.unit_of(sv["currency"])
         xs = list(range(len(cols)))
-        bottoms = [0.0] * len(cols)
-        for i, s in enumerate(sv["segments"]):
+        n = max(len(segs), 1)
+        group_w = 0.8
+        bar_w = group_w / n
+        for i, s in enumerate(segs):
             color = SEGMENT_COLORS[i % len(SEGMENT_COLORS)]
-            shares = [(v or 0) * 100 for v in s["shares"]]
-            ax.bar(xs, shares, bottom=bottoms, width=0.64, color=color, edgecolor=SURFACE, linewidth=0.6,
-                   label=s["name"])
-            for x, b, v in zip(xs, bottoms, shares):
-                if v >= 9:
-                    ax.text(x, b + v / 2, f"{v:.0f}%", ha="center", va="center", fontsize=FONT_CAPTION,
-                            color=INK_ON_LIGHT)
-            bottoms = [b + v for b, v in zip(bottoms, shares)]
-        ax.set_xticks(xs)
-        ax.set_xticklabels([c["label"] for c in cols])
-        ax.set_ylim(0, 100)
-        ax.set_ylabel("%", color=TEXT_MUTED)
-        ax.legend(loc="upper left", bbox_to_anchor=(1.0, 1.0), fontsize=FONT_CAPTION, frameon=False)
+            offset = -group_w / 2 + bar_w * (i + 0.5)
+            for x, c, v in zip(xs, cols, s["values"]):
+                if v is None:
+                    continue
+                partial = c["partial"]
+                ax.bar(x + offset, v / div, width=bar_w * 0.92, color=color, edgecolor=SURFACE if not partial
+                       else color, linewidth=0.6, alpha=0.45 if partial else 1.0,
+                       hatch="///" if partial else None)
+        ax.axhline(0, color=LINE, linewidth=0.8)
+        if sv.get("mode") == "q":
+            _quarter_ticks(ax, [(c["fiscal_year"], c["fiscal_q"]) for c in cols])
+        else:
+            ax.set_xticks(xs)
+            ax.set_xticklabels([c["label"] + ("*" if c["gross"] else "") for c in cols])
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _p: f"{v:,.0f}"))
+        ax.set_ylabel(tr(f"매출 ({unit_ko})", f"Revenue ({unit_en})"), color=TEXT_MUTED)
+        ax.set_xlim(-0.6, max(len(cols) - 0.4, 0.6))
+        ax.legend(handles=[Patch(color=SEGMENT_COLORS[i % len(SEGMENT_COLORS)], label=s["name"])
+                           for i, s in enumerate(segs)],
+                  loc="upper left", fontsize=FONT_CAPTION, frameon=False, ncols=min(len(segs), 3) or 1)
+        # Hover marker, as on the results chart.
+        self._seg_marker_sv, self._seg_marker_div, self._seg_marker_idx = sv, div, None
+        self._seg_marker_ax = ax
+        self._seg_marker_band = ax.axvspan(-0.45, 0.45, color=TEXT_MUTED, alpha=0.28, linewidth=0, visible=False)
+        self._seg_marker_box = ax.annotate(
+            "", xy=(0, 1), xycoords=("data", "axes fraction"), xytext=(10, -8), textcoords="offset points",
+            ha="left", va="top", multialignment="left", fontsize=FONT_CAPTION, color=TEXT, visible=False, zorder=10,
+            bbox=dict(boxstyle="round,pad=0.4", facecolor=SURFACE, edgecolor=LINE, alpha=0.95))
         fig.tight_layout()
+        # The results chart's plot area: the same periods sit one above the other.
+        if getattr(self, "_results_ax", None) is not None:
+            ax.set_position(self._results_ax.get_position())
+        self._seg_canvas.draw_idle()
+
+    def _on_seg_motion(self, event) -> None:
+        sv = getattr(self, "_seg_marker_sv", None)
+        if not sv or not sv["columns"] or event.inaxes is None or event.xdata is None:
+            self._hover(None)
+            return
+        idx = int(round(event.xdata))
+        n = len(sv["columns"])
+        self._hover(idx if 0 <= idx < n and abs(event.xdata - idx) <= 0.45 else None)
+
+    def _set_seg_marker(self, idx) -> None:
+        """Show the period ``idx``'s amounts, shares and changes in a box over
+        its bars and select its column in the segment table; None hides it."""
+        sv = getattr(self, "_seg_marker_sv", None)
+        if sv is None or idx == self._seg_marker_idx:
+            return
+        self._seg_marker_idx = idx
+        if idx is None:
+            self._seg_marker_band.set_visible(False)
+            self._seg_marker_box.set_visible(False)
+            self.segment_table.clearSelection()
+            self._seg_canvas.draw_idle()
+            return
+        if idx >= len(sv["columns"]):
+            return
+        c, div = sv["columns"][idx], self._seg_marker_div
+        lines = [c["label"] + ("*" if c["gross"] else "")]
+        for s in sv["segments"]:
+            v, sh, g = s["values"][idx], s["shares"][idx], s["yoy"][idx]
+            if v is None:
+                continue
+            extra = " · ".join(x for x in ((f"{sh * 100:.0f}%" if sh is not None else ""),
+                                           (_pct(g, 0) if g is not None else "")) if x)
+            lines.append(f"{s['name']} {self._amt(v, div)}" + (f"  {extra}" if extra else ""))
+        if len(lines) == 1:
+            lines.append(tr("사업부 자료 없음", "no segment data"))
+        self._seg_marker_band.set_x(idx - 0.45)
+        self._seg_marker_band.set_visible(True)
+        box = self._seg_marker_box
+        box.set_text("\n".join(lines))
+        box.xy = (idx, 1)
+        right = idx > (len(sv["columns"]) - 1) * 0.6
+        box.set_horizontalalignment("right" if right else "left")
+        box.set_position((-10 if right else 10, -8))
+        box.set_visible(True)
+        _select_column(self.segment_table, idx)
         self._seg_canvas.draw_idle()
 
     def _fill_segment_table(self, sv) -> None:
+        """Items (segments or products, in their chart colours) down the frozen
+        side, then the 검산 row; periods across, oldest on the left and opened
+        at the newest, plus the CAGR in the annual view -- as the results
+        table. A cell: the amount, under it the share of revenue and the
+        change."""
         cols, segs = sv["columns"], sv["segments"]
         div, _k, _e = fm.unit_of(sv["currency"])
         t = self.segment_table
         t.setUpdatesEnabled(False)
         try:
-            t.setColumnCount(len(cols) + 2)
-            t.setHorizontalHeaderLabels([tr("부문", "Segment"), *[c["label"] + ("*" if c["gross"] else "")
-                                                                for c in cols], tr("연평균", "CAGR")])
+            annual = sv.get("mode", "y") != "q"
+            t.clear()
+            t.setColumnCount(len(cols) + (1 if annual else 0))
+            t.setHorizontalHeaderLabels([*[c["label"] + ("*" if c["gross"] else "") for c in cols],
+                                         *([tr("연평균", "CAGR")] if annual else [])])
             t.setRowCount(len(segs) + 1)
             for i, s in enumerate(segs):
-                name = QTableWidgetItem(s["name"])
-                name.setForeground(QColor(SEGMENT_COLORS[i % len(SEGMENT_COLORS)]))
-                t.setItem(i, 0, name)
-                for j, (v, g) in enumerate(zip(s["values"], s["yoy"])):
+                head = QTableWidgetItem(s["name"])
+                head.setTextAlignment(int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter))
+                head.setForeground(QColor(SEGMENT_COLORS[i % len(SEGMENT_COLORS)]))
+                t.setVerticalHeaderItem(i, head)
+                for j, (v, g, sh) in enumerate(zip(s["values"], s["yoy"], s["shares"])):
                     text = "—" if v is None else f"{v / div:,.0f}"
+                    second = [f"{sh * 100:.0f}%"] if sh is not None else []
                     if g is not None:
-                        text += f"\n{_pct(g, 0)}"
+                        second.append(_pct(g, 0))
+                    if second:
+                        text += "\n" + " · ".join(second)
                     item = QTableWidgetItem(text)
                     item.setTextAlignment(int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter))
                     if g is not None:
                         item.setForeground(QColor(_color(g)))
-                    t.setItem(i, j + 1, item)
-                cagr = QTableWidgetItem(_pct(s["cagr"]))
-                cagr.setTextAlignment(int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter))
-                cagr.setForeground(QColor(_color(s["cagr"])))
-                t.setItem(i, len(cols) + 1, cagr)
+                    t.setItem(i, j, item)
+                if annual:
+                    cagr = QTableWidgetItem(_pct(s["cagr"]))
+                    cagr.setTextAlignment(int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter))
+                    cagr.setForeground(QColor(_color(s["cagr"])))
+                    t.setItem(i, len(cols), cagr)
             check = len(segs)
             head = QTableWidgetItem(tr("검산", "Check"))
+            head.setTextAlignment(int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter))
             head.setForeground(QColor(TEXT_MUTED))
-            t.setItem(check, 0, head)
+            t.setVerticalHeaderItem(check, head)
             for j, c in enumerate(cols):
                 label = tr(*fm.CHECK_LABELS.get(c["status"], (c["status"], c["status"])))
                 if c.get("source") == "single":
@@ -649,17 +832,33 @@ class StockFinancialsTab(QWidget):
                 item = QTableWidgetItem(label)
                 item.setTextAlignment(int(Qt.AlignmentFlag.AlignCenter))
                 item.setForeground(QColor(_CHECK_KIND.get(c["status"], TEXT_EMPTY)))
-                t.setItem(check, j + 1, item)
+                t.setItem(check, j, item)
+            t.verticalHeader().setVisible(True)      # setup_table hides it; here it is the frozen column
             t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-            t.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-            t.setMinimumHeight(min(420, 40 + 36 * (len(segs) + 1)))
+            t.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectColumns)
         finally:
             t.setUpdatesEnabled(True)
+        self._seg_marker_idx = None
+        self._seg_scroll.pin()
 
     @staticmethod
     def _segment_notes(sv) -> str:
-        lines = [tr("검산: 부문 합계 + 조정 vs 손익계산서 매출, 차이 1% 이내 = ok.",
-                    "Check: segments + adjustments vs income-statement revenue, within 1 % = ok.")]
+        quarterly = sv.get("mode") == "q"
+        lines = [tr("셀 아래 줄: 매출 비중(손익계산서 매출 대비) · " + ("전년 동기 대비" if quarterly else "전년 대비")
+                    + ". 검산: 부문 합계 + 조정 vs 손익계산서 매출, 차이 1% 이내 = ok.",
+                    "Second line: share of income-statement revenue · " + ("YoY" if quarterly else "change on the year")
+                    + ". Check: segments + adjustments vs income-statement revenue, within 1 % = ok.")]
+        sources = list(dict.fromkeys(c.get("source") for c in sv["columns"] if c.get("source")))
+        if sources:
+            lines.append(tr("출처: ", "Source: ") + ", ".join(tr(*_SOURCE_LABELS.get(x, (x, x))) for x in sources))
+        if "biz_product" in sources:
+            lines.append(tr("제품별: 사업의 내용 '매출 및 수주상황' / '주요 제품' 표. 표에 없는 품목은 비중 합계에서 빠짐.",
+                            "By product: the business section's sales / main products table. Lines the table "
+                            "leaves out are not in the shares."))
+        if quarterly:
+            lines.append(tr("분기 값 = 누적 − 직전 분기 누적(같은 표 기준끼리만). 분기별 사업부 자료는 최근 2개 사업연도만 수집.",
+                            "Quarter = cumulative − the previous quarter's cumulative (same table kind only). "
+                            "Quarterly segment data is collected for the last two fiscal years."))
         if any(c["gross"] for c in sv["columns"]):
             lines.append(tr("* 내부거래 제거 전 총액 기준(나머지는 외부 매출). 기준이 다른 해끼리는 증감률을 계산하지 않음.",
                             "* gross, before intersegment eliminations (others: external revenue). No change is "

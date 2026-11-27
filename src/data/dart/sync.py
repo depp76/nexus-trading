@@ -781,21 +781,54 @@ class _Job:
         rq, ry, fs_div = rev["value_q"], rev["value_ytd"], rev["fs_div"]
         cache = self._cache_dir()
         xc = seg.fetch_xbrl(self.client, rcept, reprt, fs_div, cache)
-        chosen, basis, residual, status = seg.choose(xc, rq, ry)
-        if status != "ok":
-            self._check()
-            dc, single = seg.fetch_document(self.client, rcept, fs_div, cache)
-            d_chosen, d_basis, d_residual, d_status = seg.choose(dc, rq, ry)
-            if d_status == "ok":
+        chosen, basis, residual, status = seg.choose(xc, rq, ry, q)
+        # The document is read for every period (user direction 2026-11-27):
+        # the segment level is XBRL, else the business section's segment
+        # table, else the segment note; the business section's product table,
+        # when it adds up, is kept beside it at the product level.
+        self._check()
+        dc, single, bc = seg.fetch_document(self.client, rcept, fs_div, cache)
+        biz = seg.choose_biz(bc, rq, ry, source="biz_segment", fiscal_q=q) if status != "ok" else None
+        note_product = None
+        if biz is not None:
+            chosen, basis, residual = biz
+            status = "ok"
+        elif status != "ok":
+            d_chosen, d_basis, d_residual, d_status = seg.choose(dc, rq, ry, q)
+            if d_status == "ok" and d_chosen.source == "html_product" and single:
+                # A single-segment company's product table in the notes is its
+                # product breakdown, not its segments (review_codex 5 P1): the
+                # segment level is the one segment, the table goes to the product level.
+                note_product = (d_chosen, d_basis, d_residual)
+                chosen, basis = seg.single_segment(rq, ry, reprt)
+                residual, status = 0.0, "ok"
+            elif d_status == "ok":
+                # Without the single-segment statement a product table is still
+                # the only breakdown the notes give: kept at the segment level
+                # (source html_product says what it is) and at the product level.
                 chosen, basis, residual, status = d_chosen, d_basis, d_residual, d_status
+                if d_chosen.source == "html_product":
+                    note_product = (d_chosen, d_basis, d_residual)
             elif single:
                 chosen, basis = seg.single_segment(rq, ry, reprt)
                 residual, status = 0.0, "ok"
             elif status != "sum_mismatch" and d_status == "sum_mismatch":
                 chosen, basis, residual, status = d_chosen, d_basis, d_residual, d_status
+        # The product level: the business section's product table first (user
+        # direction 2026-11-27), else the notes' product table when it lists
+        # products (not regions, kinds of sale or companies).
+        product = seg.choose_biz(bc, rq, ry, source="biz_product", fiscal_q=q)
+        if product is None and note_product is not None and seg.is_product_breakdown(note_product[0]):
+            product = note_product
         source = chosen.source if chosen is not None else None
         seg.store_segments(self.conn, corp, fy, q, rcept, rcept_dt, chosen, basis, residual, status, source or "")
-        seg.record_fetch(self.conn, rcept, status, source, chosen.label if chosen is not None else "")
+        p_chosen, p_basis, p_residual = product if product is not None else (None, None, 0.0)
+        seg.store_segments(self.conn, corp, fy, q, rcept, rcept_dt, p_chosen, p_basis, p_residual, "ok",
+                           p_chosen.source if p_chosen is not None else "", level="product")
+        detail = chosen.label if chosen is not None else ""
+        if product is not None:
+            detail = f"{detail} | product: {product[0].label}".strip(" |")
+        seg.record_fetch(self.conn, rcept, status, source, detail)
         return True
 
     def _is_recent(self, member) -> bool:

@@ -410,7 +410,8 @@ def segment_report(tickers=None, conn: sqlite3.Connection | None = None, db_path
     return {"companies": companies, "unmatched": {k: v for k, v in unmatched.items() if v}}
 
 
-_SOURCE_LABEL = {"xbrl": "XBRL", "html_segment": "원문 부문표", "html_product": "원문 제품표", "single": "단일부문"}
+_SOURCE_LABEL = {"biz_product": "사업의 내용 제품표", "biz_segment": "사업의 내용 부문표", "xbrl": "XBRL",
+                 "html_segment": "원문 부문표", "html_product": "원문 제품표", "single": "단일부문"}
 
 
 def format_segment_report(tickers=None, **kw) -> str:

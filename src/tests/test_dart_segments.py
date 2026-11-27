@@ -115,6 +115,9 @@ class TestTables(unittest.TestCase):
         # A table total reached only through a large residual is a misread, not a reconciliation.
         big = seg.Candidate("html_segment", [("A", 57.0), ("B", 14.0), ("외부고객으로부터의수익", 59.0)], total=59.0)
         self.assertEqual(seg.choose([big], None, 59.0)[3], "sum_mismatch")
+        # A capital-management table that happens to add up (HD현대일렉트릭 2025) is no breakdown.
+        cap = seg.Candidate("html_product", [("예금잔액(*1)", 96.9), ("차입금(*2)", 18.6), ("부채비율", 0.1)])
+        self.assertEqual(seg.choose([cap], 115.6, None)[3], "review")
         small = seg.Candidate("html_segment", [("A", 55.0), ("B", 50.0)], total=100.0)
         self.assertEqual(seg.choose([small], None, 100.0)[:4][2:], (-5.0, "ok"))
 
@@ -192,6 +195,278 @@ class TestXbrl(unittest.TestCase):
         self.assertEqual((status, dict(c.items)["차량"]), ("ok", 70.0))
 
 
+def _biz_doc(products: str, sales: str, note: str = "") -> str:
+    """A document with the business section's two tables and a segment note after them."""
+    return ('<DOCUMENT><TITLE ATOC="Y">II. 사업의 내용</TITLE><TITLE ATOC="Y">1. 사업의 개요</TITLE><P>...</P>'
+            f'<TITLE ATOC="Y">2. 주요 제품 및 서비스</TITLE>{products}'
+            '<TITLE ATOC="Y">3. 원재료 및 생산설비</TITLE><P>(단위 : 원)</P>'
+            + _table([["원재료A", "1,000"], ["원재료B", "2,000"]], [["품목", "매입액"]])
+            + f'<TITLE ATOC="Y">4. 매출 및 수주상황</TITLE>{sales}'
+            '<TITLE ATOC="Y">III. 재무에 관한 사항</TITLE><TITLE ATOC="Y">3. 연결재무제표 주석</TITLE>'
+            f'<TITLE ATOC="Y">4. 영업부문(연결)</TITLE>{note}<TITLE>4. 재무제표</TITLE></DOCUMENT>')
+
+
+# Samsung 2026 Q3 (in 원 here): segments with the elimination under 기타, and a
+# product table that lists the main product groups only.
+_SAMSUNG_SALES = ("<P>(단위 : 원)</P>"
+                  + _table([["DX부문", "제품", "TV,모니터,스마트폰 등", "150", "190"],
+                            ["DS부문", "제품", "DRAM,NAND Flash", "250", "130"],
+                            ["기타", ("부문간 내부거래 제거 등", 2), "(50)", "(30)"],
+                            [("합 계", 3), "350", "290"]],
+                           [["부문", "매출유형", "품목", "제58기 3분기", "제57기"]])
+                  + "<P>(1) 주요 제품별 매출실적</P><P>(단위 : 원)</P>"
+                  + _table([["TV, 모니터 등", "50", "60"], ["스마트폰", "90", "120"], ["메모리", "200", "110"]],
+                           [["구분", "제58기 3분기", "제57기"]])
+                  + "<P>(2) 매출유형별 매출실적</P><P>(단위 : 원)</P>"
+                  + _table([["제ㆍ상품", "330", "280"], ["용역 및 기타매출", "20", "10"], ["계", "350", "290"]],
+                           [["구분", "제58기 3분기", "제57기"]]))
+
+
+class TestBusinessSection(unittest.TestCase):
+    """User direction 2026-11-27: the business section's "주요 제품 및 서비스" /
+    "매출 및 수주상황" tables, a product breakdown first."""
+
+    def test_regions_are_the_two_sections_before_the_notes(self):
+        doc = _biz_doc("<P>p</P>", "<P>s</P>", note="<P>매출 및 수주상황 (not here)</P>")
+        regions = seg.biz_regions(doc)
+        self.assertEqual(len(regions), 2)
+        self.assertIn("주요 제품", regions[0])
+        self.assertNotIn("원재료A", regions[0])
+
+    def test_product_table_first_with_its_missing_lines_as_residual(self):
+        cands = seg.biz_candidates(_biz_doc("", _SAMSUNG_SALES))
+        self.assertFalse(any(c.sales_types() for c in cands))                 # 제ㆍ상품 / 용역 is no breakdown
+        c, basis, residual = seg.choose_biz(cands, 130.0, 350.0)
+        self.assertEqual((c.source, basis, residual), ("biz_product", "ytd", 10.0))
+        self.assertEqual([n for n, _ in c.items], ["TV,모니터등", "스마트폰", "메모리"])
+        segs = next(x for x in cands if x.source == "biz_segment" and x.label.endswith("제58기3분기"))
+        self.assertEqual(segs.items, [("DX부문", 150.0), ("DS부문", 250.0)])
+        self.assertEqual((segs.adjust, segs.total), ([("기타", -50.0)], 350.0))
+
+    def test_segment_with_its_own_sub_rows_and_amount_with_share(self):
+        """HD Hyundai Electric / LG Energy Solution layouts: 수출 | 내수 | 합계 under
+        a segment, "2,173,111(64.7%)" cells, a segment column spanning rows."""
+        products = ("<P>(단위 : 백만원)</P>"
+                    + _table([[("전기전자부문", 1, 3), ("제품,기타", 1, 3), "전력기기", "2,173,111(64.7%)"],
+                              ["회전기기", "518,398(15.4%)"], ["배전기기外", "666,667(19.9%)"],
+                              [("합계", 3), "3,358,176(100.0%)"]],
+                             [["사업부문", "매출유형", "품목", "매출액(비율)"]]))
+        sales = ("<P>(단위 : 백만원)</P>"
+                 + _table([[("에너지솔루션", 1, 3), "수출", "7,451,963"], ["내수", "16,306,686"], ["합계", "23,758,649"],
+                           [("합계", 1, 3), "수출", "7,451,963"], ["내수", "16,306,686"], ["합계", "23,758,649"]],
+                          [["사업부문", "구분", "제7기 3분기"]]))
+        c, _b, residual = seg.choose_biz(seg.biz_candidates(_biz_doc(products, sales)), None, 3358176 * E)
+        self.assertEqual((c.source, residual), ("biz_product", 0.0))
+        self.assertEqual(c.items, [("전력기기", 2173111 * E), ("회전기기", 518398 * E), ("배전기기外", 666667 * E)])
+        one = seg.biz_table_candidates(sales, E)
+        self.assertFalse([x for x in one if len(x.items) >= 2 and not x.geographic()])   # one segment: no breakdown
+
+    def test_kinds_channels_and_companies_are_not_business_lines(self):
+        for names in (["제ㆍ상품", "용역및기타매출"], ["제품(화장품)", "상품(IT)"], ["직접판매", "간접판매"],
+                      ["한전KPS㈜", "KEPCO KPS Ltd"]):
+            c = seg.Candidate("biz_product", [(n, 10.0) for n in names])
+            self.assertTrue(c.sales_types() or c.entities(), names)
+        self.assertFalse(seg.Candidate("biz_product", [("메모리", 1.0), ("스마트폰", 1.0)]).sales_types())
+
+    def test_choice_needs_the_revenue(self):
+        cands = seg.biz_candidates(_biz_doc("", _SAMSUNG_SALES))
+        self.assertIsNone(seg.choose_biz(cands, None, 500.0))                 # nothing adds up to 500
+        self.assertIsNone(seg.choose_biz(cands, None, 450.0))                 # products 340: 24 % short is too far
+
+
+class TestReviewCodex5(unittest.TestCase):
+    """review_codex 5 (2026-11-27): adding up to revenue does not make a table a
+    revenue breakdown -- what it lists, for which period, is checked first."""
+
+    SALES_TABLE = _table([["변압기", "60"], ["차단기", "40"]], [["품목", "제10기"]])
+    SALES = "<P>가. 매출실적</P><P>(단위 : 원)</P>" + SALES_TABLE
+
+    def test_order_book_is_not_product_revenue(self):
+        """P1: 수주총액 / 기납품액 / 수주잔고 columns and a table under a 수주
+        caption are left out before any tolerance; the same amounts in the
+        sales table are the products."""
+        head = [[("품목", 1, 2), ("수주일자", 1, 2), ("수주총액", 2), ("기납품액", 2), ("수주잔고", 2)],
+                ["수량", "금액", "수량", "금액", "수량", "금액"]]
+        book = "<P>나. 수주상황</P><P>(단위 : 원)</P>" + _table(
+            [["건설사업", "2025.01.02", "-", "50", "-", "50", "-", "50"],
+             ["주택사업", "2025.03.04", "-", "30", "-", "30", "-", "30"],
+             ["플랜트", "2025.05.06", "-", "20", "-", "20", "-", "20"]], head)
+        cands = seg.biz_candidates(_biz_doc("", self.SALES + book))
+        self.assertEqual([c.label for c in cands], ["biz 품목 / 제10기"])
+        c, _basis, residual = seg.choose_biz(cands, None, 100.0)
+        self.assertEqual((c.items, residual), ([("변압기", 60.0), ("차단기", 40.0)], 0.0))
+        # The columns alone tell it (no caption), and so does the caption alone
+        # ("품목 | 금액" under 수주현황) -- also when the book is a little below
+        # revenue, the residual a product table may leave.
+        self.assertEqual(seg.biz_table_candidates(book[book.index("<TABLE"):], 1.0), [])
+        plain = "<P>(2) 수주현황</P><P>(단위 : 원)</P>" + _table(
+            [["건설사업", "50"], ["주택사업", "30"], ["플랜트", "15"]], [["품목", "금액"]])
+        self.assertEqual(seg.biz_candidates(_biz_doc("", plain)), [])
+        # A sales table that also shows the backlog keeps its sales column only.
+        both = "<P>가. 매출실적</P><P>(단위 : 원)</P>" + _table(
+            [["변압기", "60", "500"], ["차단기", "40", "500"]], [["품목", "매출액", "수주잔고"]])
+        self.assertEqual([c.label for c in seg.biz_candidates(_biz_doc("", both))], ["biz 품목 / 매출액"])
+        # The section's own title ("매출 및 수주상황") is no 수주 caption.
+        self.assertEqual(len(seg.biz_candidates(_biz_doc("", "<P>(단위 : 원)</P>" + self.SALES_TABLE))), 1)
+
+    COSTS = _table([["인건비", "300", "280"], ["상품매출원가", "500", "450"], ["마케팅비용", "200", "190"]],
+                   [["구분", "당기", "전기"]])
+    PRODUCTS = _table([["백신", "700", "600"], ["위탁생산", "300", "250"], ["합계", "1,000", "850"]],
+                      [["구분", "당기", "전기"]])
+
+    def test_cost_table_after_the_single_segment_sentence(self):
+        """P1 (SK바이오사이언스 2021): the single-segment sentence does not make
+        every table of the region a product table."""
+        single = "<P>회사는 단일 영업부문으로 구성되어 있습니다.</P>"
+        for caption in ("<P>30. 비용의 성격별 분류</P><P>(단위 : 원)</P>", "<P>(단위 : 원)</P>"):
+            region = seg.segment_region(_doc(single + caption + self.COSTS), True)
+            cands, is_single = seg.document_candidates(region)
+            self.assertTrue(is_single)
+            self.assertEqual(seg.choose(cands, None, 1000.0)[3], "review", caption)      # costs add up to revenue
+        doc = _doc(single + "<P>30. 비용의 성격별 분류</P><P>(단위 : 원)</P>" + self.COSTS
+                   + "<P>31. 제품별 매출은 다음과 같습니다.</P><P>(단위 : 원)</P>" + self.PRODUCTS)
+        cands, _single = seg.document_candidates(seg.segment_region(doc, True))
+        c, _basis, _r, status = seg.choose(cands, None, 1000.0)
+        self.assertEqual((status, c.source, [n for n, _ in c.items]), ("ok", "html_product", ["백신", "위탁생산"]))
+        self.assertTrue(seg.is_product_breakdown(c))
+        self.assertTrue(seg.Candidate("html_product", [("인건비", 1.0), ("감가상각비", 1.0), ("기타", 1.0)]).cost_items())
+        self.assertFalse(seg.Candidate("html_product", [("백신", 1.0), ("위탁생산", 1.0)]).cost_items())
+
+    def test_customer_table_is_not_a_product_breakdown(self):
+        """P1: sales by customer reconcile with revenue exactly and are still
+        no products."""
+        rows = [["방위사업청", "600"], ["국방과학연구소", "300"], ["한화시스템", "100"]]
+        by_head = "<P>(단위 : 원)</P>" + _table(rows, [["매출처", "매출액"]])
+        self.assertEqual(seg.biz_candidates(_biz_doc("", by_head)), [])
+        by_caption = "<P>라. 주요 매출처</P><P>(단위 : 원)</P>" + _table(rows, [["구분", "매출액"]])
+        self.assertEqual(seg.biz_candidates(_biz_doc("", by_caption)), [])
+        # "구분" says nothing: without a caption about products it is not taken ...
+        bare = "<P>(단위 : 원)</P>" + _table(rows, [["구분", "매출액"]])
+        self.assertEqual(seg.biz_candidates(_biz_doc("", bare)), [])
+        # ... with one it is, and so is a table of the "주요 제품 및 서비스" section.
+        named = "<P>(1) 주요 제품별 매출실적</P><P>(단위 : 원)</P>" + _table(rows, [["구분", "매출액"]])
+        self.assertEqual(len(seg.biz_candidates(_biz_doc("", named))), 1)
+        self.assertEqual(len(seg.biz_candidates(_biz_doc(bare, ""))), 1)
+        # The notes' "주요 고객" table of a single-segment company likewise.
+        note = ("<P>회사는 단일 영업부문입니다.</P><P>(2) 주요 고객에 대한 정보</P><P>(단위 : 원)</P>"
+                + _table([["주요고객 A사", "600"], ["주요고객 B사", "400"]], [["구분", "당기"]]))
+        cands, _single = seg.document_candidates(seg.segment_region(_doc(note), True))
+        self.assertEqual(seg.choose(cands, None, 1000.0)[3], "review")
+        self.assertTrue(seg.Candidate("html_product", [("주요고객A사", 1.0), ("기타고객(*)", 1.0)]).customers())
+
+    def test_xbrl_period_decides_the_basis(self):
+        """P1: a half-year context of 100 against Q2 99.5 and H1 100 is cumulative."""
+        h1 = _xbrl_zip([("A", "가 부문", "60"), ("B", "나 부문", "40")], start="2025-01-01", end="2025-06-30")
+        cands = seg.xbrl_candidates(h1, "CFS")
+        self.assertEqual([c.months for c in cands], [6])
+        self.assertEqual(seg.choose(cands, 99.5, 100.0, 2)[1:], ("ytd", 0.0, "ok"))
+        self.assertEqual(seg.choose(cands, 99.5, 100.0)[1], "ytd")                    # the quarter not given
+        self.assertEqual(seg.choose(cands, 100.0, 300.0, 3)[3], "review")             # 6 months in a Q3 report: not its period
+        q2 = seg.xbrl_candidates(_xbrl_zip([("A", "가 부문", "60"), ("B", "나 부문", "40")],
+                                           start="2025-04-01", end="2025-06-30"), "CFS")
+        self.assertEqual(seg.choose(q2, 250.0, 100.0, 2)[3], "sum_mismatch")          # 3 months are not the half year
+        self.assertEqual(seg.choose(q2, 100.0, 100.0, 1)[1], "q")                     # Q1: both, the quarter first
+        # A result cached before the period was kept gets it from its label.
+        old = [{"source": "xbrl", "items": [["가", 60.0], ["나", 40.0]], "adjust": [], "total": None,
+                "label": "2025-01-01..2025-06-30 DisclosureOfOperatingSegmentsTableOf", "ops": {}}]
+        self.assertEqual(seg._from_json(old)[0].months, 6)
+        again = seg._from_json(seg._to_json(seg.table_candidates(
+            _table([["가", "60", "70"], ["나", "40", "50"]], [["구분", ("매출액", 2)], ["", "당기", "전기"]]), 1.0, False)))
+        self.assertEqual([(c.when, c.span) for c in again], [("cur", None), ("prev", None)])
+
+    def test_closer_basis_and_prior_period_columns(self):
+        plain = seg.Candidate("html_segment", [("A", 60.0), ("B", 40.0)])
+        self.assertEqual(seg.choose([plain], 99.5, 100.0)[1], "ytd")                  # no period stated: the closer one
+        self.assertEqual(seg.choose([plain], 100.0, 100.0)[1], "q")
+        # P1: only the prior-period column matches -- not accepted, the current column is the mismatch.
+        t = _table([["가", "70", "60"], ["나", "50", "40"]], [["구분", ("매출액", 2)], ["", "당기", "전기"]])
+        c, basis, _r, status = seg.choose(seg.table_candidates(t, 1.0, False), None, 100.0)
+        self.assertEqual((status, basis, c.items), ("sum_mismatch", None, [("가", 70.0), ("나", 50.0)]))
+        for head in (["구분", "제19(전)기 매출액"], ["구분", "전분기 매출액"]):
+            only_prev = seg.table_candidates(_table([["가", "60"], ["나", "40"]], [head]), 1.0, False)
+            self.assertEqual(seg.choose(only_prev, None, 100.0)[3], "review", head)
+        # A caption "(2) 전기" above a table without period columns.
+        note = ("<P>(1) 당기</P><P>(단위 : 원)</P>" + _table([["가부문", "70"], ["나부문", "50"]], [["구분", "매출액"]])
+                + "<P>(2) 전기</P><P>(단위 : 원)</P>" + _table([["가부문", "60"], ["나부문", "40"]], [["구분", "매출액"]]))
+        cands, _single = seg.document_candidates(seg.segment_region(_doc(note), True))
+        self.assertEqual([c.when for c in cands], ["cur", "prev"])
+        self.assertEqual(seg.choose(cands, None, 100.0)[3], "sum_mismatch")
+        # "3개월 | 누적" columns are checked against their own basis.
+        t = _table([["가", "30", "60"], ["나", "20", "40"]], [["구분", ("매출액", 2)], ["", "3개월", "누적"]])
+        self.assertEqual(seg.choose(seg.table_candidates(t, 1.0, False), 100.0, 250.0, 3)[3], "sum_mismatch")
+        self.assertEqual(seg.choose(seg.table_candidates(t, 1.0, False), 50.0, 100.0, 3)[1], "q")
+        # The business section: an older fiscal term (or year) is a prior period.
+        biz = "<P>가. 매출실적</P><P>(단위 : 원)</P>" + _table([["변압기", "70", "60"], ["차단기", "50", "40"]],
+                                                              [["품목", "제10기 3분기", "제9기"]])
+        cands = seg.biz_candidates(_biz_doc("", biz))
+        self.assertEqual([c.when for c in cands], [None, "prev"])
+        self.assertIsNone(seg.choose_biz(cands, None, 100.0))
+        self.assertIsNone(seg.choose_biz(cands, None, 110.0))                         # nor through a residual
+
+    def test_a_product_of_several_segments_is_added_up(self):
+        """P2: A·공통 40, B·공통 55, B·제품X 5."""
+        t = _table([["A", "공통", "40"], [("B", 1, 2), "공통", "55"], ["제품X", "5"]], [["사업부문", "품목", "매출액"]])
+        cands = {c.source: c for c in seg.biz_table_candidates(t, 1.0)}
+        self.assertEqual(cands["biz_segment"].items, [("A", 40.0), ("B", 60.0)])
+        self.assertEqual(cands["biz_product"].items, [("공통", 95.0), ("제품X", 5.0)])
+        # An amount cell spanning rows is one amount.
+        t = _table([[("에너지", 1, 2), "배터리", ("100", 1, 2)], ["ESS"], ["소재", "양극재", "50"]],
+                   [["사업부문", "품목", "매출액"]])
+        self.assertEqual(seg.biz_table_candidates(t, 1.0)[0].items, [("에너지", 100.0), ("소재", 50.0)])
+        # Each block's own total is taken once ("수출 | 내수 | 합계" per segment).
+        t = _table([[("A", 1, 3), ("공통", 1, 3), "수출", "10"], ["내수", "30"], ["합계", "40"],
+                    [("B", 1, 3), ("공통", 1, 3), "수출", "50"], ["내수", "5"], ["합계", "55"],
+                    [("합계", 2, 3), "수출", "60"], ["내수", "35"], ["합계", "95"]],
+                   [["사업부문", "품목", "구분", "매출액"]])
+        cands = seg.biz_table_candidates(t, 1.0)
+        self.assertEqual((cands[0].items, cands[0].total), ([("A", 40.0), ("B", 55.0)], 95.0))
+        # Sub-totals inside a segment ("제품 | 소계", "합계 | 수출") are not added to their rows.
+        t = _table([["케미칼", "제품", "수출", "55"], ["케미칼", "제품", "내수", "9"], ["케미칼", "제품", "소계", "64"],
+                    ["케미칼", "상품", "수출", "2"], ["케미칼", "상품", "소계", "2"],
+                    ["케미칼", "합계", "수출", "57"], ["케미칼", "합계", "내수", "9"], ["케미칼", "합계", "소계", "66"],
+                    ["장비", "제품", "내수", "34"], ["장비", "제품", "소계", "34"]],
+                   [["사업부문", "매출유형", "구분", "매출액"]])
+        self.assertEqual(seg.biz_table_candidates(t, 1.0)[0].items, [("케미칼", 66.0), ("장비", 34.0)])
+
+
+class TestLevelMigration(_TmpMixin, unittest.TestCase):
+    def test_old_segment_rows_get_a_level_and_are_read_again(self):
+        import sqlite3
+        old = sqlite3.connect(self.db)
+        old.executescript(
+            "CREATE TABLE segment_rev (corp_code TEXT NOT NULL, fiscal_year INTEGER NOT NULL, fiscal_q INTEGER NOT NULL,"
+            " segment_raw TEXT NOT NULL, segment_code TEXT, revenue REAL, op_income REAL, basis TEXT, source TEXT,"
+            " check_status TEXT, rcept_no TEXT NOT NULL, rcept_dt TEXT NOT NULL,"
+            " PRIMARY KEY (corp_code, fiscal_year, fiscal_q, segment_raw, rcept_no));"
+            "CREATE INDEX ix_segment_rev_period ON segment_rev(corp_code, fiscal_year, fiscal_q);"
+            "CREATE TABLE seg_fetch (rcept_no TEXT PRIMARY KEY, status TEXT NOT NULL, source TEXT, detail TEXT,"
+            " fetched_at TEXT);"
+            "CREATE TABLE sync_state (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);"
+            "INSERT INTO sync_state VALUES ('schema_version', '10', '');"
+            "INSERT INTO seg_fetch VALUES ('r1', 'ok', 'xbrl', '', '');"
+            "INSERT INTO segment_rev VALUES ('C', 2025, 4, 'DX', 'DX', 1, NULL, 'ytd', 'xbrl', 'ok', 'r1', 'd');"
+            "INSERT INTO segment_rev VALUES ('C', 2025, 4, '메모리', '메모리', 1, NULL, 'ytd', 'biz_product', 'ok', 'r1', 'd');")
+        old.commit()
+        old.close()
+        conn = connect(self.db)
+        self.assertEqual(sorted(tuple(r) for r in conn.execute("SELECT segment_raw, level FROM segment_rev")),
+                         [("DX", "segment"), ("메모리", "product")])
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM seg_fetch").fetchone()[0], 0)
+        # Schema 12 (review_codex 5): a DB already at 11 has its periods read again once more.
+        conn.execute("INSERT INTO seg_fetch VALUES ('r1', 'ok', 'xbrl', '', '')")
+        conn.execute("UPDATE sync_state SET value = '11' WHERE key = 'schema_version'")
+        conn.commit()
+        conn.close()
+        conn = connect(self.db)
+        self.addCleanup(conn.close)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM seg_fetch").fetchone()[0], 0)
+        self.assertEqual(conn.execute("SELECT value FROM sync_state WHERE key = 'schema_version'").fetchone()[0], "12")
+        # Both levels may now hold the same name in one period.
+        seg.store_segments(conn, "C", 2025, 4, "r1", "d", seg.Candidate("biz_product", [("DX", 2.0), ("DS", 1.0)]),
+                           "ytd", 0.0, "ok", "biz_product", level="product")
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM segment_rev WHERE segment_raw = 'DX'").fetchone()[0], 2)
+
+
 class TestSegmentSync(_TmpMixin, unittest.TestCase):
     def setUp(self):
         super().setUp()
@@ -227,9 +502,12 @@ class TestSegmentSync(_TmpMixin, unittest.TestCase):
                           for r in q3], [("DX 부문", "DX", 80.0, "xbrl", "ok", "q"), ("DS 부문", "DS", 60.0, "xbrl", "ok", "q")])
         with_adj = query.get_segments("005930", include_adjustments=True, conn=conn)
         self.assertIn(("부문간 내부거래 제거", "_adj"), {(r["segment_raw"], r["segment_code"]) for r in with_adj})
+        # A single segment with a product table in its notes: the segment level
+        # is the one segment, the table is the product level (review_codex 5 P1).
         small = query.get_segments("123450", conn=conn)
-        self.assertEqual([(r["segment_raw"], r["revenue"], r["source"]) for r in small],
-                         [("콘덴서", 600.0, "html_product"), ("전원장치", 400.0, "html_product")])
+        self.assertEqual([(r["level"], r["segment_raw"], r["revenue"], r["source"]) for r in small],
+                         [("segment", "단일부문", 1000.0, "single"),
+                          ("product", "콘덴서", 600.0, "html_product"), ("product", "전원장치", 400.0, "html_product")])
         draft = conn.execute("SELECT segment_raw, segment_code, note FROM segment_map WHERE corp_code = ? "
                              "ORDER BY segment_raw", (SAMSUNG,)).fetchall()
         self.assertEqual([tuple(r) for r in draft], [("DS 부문", "DS", "auto"), ("DX 부문", "DX", "auto")])
@@ -240,6 +518,51 @@ class TestSegmentSync(_TmpMixin, unittest.TestCase):
         n = len(self.fake.requests)
         self._seg(tickers=["005930", "123450"])
         self.assertEqual([ep for ep, _ in self.fake.requests[n:] if ep in ("fnlttXbrl.xml", "document.xml")], [])
+
+    def test_business_section_products_come_before_xbrl(self):
+        """User direction 2026-11-27: with a product table in the business
+        section that adds up, it is stored instead of the XBRL segments."""
+        self.fake.documents["20251114000003"] = _biz_doc("", _SAMSUNG_SALES)
+        self.assertEqual(self._seg(tickers=["005930"]).status, "done")
+        conn = connect(self.db)
+        self.addCleanup(conn.close)
+        q3 = [r for r in query.get_segments("005930", include_adjustments=True, conn=conn)
+              if (r["fiscal_year"], r["fiscal_q"]) == (2025, 3)]
+        self.assertEqual({(r["level"], r["segment_raw"], r["revenue"], r["source"], r["basis"]) for r in q3},
+                         {("product", "TV,모니터등", 50.0, "biz_product", "ytd"),
+                          ("product", "스마트폰", 90.0, "biz_product", "ytd"),
+                          ("product", "메모리", 200.0, "biz_product", "ytd"),
+                          ("product", "기타·조정(차액)", 10.0, "biz_product", "ytd"),
+                          # the segment level stays XBRL's
+                          ("segment", "DX 부문", 80.0, "xbrl", "q"), ("segment", "DS 부문", 60.0, "xbrl", "q"),
+                          ("segment", "부문간 내부거래 제거", -10.0, "xbrl", "q")})
+        self.assertEqual(conn.execute("SELECT source FROM seg_fetch WHERE rcept_no = '20251114000003'").fetchone()[0],
+                         "xbrl")
+        # Without XBRL segments the business section's segment table is the segment level.
+        self.fake.xbrl.clear()
+        conn.execute("DELETE FROM seg_fetch")
+        conn.commit()
+        import shutil
+        shutil.rmtree(os.path.join(self.cache, "segments"), ignore_errors=True)
+        self._seg(tickers=["005930"])
+        q3 = [r for r in query.get_segments("005930", conn=conn)
+              if (r["fiscal_year"], r["fiscal_q"]) == (2025, 3) and r["level"] == "segment"]
+        self.assertEqual([(r["segment_raw"], r["source"]) for r in q3], [("DS부문", "biz_segment"), ("DX부문", "biz_segment")])
+
+    def test_customer_and_order_tables_leave_the_product_level_empty(self):
+        """review_codex 5 P1: a document whose only tables are sales by customer
+        and an order book (both equal to revenue) gives no product data."""
+        customers = "<P>라. 주요 매출처</P><P>(단위 : 원)</P>" + _table(
+            [["방위사업청", "200"], ["국방과학연구소", "150"]], [["매출처", "매출액"]])
+        book = "<P>마. 수주상황</P><P>(단위 : 원)</P>" + _table(
+            [["건설사업", "250", "100", "350"], ["주택사업", "100", "250", "350"]],
+            [["품목", "수주총액", "기납품액", "수주잔고"]])
+        self.fake.documents["20251114000003"] = _biz_doc("", customers + book)
+        self.assertEqual(self._seg(tickers=["005930"]).status, "done")
+        conn = connect(self.db)
+        self.addCleanup(conn.close)
+        q3 = [r for r in query.get_segments("005930", conn=conn) if (r["fiscal_year"], r["fiscal_q"]) == (2025, 3)]
+        self.assertEqual({(r["level"], r["source"]) for r in q3}, {("segment", "xbrl")})
 
     def test_a_period_waits_for_its_financials(self):
         conn = connect(self.db)

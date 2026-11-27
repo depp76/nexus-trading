@@ -231,8 +231,13 @@ Dev tooling is in `requirements-dev.txt`
   trigger, ...)`: the only collection logic, no Qt; records `sync_run`). `tools/dart_sync.py`
   (`--init/--daily/--backfill [--tickers]/--auto/--segments`, read-only `--show CODE`/`--issues`/
   `--segment-report`) only calls `run_sync` or `query`. `segments.py` (stage 4: revenue by business
-  segment from the XBRL package, else the report's segment note / product table, chosen by the plan 5-3
-  check against fin_std revenue; `segment_map` drafts; targets = Universe + `segment_targets.json`;
+  segment from the XBRL package, else the business section's segment table, else the report's segment
+  note / product table, chosen by the plan 5-3 check against fin_std revenue; since 2026-11-27 also the
+  business section's ("II. 사업의 내용") product table, stored beside it as `segment_rev.level='product'`
+  -- the 기업 정보 tab shows products by default; a table is first told apart by its caption, header path and
+  item names (order books, cost tables and customer lists are not revenue breakdowns even when they add up) and a
+  candidate is checked against its own period only (`Candidate.when/span/months`), plan 5 note "코드 리뷰 5차";
+  `segment_map` drafts; targets = Universe + `segment_targets.json`;
   `auto` reads new reports only, the backlog is `--segments`). Not in
   the `data_fetcher` facade. The app runs it in the background (stage 3A, docs/ui.md 8.33):
   `src/ui/dart_sync_thread.py` (`DartSyncThread` -- the plan names this path, so this QThread lives in

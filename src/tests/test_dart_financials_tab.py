@@ -86,12 +86,26 @@ class TestModel(unittest.TestCase):
 
     def test_segment_view(self):
         sv = fm.segment_view(self.data)
-        self.assertEqual([c["label"] for c in sv["columns"]], ["2024", "2025 3Q"])
+        self.assertEqual([c["label"] for c in sv["columns"]], ["2024", "2025 3Q누적"])
         self.assertEqual([c["gross"] for c in sv["columns"]], [False, True])
         dx = next(s for s in sv["segments"] if s["code"] == "DX")
-        self.assertEqual(dx["values"], [300.0, 100.0])
-        self.assertEqual(dx["yoy"], [None, None])          # an annual vs a quarter, and external vs gross
+        # The year in progress is its cumulative: a 3-month Q3 without Q1 / Q2 gives none.
+        self.assertEqual(dx["values"], [300.0, None])
+        self.assertEqual(dx["yoy"], [None, None])
         self.assertAlmostEqual(dx["shares"][0], 300 / 460)
+
+    def test_columns_follow_the_results_periods(self):
+        """One 실적 card: the segment columns are the results' periods, slot
+        for slot; a period without segment data is an empty column."""
+        keys = [(2024, 3), (2024, 4), (2025, 1), (2025, 2), (2025, 3)]
+        sv = fm.segment_view(self.data, mode="q", keys=keys)
+        self.assertEqual([c["label"] for c in sv["columns"]], ["2024 3Q", "2024 4Q", "2025 1Q", "2025 2Q", "2025 3Q"])
+        dx = next(s for s in sv["segments"] if s["code"] == "DX")
+        self.assertEqual(dx["values"], [None, None, None, None, 100.0])
+        self.assertTrue(sv["has_values"])
+        ann = fm.segment_view(self.data, keys=[(2023, 4), (2024, 4), (2025, 3)])
+        self.assertEqual([c["label"] for c in ann["columns"]], ["2023", "2024", "2025 3Q누적"])
+        self.assertEqual([c["partial"] for c in ann["columns"]], [False, False, True])
 
     def test_comparable_years_and_cagr(self):
         def col(fy, gross):
@@ -113,6 +127,107 @@ def _q(fy, fq, rev, currency="KRW", fs_div="CFS", op=None):
     return {"fiscal_year": fy, "fiscal_q": fq, "revenue": rev, "op_income": op, "op_margin": None,
             "currency": currency, "fs_div": fs_div, "ytd": {"revenue": rev, "op_income": op, "net_income": None},
             "rcept_dt": "2026-01-01", "corrected": False}
+
+
+def _seg_row(fy, fq, raw, rev, source="biz_product", basis="ytd", level="product"):
+    return {"fiscal_year": fy, "fiscal_q": fq, "segment_raw": raw, "segment_code": raw, "revenue": rev,
+            "basis": basis, "check_status": "ok", "source": source, "level": level}
+
+
+class TestQuarterlySegments(unittest.TestCase):
+    """User direction 2026-11-27: quarterly amounts from the business section's
+    cumulative figures, their share of revenue and YoY."""
+
+    def _data(self):
+        ytd = {(2024, 1): (50, 30), (2024, 2): (110, 70), (2024, 3): (180, 100),
+               (2025, 1): (60, 40), (2025, 2): (130, 90), (2025, 3): (200, 150)}
+        segs = [_seg_row(fy, fq, n, float(v)) for (fy, fq), vals in ytd.items() for n, v in zip("AB", vals)]
+        revenue = [{"fiscal_year": fy, "fiscal_q": fq, "metric": "revenue", "value_q": 100.0, "value_ytd": 100.0 * fq,
+                    "currency": "KRW"} for fy, fq in ytd]
+        return {"segments": segs, "rows": revenue}
+
+    def test_quarters_are_cumulatives_differenced(self):
+        sv = fm.segment_view(self._data(), mode="q")
+        self.assertEqual([c["label"] for c in sv["columns"]][-3:], ["2025 1Q", "2025 2Q", "2025 3Q"])
+        a = next(s for s in sv["segments"] if s["code"] == "A")
+        self.assertEqual(a["values"][-3:], [60.0, 70.0, 70.0])                # 60, 130 - 60, 200 - 130
+        self.assertAlmostEqual(a["yoy"][-2], 70 / 60 - 1)                      # vs 2024 Q2 = 110 - 50
+        self.assertAlmostEqual(a["shares"][-1], 0.70)                          # of the quarter's revenue (100)
+        self.assertIsNone(a["cagr"])
+
+    def test_a_missing_quarter_leaves_the_next_one_unsplit(self):
+        data = self._data()
+        data["segments"] = [r for r in data["segments"] if (r["fiscal_year"], r["fiscal_q"]) != (2025, 2)]
+        sv = fm.segment_view(data, mode="q")
+        self.assertEqual(sv["columns"][-1]["label"], "2025 1Q")                # 2025 Q3 has no Q2 to subtract
+        a = next(s for s in sv["segments"] if s["code"] == "A")
+        self.assertEqual(a["values"][-1], 60.0)
+
+    def test_one_breakdown_for_every_column(self):
+        """Products where the business section has them, else segments; a
+        year without the chosen breakdown is not filled from the other one."""
+        data = self._data()
+        data["segments"] += [_seg_row(2024, 3, "X", 280.0, "xbrl", level="segment"),
+                             _seg_row(2025, 3, "X", 350.0, "xbrl", level="segment"),
+                             _seg_row(2023, 4, "X", 300.0, "xbrl", level="segment")]
+        self.assertEqual(fm.segment_levels(data), ["product", "segment"])
+        prod = fm.segment_view(data)
+        self.assertEqual((prod["level"], [c["fiscal_year"] for c in prod["columns"]]), ("product", [2024, 2025]))
+        seg_ = fm.segment_view(data, level="segment")
+        self.assertEqual([s["code"] for s in seg_["segments"]], ["X"])
+        self.assertEqual([c["fiscal_year"] for c in seg_["columns"]], [2023, 2024, 2025])
+
+    def test_annual_view_marks_the_year_in_progress(self):
+        sv = fm.segment_view(self._data())
+        self.assertEqual([(c["label"], c["partial"]) for c in sv["columns"]],
+                         [("2024 3Q누적", True), ("2025 3Q누적", True)])
+        a = next(s for s in sv["segments"] if s["code"] == "A")
+        self.assertAlmostEqual(a["shares"][-1], 200 / 300)                    # of the cumulative revenue
+
+    def test_long_product_lists_are_shortened(self):
+        self.assertEqual(fm._display_name("설화수,헤라,아이오페,라네즈 등"), "설화수,헤라 등")
+        self.assertEqual(fm._display_name("TV,모니터등"), "TV,모니터등")
+
+
+class TestReviewCodex5Model(unittest.TestCase):
+    """review_codex 5 P1: an amount that failed the check against revenue is
+    shown as disclosed and enters no calculation."""
+
+    def _row(self, fy, fq, rev, status="ok", basis="ytd"):
+        return {**_seg_row(fy, fq, "A", rev, source="html_segment", basis=basis, level="segment"),
+                "check_status": status}
+
+    def test_unverified_quarter_is_not_subtracted(self):
+        data = {"segments": [self._row(2025, 1, 80.0, "sum_mismatch", None), self._row(2025, 2, 100.0)]}
+        keys = [(2025, 1), (2025, 2)]
+        q = fm.segment_view(data, mode="q", keys=keys)
+        self.assertEqual(q["segments"][0]["values"], [80.0, None])           # Q1 as disclosed, Q2 alone unknown
+        self.assertEqual([c["verified"] for c in q["columns"]], [False, True])
+        y = fm.segment_view(data, keys=keys)
+        self.assertEqual(y["segments"][0]["values"], [80.0, 100.0])          # the half-year cumulative shows
+        # Verified on both sides: the split works as before.
+        ok = {"segments": [self._row(2025, 1, 80.0), self._row(2025, 2, 100.0)]}
+        self.assertEqual(fm.segment_view(ok, mode="q", keys=keys)["segments"][0]["values"], [80.0, 20.0])
+        # A 3-month figure is not added to an unverified cumulative either.
+        q_basis = {"segments": [self._row(2025, 1, 80.0, "sum_mismatch", None), self._row(2025, 2, 20.0, basis="q")]}
+        self.assertEqual(fm.segment_view(q_basis, keys=keys)["segments"][0]["values"], [80.0, None])
+        self.assertEqual(fm.segment_view(q_basis, mode="q", keys=keys)["segments"][0]["values"], [80.0, 20.0])
+        # Later in the year an amount of unknown basis is no quarter amount.
+        late = {"segments": [self._row(2025, 1, 80.0), self._row(2025, 2, 100.0, "sum_mismatch", None)]}
+        self.assertEqual(fm.segment_view(late, mode="q", keys=keys)["segments"][0]["values"], [80.0, None])
+
+    def test_unverified_periods_give_no_growth(self):
+        data = {"segments": [self._row(2023, 4, 100.0), self._row(2024, 4, 150.0, "sum_mismatch", None),
+                             self._row(2025, 4, 200.0)]}
+        a = fm.segment_view(data)["segments"][0]
+        self.assertEqual(a["values"], [100.0, 150.0, 200.0])
+        self.assertEqual(a["yoy"], [None, None, None])                       # neither from nor against 2024
+        self.assertIsNone(a["cagr"])                                         # the run of verified years is one year
+        quarters = {"segments": [self._row(2024, 1, 50.0, "sum_mismatch", None), self._row(2025, 1, 80.0)]}
+        q = fm.segment_view(quarters, mode="q", keys=[(2024, 1), (2025, 1)])["segments"][0]
+        self.assertEqual((q["values"], q["yoy"]), ([50.0, 80.0], [None, None]))
+        both = {"segments": [self._row(2024, 1, 50.0), self._row(2025, 1, 80.0)]}
+        self.assertAlmostEqual(fm.segment_view(both, mode="q", keys=[(2024, 1), (2025, 1)])["segments"][0]["yoy"][1], 0.6)
 
 
 class TestReviewCodex2Model(unittest.TestCase):
@@ -192,14 +307,14 @@ class TestTab(unittest.TestCase):
         t.show()
         self.addCleanup(t.close)
         QApplication.processEvents()
-        self.assertEqual(t._hbar_lead.width(), tb.frameWidth() + tb.verticalHeader().width())
+        self.assertEqual(t._results_scroll.lead.width(), tb.frameWidth() + tb.verticalHeader().width())
         inner = tb.horizontalScrollBar()
         self.assertGreater(inner.maximum(), 0)
         self.assertEqual(inner.value(), inner.maximum())                    # opened at the newest
         t.results_hbar.triggerAction(t.results_hbar.SliderAction.SliderToMinimum)
         QApplication.processEvents()
         self.assertEqual(inner.value(), 0)
-        self.assertFalse(t._hbar_at_end)
+        self.assertFalse(t._results_scroll.at_end)
         # Marker: hovering a bar shows the band, the margin dot and the value
         # box, and selects the same period's column in the table.
         class _Ev:
@@ -219,8 +334,58 @@ class TestTab(unittest.TestCase):
         self.assertEqual(tb.columnCount(), 2)
         self.assertEqual(tb.horizontalHeaderItem(1).text(), "2025 3Q누적")
         self.assertTrue(t.mode_buttons["y"].isChecked())
-        self.assertEqual(t.segment_table.rowCount(), 3)                       # DX, DS, check
-        self.assertEqual(t.segment_table.horizontalHeaderItem(2).text(), "2025 3Q*")
+        # One 실적 card (user direction 2026-11-27): the segment section sits
+        # under the results in the same card, on the results' periods slot for
+        # slot; items down the frozen side, CAGR last in the annual view.
+        st = t.segment_table
+        self.assertEqual(t._seg_title.text(), "사업부별")
+        self.assertIs(t._seg_canvas.parentWidget(), t._canvas.parentWidget())  # one card
+        self.assertEqual(st.rowCount(), 3)                                    # DX, DS, check
+        self.assertEqual([st.verticalHeaderItem(i).text() for i in range(3)], ["DX 부문", "DS 부문", "검산"])
+        self.assertTrue(st.verticalHeader().isVisibleTo(st))
+        self.assertEqual([st.horizontalHeaderItem(j).text() for j in range(3)], ["2024", "2025 3Q누적*", "연평균"])
+        dx = st.item(0, 0).text()                                             # 2024: amount, share of revenue
+        self.assertTrue(dx.endswith("65%"), dx)                               # 300 / 460
+        self.assertIn("연간", t._seg_caption.text())
+        self.assertEqual(st.horizontalScrollBarPolicy(), Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.assertEqual(t._seg_marker_ax.get_xlim(), t._results_ax.get_xlim())
+        self.assertEqual(t._seg_marker_ax.get_position().bounds, t._results_ax.get_position().bounds)
+        t._on_seg_motion(_Ev(t._seg_marker_ax, 1.0))                          # hover 2025 (cumulative)
+        self.assertTrue(t._seg_marker_box.get_visible())
+        self.assertTrue(t._seg_marker_box.get_text().startswith("2025 3Q누적*"))
+        self.assertEqual({i.column() for i in st.selectedIndexes()}, {1})
+        self.assertEqual({i.column() for i in tb.selectedIndexes()}, {1})      # the results too
+        self.assertTrue(t._marker_band.get_visible())
+        t._on_seg_motion(_Ev(t._seg_marker_ax, 0.5))
+        self.assertFalse(t._seg_marker_box.get_visible())
+        self.assertFalse(t._marker_box.get_visible())
+        # The same 분기 | 연간 switch: the results' seven quarters, segment data in 2025 Q3 only.
+        t.set_mode("q")
+        self.assertEqual(t.segment_data["mode"], "q")
+        self.assertEqual(st.columnCount(), tb.columnCount())                  # no CAGR
+        self.assertEqual(st.horizontalHeaderItem(6).text(), "2025 3Q*")         # gross (elimination)
+        self.assertEqual(st.item(0, 0).text(), "—")
+        t._on_chart_motion(_Ev(t._marker_ax, 6.0))                            # hover on the results chart
+        self.assertEqual({i.column() for i in st.selectedIndexes()}, {6})
+        self.assertIn("분기", t._seg_caption.text())
+        self.assertEqual(t.level_buttons, {})                                 # segments only: no switch
+
+    def test_products_first_with_a_switch_to_segments(self):
+        conn = connect(self.db)
+        c = seg.Candidate("biz_product", [("메모리", 300.0), ("스마트폰", 150.0)])
+        seg.store_segments(conn, SAMSUNG, 2024, 4, "20250310000001", "2025-03-10", c, "ytd", 10.0, "ok",
+                           "biz_product", level="product")
+        conn.commit()
+        conn.close()
+        t = self._tab()
+        self.assertEqual(set(t.level_buttons), {"product", "segment"})
+        self.assertIn("분기 자료가 없습니다", t._seg_notes.text())             # products: annual only here
+        t.set_mode("y")
+        self.assertTrue(t.level_buttons["product"].isChecked())
+        st = t.segment_table
+        self.assertEqual({st.verticalHeaderItem(i).text() for i in range(2)}, {"메모리", "스마트폰"})
+        t.set_segment_level("segment")
+        self.assertEqual({st.verticalHeaderItem(i).text() for i in range(2)}, {"DX 부문", "DS 부문"})
 
     def test_unknown_stock_shows_a_message(self):
         t = self._tab("999999")
